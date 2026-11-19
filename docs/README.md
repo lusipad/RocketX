@@ -48,7 +48,11 @@
 | 文档 | 状态 |
 | --- | --- |
 | [终局设想](vision.md) | 愿景。描述希望解决的问题，不承诺当前已实现 |
+| [自主工作系统完整方案](rocketx-autonomous-workspace-design.md) | 2026-11-17 v1.0：首版本机、产品与交互、后台、工具链、ADO/GitHub、自主维护及 18 项需求验收；不表示已实现 |
+| [自主工作系统 WBS 计划](rocketx-autonomous-workspace-wbs.md) | 配套 v1.0：13 个工作流、60 个工作包、强依赖、责任角色、交付与验收；研发状态初始待盘点 |
+| [自主工作系统实施进度](rocketx-autonomous-workspace-progress.md) | WBS 实际状态与本轮证据索引；本机开发进行中，外部写入联调后置 |
 | [产品蓝图](blueprint.md) | 规划与历史路线图。当前完成度必须回到功能规格确认 |
+| [个人管家与多 Agent 工作台重构方案](rocketx-agent-workspace-refactor-plan.md) | 2026-11-15 实施方案。S1–S5 代码与自动化交付及真实环境边界见实施记录；语音 S6 保持可选 |
 
 ## 历史与废弃文档
 

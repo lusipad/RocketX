@@ -1,19 +1,25 @@
 // 阻止 Windows release 版本弹出控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod acp;
 mod agent_bot;
 mod business_mcp;
 mod butler_db;
+mod butler_worktree;
+mod credential_scope;
 mod diagnostics;
 mod dsh;
 mod firewall;
 mod lan;
 #[cfg(test)]
 mod live_e2e;
+mod local_sessions;
+mod local_voice;
 mod mcp;
 mod native;
 mod native_service;
 mod ocr;
+mod pi;
 mod proc;
 mod winauth;
 
@@ -1248,6 +1254,11 @@ fn main() {
         }
         return;
     }
+    let context = tauri::generate_context!();
+    if let Err(error) = credential_scope::set_application_identifier(&context.config().identifier) {
+        eprintln!("rocketx-credential-scope: {error}");
+        std::process::exit(1);
+    }
     if launch_args
         .iter()
         .any(|argument| argument == "--business-mcp")
@@ -1280,6 +1291,10 @@ fn main() {
             allow_http_origin,
             upload_native_media,
             desktop_distribution_profile,
+            local_voice::local_voice_probe,
+            local_voice::local_voice_transcribe,
+            local_voice::local_voice_synthesize,
+            local_voice::local_voice_cancel,
             open_external_url,
             read_autostart_enabled,
             set_autostart_enabled,
@@ -1300,10 +1315,41 @@ fn main() {
             ocr::image_ocr_recognize,
             ocr::image_ocr_runtime_probe,
             butler_db::butler_todo_add,
+            #[cfg(debug_assertions)]
+            butler_db::butler_runtime_probe_start,
             butler_db::butler_todo_update,
             butler_db::butler_todo_delete,
             butler_db::butler_todo_list,
             butler_db::butler_todo_migrate_from_json,
+            butler_db::butler_work_ledger_snapshot,
+            butler_db::butler_work_runtime_events,
+            butler_db::butler_native_work_snapshot,
+            butler_db::butler_native_work_start,
+            butler_db::butler_native_work_resume,
+            butler_db::butler_native_work_submit,
+            butler_db::butler_native_work_answer,
+            butler_db::butler_native_work_cancel_queued,
+            butler_db::butler_work_card_update,
+            butler_db::butler_work_card_create,
+            butler_db::butler_db_select_account,
+            butler_db::butler_runtime_account_context,
+            butler_db::butler_work_link_upsert,
+            butler_db::butler_work_session_upsert,
+            butler_db::butler_work_evidence_add,
+            butler_db::butler_external_event_ingest,
+            butler_db::butler_dispatch_action_prepare,
+            butler_db::butler_dispatch_action_transition,
+            butler_db::butler_memory_list,
+            butler_db::butler_memory_upsert,
+            butler_db::butler_memory_delete,
+            butler_db::butler_memory_mark_recalled,
+            butler_db::butler_memory_clear_scope,
+            butler_db::butler_assistant_digest_list,
+            butler_db::butler_assistant_digest_save,
+            butler_db::butler_assistant_digest_delete,
+            butler_worktree::butler_workspace_git_inspect,
+            butler_worktree::butler_worktree_prepare,
+            butler_worktree::butler_worktree_remove,
             proc::codex_runtime_probe,
             proc::codex_app_server_start,
             proc::codex_app_server_write,
@@ -1328,6 +1374,32 @@ fn main() {
             dsh::dsh_bridge_start,
             dsh::dsh_bridge_write,
             dsh::dsh_bridge_stop,
+            pi::pi_runtime_probe,
+            pi::pi_config_read,
+            pi::pi_config_write,
+            pi::pi_app_server_start,
+            pi::pi_app_server_write,
+            pi::pi_app_server_stop,
+            pi::pi_agent_attachment_write,
+            acp::acp_agent_list,
+            acp::acp_agent_discover,
+            acp::acp_agent_upsert,
+            acp::acp_agent_delete,
+            acp::acp_agent_probe,
+            acp::acp_process_start,
+            acp::acp_process_write,
+            acp::acp_process_stop,
+            acp::acp_process_list,
+            local_sessions::acp_local_sessions_discover,
+            local_sessions::acp_local_session_messages,
+            local_sessions::acp_local_session_handoff,
+            acp::acp_fs_read_text_file,
+            acp::acp_fs_write_text_file,
+            acp::acp_terminal_create,
+            acp::acp_terminal_output,
+            acp::acp_terminal_wait_for_exit,
+            acp::acp_terminal_kill,
+            acp::acp_terminal_release,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
             mcp::mcp_config_disable,
@@ -1358,7 +1430,10 @@ fn main() {
         .manage(native::host::NativeHost::default())
         .manage(proc::CodexRuntimeConfig::default())
         .manage(proc::CodexAppServerState::default())
+        .manage(butler_db::NativeWorkRuntime::default())
         .manage(dsh::DshBridgeState::default())
+        .manage(pi::PiAppServerState::default())
+        .manage(acp::AcpSupervisorState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
         .manage(business_mcp::BusinessMcpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))
@@ -1479,10 +1554,12 @@ fn main() {
             }
             _ => {}
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building RocketX")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                pi::shutdown_all_pi_processes(app);
+                acp::shutdown_all_acp_processes(app);
                 app.state::<native::host::NativeHost>().shutdown(app);
             }
         });

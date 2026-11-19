@@ -27,12 +27,12 @@ RocketX 不改 Rocket.Chat 服务端，只通过公开 API 通信。你可以在
 
 从 [GitHub Releases](https://github.com/lusipad/RocketX/releases) 下载最新版本：
 
-- **Windows**：slim 安装包（探测系统 Codex / DSH）或 full 安装包（内置固定版本运行时）
+- **Windows** 提供 slim 和 full 安装包，两者均提供 Pi，full 额外附带固定版本的 Codex、DSH 和 OCR 资源。
 - **macOS**：universal DMG（ad-hoc 签名，未经 Apple 公证）
 - **Linux**：AppImage / DEB / RPM
 - **Web**：直接用浏览器访问部署地址，无需安装
 
-> 当前版本：**v0.43.6**
+> 当前版本 **v0.50.0**
 
 ## 主要功能
 
@@ -40,16 +40,16 @@ RocketX 不改 Rocket.Chat 服务端，只通过公开 API 通信。你可以在
 - **完整斜杠命令**：30 个命令全量中文说明、参数提示条与命令帮助（`/help` 或 `Ctrl+/`）；参数化命令一律弹出图形界面（选人、选频道、确认框），不再要求手打 `@用户名` 语法。
 - **原生团队功能**：`/poll` 投票（点数字表情计票）、`/kanban` 频道看板（消息一键收纳成卡片）、`/oncall` 值班表——数据全部存服务端实时共享，**官方 Rocket.Chat 客户端也能阅读和参与**（例如用表情参与投票）。
 - **GTD 工作区**：收件箱、待办、日历、通讯录，以及可直连 Azure DevOps Server 2022 的工作台。
-- **本地 AI 管家**：启动时从 OpenAI Codex、DeepSeek Harness（DSH）或“无 AI”中三选一。选择全局生效，保存后重启生效，不会同时跑两个后端。
+- **本地 AI 管家** 使用 Pi，可在设置中配置模型或关闭 AI。工作台可按项目持续跟进工作、查看进度和结果。
 - **房间共享 AI 托管**：在房间或讨论里开启共享 AI，Web 和无 AI 客户端也能看到状态、用 `@ai` 提问。
 - **局域网连续可用**：认证点对点链路，Windows 上可选配 IPMSG / 内网通 Sidecar 插件。
 
 ## 快速上手
 
 1. 启动 RocketX 桌面端或打开 Web 端。
-2. 首次启动会介绍 GTD 流程：如何捕获事项、理清下一步、保护注意力。
-3. 选择「加入团队」导入 `rcx.workspace.json`，或选择个人模式直接填写 Rocket.Chat 服务器地址。
-4. 登录后即可使用消息、工作台、待办、日历；在设置 → AI 中选择想要的 AI 运行时，重启后生效。
+2. 在本地工作台创建待办或整理工作。要启用 AI，在管家中配置模型服务和凭据。
+3. 要收发团队消息，从「消息」连接团队，可导入 `rcx.workspace.json` 或填写 Rocket.Chat 服务器地址。
+4. 登录后可使用团队消息、房间和共享托管功能。
 
 > 团队配置文件示例见 [`docs/examples/rcx.workspace.sample.json`](docs/examples/rcx.workspace.sample.json)。它只包含非敏感默认值，不会存放密码或 PAT。
 

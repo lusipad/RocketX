@@ -19,16 +19,16 @@ type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type Size = 'sm' | 'md';
 
 const VARIANT: Record<Variant, string> = {
-  primary: 'bg-primary text-white hover:bg-primary-hover active:bg-primary-active disabled:hover:bg-primary',
-  secondary: 'border border-line bg-surface text-ink hover:bg-fill-hover active:bg-fill-active disabled:hover:bg-surface',
+  primary: 'bg-primary text-white shadow-raise hover:bg-primary-hover active:bg-primary-active disabled:hover:bg-primary',
+  secondary: 'border border-line bg-surface-4 text-ink shadow-raise hover:bg-fill-hover active:bg-fill-active disabled:hover:bg-surface-4',
   ghost: 'text-ink-2 hover:bg-fill-hover hover:text-ink active:bg-fill-active disabled:hover:bg-transparent',
-  danger: 'border border-danger/40 bg-surface text-danger hover:bg-danger/10 active:bg-danger/15 disabled:hover:bg-surface',
+  danger: 'border border-danger/35 bg-surface-4 text-danger shadow-raise hover:bg-danger/10 active:bg-danger/15 disabled:hover:bg-surface-4',
 };
 
 /** 高度与内边距成对出现——分开写就是 h-7/8/9/10 与 px-1..6 各自漂移的由来 */
 const SIZE: Record<Size, string> = {
-  sm: 'h-7 gap-1 rounded-md px-2.5 text-xs',
-  md: 'h-8 gap-1.5 rounded-md px-3 text-sm',
+  sm: 'h-7 gap-1 rounded-lg px-2.5 text-xs',
+  md: 'h-8 gap-1.5 rounded-lg px-3.5 text-sm',
 };
 
 const ICON_SIZE: Record<Size, number> = {

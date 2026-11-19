@@ -32,19 +32,19 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   assert.match(workbench, /tab === 'contributions'[\s\S]*<ProfileContributionsPage \/>/);
 
   assert.match(page, /className="butler-workspace"/);
-  assert.match(page, /<ButlerConversation embedded \/>/);
+  assert.match(page, /<ButlerConversation embedded workBrief=\{workBrief\} \/>/);
   assert.match(page, /<ButlerPluginsPage \/>/);
   assert.match(page, /<ButlerRoutines \/>/);
 
-  assert.match(history, /aria-label="Codex 工作区"/);
-  assert.match(history, /aria-label="新对话"/);
+  assert.match(history, /aria-label="AI 协作"/);
+  assert.match(history, /aria-label="新管家对话"/);
   assert.match(history, /aria-label="Codex 对话历史"/);
   assert.doesNotMatch(history, /aria-label="任务"/);
   assert.match(history, /setWorkbenchTab\('prs'\)/);
   assert.match(history, /setModule\('workbench'\)/);
   assert.match(history, /setButlerView\('routines'\)/);
   assert.match(history, /setButlerView\('plugins'\)/);
-  assert.match(history, /选择 Codex 工作区/);
+  assert.match(history, /选择工作区/);
 
   assert.match(conversation, /在 Codex 中打开/);
   assert.doesNotMatch(conversation, /setModule\('codex'\)/);

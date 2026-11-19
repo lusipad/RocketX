@@ -70,6 +70,17 @@ export interface RoutineRun {
   archived?: boolean;
 }
 
+export interface ReusableWorkMethod {
+  sourceWorkId: string;
+  accountScope: string;
+  projectKey: string | null;
+  inputs: string;
+  steps: string;
+  acceptance: string[];
+  failureHandling: string;
+  boundaries: string[];
+}
+
 export interface RoutineVersion {
   version: number;
   at: number;
@@ -108,6 +119,7 @@ export interface Routine<TTrigger extends RoutineTrigger = RoutineTrigger> {
   versions?: RoutineVersion[];
   lastFiredDate?: string;
   runs: RoutineRun[];
+  workTemplate?: ReusableWorkMethod;
 }
 
 interface PersistedRoutines {
@@ -381,7 +393,7 @@ function normalizeRoutine(value: unknown): Routine | undefined {
   if (
     typeof routine.id !== 'string' ||
     typeof routine.name !== 'string' ||
-    !rrule ||
+    (!rrule && !routine.workTemplate) ||
     (typeof routine.skillName !== 'string' && typeof routine.prompt !== 'string') ||
     typeof routine.enabled !== 'boolean' ||
     typeof routine.createdAt !== 'number' ||
@@ -393,6 +405,7 @@ function normalizeRoutine(value: unknown): Routine | undefined {
     rrule,
     kind: routine.kind === 'heartbeat' ? 'heartbeat' : 'cron',
     runs: routine.runs.slice(0, RUN_LIMIT),
+    ...(routine.workTemplate ? { enabled: false } : {}),
     ...(routine.params?.rooms ? { params: { rooms: [...routine.params.rooms] } } : {}),
   } as Routine;
   const versions = Array.isArray(routine.versions)
@@ -699,7 +712,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     try {
       const definitions = await readCodexAutomationFiles();
       const cached = new Map(get().routines.map((routine) => [routine.id, routine]));
-      const routines = definitions.map((definition) => routineFromAutomation(definition, cached.get(definition.id)));
+      const routines = [...get().routines.filter((routine) => routine.workTemplate), ...definitions.map((definition) => routineFromAutomation(definition, cached.get(definition.id)))];
       set({ routines, hydrated: true, nativeStatus: 'ready', nativeError: undefined });
       persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
     } catch (error) {
@@ -713,6 +726,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     if (!codexAutomationFilesAvailable()) return;
     const routine = get().routines.find((item) => item.id === id);
     if (!routine) throw new Error(`没有找到已安排任务 ${id}`);
+    if (routine.workTemplate) throw new Error('工作方法从项目工作台手动创建工作，不能直接启用定时执行');
     try {
       await writeCodexAutomationFile(automationFromRoutine(routine));
       set({ nativeStatus: 'ready', nativeError: undefined });
@@ -735,6 +749,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   },
 
   deleteNative: async (id) => {
+    if (get().routines.some((routine) => routine.id === id && routine.workTemplate)) return;
     if (!codexAutomationFilesAvailable()) return;
     try {
       await deleteCodexAutomationFile(id);
@@ -748,6 +763,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   setEnabled: (id, enabled) => {
     const target = get().routines.find((routine) => routine.id === id);
+    if (enabled && target?.workTemplate) throw new Error('请从项目工作台使用工作方法');
     if (enabled && target?.skillName && knownSkillDisabled(target.skillName)) return;
     const routines = get().routines.map((routine) => routine.id === id ? { ...routine, enabled } : routine);
     set({ routines });
@@ -792,7 +808,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     }
     const trigger = normalizeTrigger(routine.trigger);
     if (routine.trigger && !trigger) throw new RangeError('运行计划无效');
-    const rrule = normalizeRrule(routine.rrule ?? rruleFromTrigger(trigger) ?? '');
+    const rrule = routine.workTemplate ? undefined : normalizeRrule(routine.rrule ?? rruleFromTrigger(trigger) ?? '');
     if (routine.kind === 'heartbeat' && !routine.targetThreadId?.trim()) {
       throw new Error('回到现有会话的任务必须选择目标会话');
     }
@@ -922,6 +938,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   runNow: async (id, options) => {
     const routine = get().routines.find((item) => item.id === id);
     if (!routine) return false;
+    if (routine.workTemplate) throw new Error('请从项目工作台使用此方法，创建关联工作后执行');
     const at = routineNow();
     if (!useAuth.getState().user?._id) {
       const run: RoutineRun = {
@@ -1098,7 +1115,7 @@ registerScheduledTaskAdapter({
     const state = useRoutines.getState();
     if (!state.hydrated) state.hydrate();
     await useRoutines.getState().hydrateNative();
-    return { tasks: useRoutines.getState().routines.map(scheduledTaskSnapshot) };
+    return { tasks: useRoutines.getState().routines.filter((routine) => !routine.workTemplate).map(scheduledTaskSnapshot) };
   },
   create: async (input: ScheduledTaskInput) => {
     let state = useRoutines.getState();
@@ -1140,7 +1157,7 @@ registerScheduledTaskAdapter({
     }
     await state.hydrateNative();
     state = useRoutines.getState();
-    const current = state.routines.find((routine) => routine.id === input.id);
+    const current = state.routines.find((routine) => routine.id === input.id && !routine.workTemplate);
     if (!current) throw new Error(`没有找到已安排任务 ${input.id}`);
     const patch = routinePatch(input);
     if (Object.keys(patch).length > 0) state.updateContract(input.id, patch, '由 Codex 更新');
@@ -1157,7 +1174,7 @@ registerScheduledTaskAdapter({
     }
     await state.hydrateNative();
     state = useRoutines.getState();
-    const current = state.routines.find((routine) => routine.id === id);
+    const current = state.routines.find((routine) => routine.id === id && !routine.workTemplate);
     if (!current) throw new Error(`没有找到已安排任务 ${id}`);
     await state.deleteNative(id);
     state.removeRoutine(id);

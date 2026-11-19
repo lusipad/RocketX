@@ -55,6 +55,7 @@ function fulfillJson(route: Route, json: unknown, status = 200) {
 export interface RocketChatMockState {
   sentMessages: Record<string, unknown>[];
   pageErrors: string[];
+  publish: (stream: string, eventName: string, args: unknown[]) => boolean;
 }
 
 export async function installRocketChatMock(page: Page): Promise<RocketChatMockState> {
@@ -105,9 +106,18 @@ export async function installRocketChatMock(page: Page): Promise<RocketChatMockS
     return fulfillJson(route, { success: true });
   });
 
+  let publish: RocketChatMockState['publish'] = () => false;
   await page.routeWebSocket('**/websocket', (socket) => {
+    const subscribed = new Map<string, string>();
+    publish = (stream, eventName, args) => {
+      if (![...subscribed.values()].includes(`${stream}:${eventName}`)) return false;
+      socket.send(JSON.stringify({ msg: 'changed', collection: stream, fields: { eventName, args } }));
+      return true;
+    };
     socket.onMessage((raw) => {
-      const message = JSON.parse(String(raw)) as { msg?: string; id?: string };
+      const message = JSON.parse(String(raw)) as { msg?: string; id?: string; name?: string; params?: string[] };
+      if (message.msg === 'sub' && message.id) subscribed.set(message.id, `${message.name}:${message.params?.[0]}`);
+      if (message.msg === 'unsub' && message.id) subscribed.delete(message.id);
       if (message.msg === 'connect') socket.send(JSON.stringify({ msg: 'connected', session: 'butler-ui' }));
       if (message.msg === 'method' && message.id) {
         socket.send(JSON.stringify({ msg: 'result', id: message.id, result: {} }));
@@ -115,7 +125,7 @@ export async function installRocketChatMock(page: Page): Promise<RocketChatMockS
     });
   });
 
-  return { sentMessages, pageErrors };
+  return { sentMessages, pageErrors, publish: (stream, eventName, args) => publish(stream, eventName, args) };
 }
 
 export async function bootAuthenticated(page: Page): Promise<RocketChatMockState> {
@@ -140,6 +150,11 @@ export async function bootAuthenticated(page: Page): Promise<RocketChatMockState
   }, { server: TEST_SERVER, userId: ME._id });
   await page.goto('/');
   await page.getByRole('navigation', { name: 'RocketX 主导航' }).waitFor();
+  await page.waitForFunction(async () => {
+    const load = new Function('return import("/src/stores/ui.ts")');
+    const { useUI } = await load();
+    return useUI.getState().startupStage === 'background-ready';
+  });
   return state;
 }
 

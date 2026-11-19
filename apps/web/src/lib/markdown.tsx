@@ -272,12 +272,12 @@ const HEADING_CLS: Record<Variant, string[]> = {
     'mt-0.5 text-sm font-medium text-ink-2',
   ],
   doc: [
-    'mt-4 mb-2 text-2xl font-semibold',
-    'mt-4 mb-2 text-xl font-semibold',
-    'mt-3 mb-1.5 text-lg font-semibold',
-    'mt-3 mb-1.5 text-base font-semibold',
-    'mt-2 mb-1 text-sm font-semibold',
-    'mt-2 mb-1 text-sm font-medium text-ink-2',
+    'mt-4 mb-2 font-semibold',
+    'mt-4 mb-2 font-semibold',
+    'mt-3 mb-1.5 font-semibold',
+    'mt-3 mb-1.5 font-semibold',
+    'mt-2 mb-1 font-semibold',
+    'mt-2 mb-1 font-medium text-ink-2',
   ],
 };
 

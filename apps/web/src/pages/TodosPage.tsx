@@ -9,6 +9,7 @@ import {
   Plus,
   Trash2,
   CornerUpRight,
+  Kanban,
 } from 'lucide-react';
 import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
@@ -20,6 +21,8 @@ import TodoDialog from '../components/TodoDialog';
 import { ConfirmDialog } from '../components/Dialog';
 import { LinkifiedText } from '../lib/markdown';
 import { adoWebBase } from '../lib/ado';
+
+// 统一看板矩阵与多会话流转已升级由 AI 管家原生看板承载 (WorkKanbanBoard)
 
 type Tab = 'open' | 'today' | 'overdue' | 'done';
 
@@ -36,6 +39,7 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
   const openRoom = useChat((s) => s.openRoom);
   const jumpToMessage = useChat((s) => s.jumpToMessage);
   const setModule = useUI((s) => s.setModule);
+  const setButlerView = useUI((s) => s.setButlerView);
   const overdue = isOverdue(todo);
   // 手动新建的待办没有来源消息，跳转和来源行都不展示
   const hasSource = !!(todo.rid && todo.mid);
@@ -135,6 +139,17 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
           </a>
         )}
         <button
+          onClick={() => {
+            setModule('butler-view');
+            setButlerView('kanban');
+          }}
+          className="flex h-7 items-center gap-1 rounded px-1.5 text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+          title="在管家统一看板推进"
+        >
+          <Kanban size={13} />
+          <span className="text-xs">推进</span>
+        </button>
+        <button
           onClick={() => onEdit(todo)}
           className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
           title="编辑"
@@ -199,72 +214,108 @@ export default function TodosPage() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-fill-2 p-3">
-        <div className="px-2 py-1.5 text-base font-semibold text-ink">待办</div>
-        {TABS.map(({ key, label, icon: Icon }) => (
+      <aside className="flex w-[216px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">待办</div>
+        <div className="flex flex-col gap-0.5">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition ${
+                tab === key
+                  ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <Icon size={16} className={tab === key ? 'text-primary' : ''} />
+              <span>{label}</span>
+              {counts[key] > 0 && (
+                <span
+                  className={`ml-auto rounded-full px-1.5 py-0.5 text-2xs font-medium ${
+                    key === 'overdue'
+                      ? 'bg-danger/10 text-danger'
+                      : 'bg-fill-1 text-ink-3'
+                  }`}
+                >
+                  {counts[key]}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="mt-auto border-t border-line-soft pt-3">
           <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
-              tab === key ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
-            }`}
+            type="button"
+            onClick={() => {
+              useUI.getState().setModule('butler-view');
+              useUI.getState().setButlerView('kanban');
+            }}
+            className="group flex w-full items-center justify-between rounded-xl border border-line bg-surface-4 p-3 text-left text-xs shadow-raise transition hover:border-primary/50 hover:shadow-card"
           >
-            <Icon size={16} />
-            {label}
-            {counts[key] > 0 && (
-              <span
-                className={`ml-auto text-xs ${
-                  key === 'overdue' ? 'font-medium text-danger' : 'text-ink-3'
-                }`}
-              >
-                {counts[key]}
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary-light text-primary">
+                <Kanban size={15} />
               </span>
-            )}
+              <div>
+                <div className="font-medium text-ink group-hover:text-primary">AI 管家统一看板</div>
+                <div className="mt-0.5 text-xs text-ink-3">矩阵流转与凭证验收</div>
+              </div>
+            </div>
+            <CornerUpRight size={13} className="text-ink-3 transition group-hover:text-primary" />
           </button>
-        ))}
+        </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
-        <div className="flex items-center justify-between pb-3">
-          <span className="text-sm text-ink-2">
-            {TABS.find((t) => t.key === tab)?.label} · {list.length} 项
-          </span>
+      <main className="flex min-w-0 flex-1 flex-col bg-surface-3">
+        <header className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-6">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-base font-semibold text-ink">
+              {TABS.find((t) => t.key === tab)?.label}
+            </h1>
+            <span className="rounded-full border border-line-soft bg-surface-2 px-2 py-0.5 text-xs text-ink-3">
+              {list.length} 项
+            </span>
+          </div>
           <div className="flex items-center gap-3">
             {tab === 'done' && list.length > 0 && (
               <button
                 onClick={() => setConfirmClear(true)}
-                className="text-xs text-ink-3 transition hover:text-danger"
+                className="rounded-lg px-2.5 py-1 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-danger"
               >
                 清空已完成
               </button>
             )}
             <button
               onClick={() => setCreating(true)}
-              className="flex h-8 items-center gap-1 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
+              className="flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
             >
               <Plus size={14} />
               新建待办
             </button>
           </div>
-        </div>
+        </header>
 
-        <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
-          {list.map((t) => (
-            <TodoRow key={t.id} todo={t} onEdit={setEditing} />
-          ))}
-          {list.length === 0 && (
-            <div className="flex h-full flex-col items-center justify-center gap-2 py-16 text-center">
-              <ListTodo size={32} className="text-ink-3" />
-              <div className="text-sm text-ink-3">
-                {tab === 'done' ? '还没有完成的待办' : '这里是空的'}
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          <div className="overflow-hidden rounded-2xl border border-line bg-surface-4 shadow-card">
+            {list.map((t) => (
+              <TodoRow key={t.id} todo={t} onEdit={setEditing} />
+            ))}
+            {list.length === 0 && (
+              <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+                <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-line-soft bg-surface-2 text-ink-3">
+                  <ListTodo size={24} />
+                </span>
+                <div className="text-sm font-medium text-ink-2">
+                  {tab === 'done' ? '还没有完成的待办' : '这里是空的'}
+                </div>
+                <div className="max-w-xs text-xs leading-relaxed text-ink-3">
+                  在任意聊天消息上点右键，选「标记为待办」，就能把它捞到这里，
+                  还能补充说明和截止日期。点待办可以跳回原消息。
+                  也可以点右上角「新建待办」直接记一条。
+                </div>
               </div>
-              <div className="max-w-xs text-xs leading-relaxed text-ink-3">
-                在任意聊天消息上点右键，选「标记为待办」，就能把它捞到这里，
-                还能补充说明和截止日期。点待办可以跳回原消息。
-                也可以点右上角「新建待办」直接记一条。
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </main>
 

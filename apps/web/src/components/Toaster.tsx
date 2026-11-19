@@ -19,18 +19,19 @@ const COLORS: Record<ToastKind, string> = {
 /** 全局提示：右下角堆叠，成功/失败/加载 */
 export default function Toaster() {
   const toasts = useToast((s) => s.toasts);
+  const viewport = useToast((s) => s.viewport);
   const dismiss = useToast((s) => s.dismiss);
 
   if (toasts.length === 0) return null;
 
   return createPortal(
-    <div className="pointer-events-none fixed right-5 bottom-5 z-[100] flex flex-col-reverse gap-2">
+    <div className={viewport ? 'flex flex-col-reverse' : 'pointer-events-none fixed right-5 bottom-5 z-[100] flex flex-col-reverse gap-2'}>
       {toasts.map((t) => {
         const Icon = ICONS[t.kind];
         return (
           <div
             key={t.id}
-            className="pointer-events-auto flex min-w-72 max-w-md items-start gap-2.5 rounded-lg bg-surface-4 px-3.5 py-3 shadow-pop"
+            className={viewport ? 'flex items-start gap-2 border-b border-line bg-surface-4 px-4 py-1.5' : 'pointer-events-auto flex min-w-72 max-w-md items-start gap-2.5 rounded-lg bg-surface-4 px-3.5 py-3 shadow-pop'}
           >
             <Icon
               size={16}
@@ -64,6 +65,6 @@ export default function Toaster() {
         );
       })}
     </div>,
-    document.body,
+    viewport ?? document.body,
   );
 }

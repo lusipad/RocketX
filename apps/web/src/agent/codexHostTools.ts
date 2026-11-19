@@ -1,11 +1,25 @@
 import { tsMs } from '@rcx/rc-client';
 import { collectMentionInbox } from '../lib/mentionInbox';
 import { rest } from '../lib/client';
+import { useAcpAgents } from '../stores/acpAgents';
 import { useAuth } from '../stores/auth';
+import { useButlerMemory } from '../stores/butlerMemory';
 import { eventsForDate, isEventDone, useCalendar } from '../stores/calendar';
 import { permalinkOf, useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
+import { captureWorkLedgerAccount, useWorkLedger } from '../stores/workLedger';
+import { observeWorkArtifacts } from './workArtifacts';
+import type {
+  ButlerMemoryCategory,
+  WorkCardStage,
+  WorkCardWaitState,
+} from '../platform/desktopCommands';
 import { stripAgentSessionMarker } from './card';
+import {
+  generatePersonalAssistantBrief,
+  saveAssistantSnapshotDigest,
+  type PersonalAssistantBriefKind,
+} from './personalAssistant';
 import type { DynamicToolCallResponse } from './protocol/generated/v2/DynamicToolCallResponse';
 import type { DynamicToolSpec } from './protocol/generated/v2/DynamicToolSpec';
 import {
@@ -13,6 +27,15 @@ import {
   type ScheduledTaskInput,
   type ScheduledTaskPatch,
 } from './scheduledTaskBridge';
+import { evaluateCardCompletionGate } from './workCoordinator';
+import { renderDispatchSpec } from './dispatchSpec';
+import { verifyWorkCiEvidence } from './workCiEvidence';
+import { executePreparedExternalAction, publishWorkReport, syncWorkAdoState } from './externalWorkActions';
+import {
+  buildWorkflowExecutionReport,
+  distillReportToMemory,
+  recordReportAsWorkEvidence,
+} from './workflowReport';
 
 const LIMIT = 20;
 const MAX_CALENDAR_DAYS = 31;
@@ -136,6 +159,243 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
       type: 'object',
       properties: { id: { type: 'string' } },
       required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'create_work_card',
+    description: '将明确目标纳入持续跟进，幂等创建同一件工作。必须明确目标和验收条件；保留消息、ADO及工作目录来源，默认遵守确认权限。重试复用requestId。',
+    inputSchema: {
+      type: 'object', properties: {
+        requestId: { type: 'string' }, title: { type: 'string' }, goal: { type: 'string' },
+        acceptance: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        boundaries: { type: 'array', items: { type: 'string' } },
+        projectKey: { type: 'string' }, workspaceRoot: { type: 'string' },
+        rid: { type: 'string' }, mid: { type: 'string' }, adoWorkItemId: { type: 'integer', minimum: 1 }, adoProject: { type: 'string' },
+      }, required: ['requestId', 'title', 'goal', 'acceptance'], additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'list_work_cards',
+    description: '列出统一工作看板（Unified Kanban）中的工作卡片、阶段、正交等待状态、关联会话及验收证据。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stage: { type: 'string', enum: ['triage', 'ready', 'in_progress', 'verifying', 'done'] },
+        includeDone: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'update_work_card',
+    description: '更新工作卡片的阶段（stage）、正交等待状态（waitState）或下一步计划（nextStep）。若无有效验收证据则不能直接置为 done。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todoId: { type: 'string' },
+        stage: { type: 'string', enum: ['triage', 'ready', 'in_progress', 'verifying', 'done'] },
+        waitState: { type: 'string', enum: ['none', 'waiting_input', 'waiting_approval', 'waiting_external', 'blocked', 'paused', 'canceled'] },
+        waitReason: { type: 'string' },
+        nextStep: { type: 'string' },
+        goal: { type: 'string' },
+        acceptance: { type: 'array', items: { type: 'string' } },
+        boundaries: { type: 'array', items: { type: 'string' } },
+        rework: { type: 'boolean', description: '成果修改/返工，使旧版本证据需要重新核验。' },
+        expectedRequirementsVersion: { type: 'integer', minimum: 0, description: '修改目标、验收、边界或请求返工时必填，防止旧执行覆盖新要求。' },
+        expectedContentVersion: { type: 'integer', minimum: 0, description: '可选成果版本比较，旧成果不能覆盖新版本。' },
+      },
+      required: ['todoId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'record_work_evidence',
+    description: '保存Agent对执行结果的声明记录。模型提交的kind/passed仅是声明，一律保存为agent_report且不通过验收；可信CI请用verify_work_ci_evidence。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todoId: { type: 'string' },
+        kind: { type: 'string', enum: ['test_run', 'ci_build', 'pr_status', 'diff_check', 'agent_report'] },
+        title: { type: 'string' },
+        summary: { type: 'string' },
+        headSha: { type: 'string' },
+        passed: { type: 'boolean' },
+        criterionIds: { type: 'array', items: { type: 'string' }, description: '此结果明确验证的验收条件原文；缺失时仅保存记录，不贡献自动验收。' },
+        requirementsVersion: { type: 'integer', minimum: 0, description: '执行时采用的要求版本，必须从工作读取后原样提交。' },
+        contentVersion: { type: 'integer', minimum: 0, description: '被验证成果的版本。' },
+      },
+      required: ['todoId', 'kind', 'title', 'passed'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function', name: 'verify_work_ci_evidence',
+    description: '只读核对ADO构建，确认项目、当前工作HEAD、构建定义及完成成功状态后登记可信ci_build证据。仅覆盖当前声明的CI/构建/流水线条件，不能代替业务人工验收。',
+    inputSchema: { type: 'object', properties: {
+      todoId: { type: 'string' }, project: { type: 'string' }, buildId: { type: 'integer', minimum: 1 },
+      requirementsVersion: { type: 'integer', minimum: 0 }, contentVersion: { type: 'integer', minimum: 0 },
+      criterionIds: { type: 'array', items: { type: 'string' }, minItems: 1 },
+    }, required: ['todoId', 'project', 'buildId', 'requirementsVersion', 'contentVersion', 'criterionIds'], additionalProperties: false },
+  },
+  {
+    type: 'function',
+    name: 'memory_search',
+    description: '检索与当前工作区或关键词相关的长期个人记忆（偏好、项目事实、工作习惯、人物上下文、阶段总结）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '检索关键词。' },
+        category: {
+          type: 'string',
+          enum: ['preference', 'project_fact', 'workflow_habit', 'person_context', 'episodic_summary'],
+        },
+        workspaceRoot: { type: 'string', description: '可选工作区路径筛选。' },
+        limit: { type: 'number', description: '返回条数上限，默认 6。' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'memory_save',
+    description: '保存一条结构化的长期个人记忆；自动拦截密钥、令牌等敏感凭据。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['preference', 'project_fact', 'workflow_habit', 'person_context', 'episodic_summary'],
+        },
+        title: { type: 'string' },
+        content: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+        workspaceRoot: { type: 'string' },
+        pinned: { type: 'boolean' },
+      },
+      required: ['category', 'title', 'content'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'memory_delete',
+    description: '根据 ID 删除一条长期个人记忆。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'assistant_daily_brief',
+    description: '汇总待办、日程、工作流进度、对外承诺与长期记忆，生成晨间简报、晚间复盘或当前聚焦摘要。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['morning_brief', 'evening_review', 'focus_digest'] },
+        saveDigest: { type: 'boolean', description: '是否持久化保存到个人助理简报归档，默认 false。' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'workflow_report_generate',
+    description: '基于工作卡片或 ACP 会话生成结构化工作流执行汇报（含进度、产物、验证证据、风险与下一步建议）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todoId: { type: 'string' },
+        sessionKey: { type: 'string' },
+        recordEvidence: { type: 'boolean', description: '若提供 todoId，保存汇报来源记录；汇报不构成验收通过证据。' },
+        distillMemory: { type: 'boolean', description: '是否提炼摘要保存到长期记忆。' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'workflow_report_publish',
+    description: '从指定工作的真实账本生成冻结汇报并投递到关联讨论室；保留稳定操作身份及送达回执。遵守工作现有自主权限，需审批时只登记意图，不声称已送达。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todoId: { type: 'string' }, rid: { type: 'string' },
+        operationId: { type: 'string', description: '本次汇报的稳定操作 ID；核对和重试必须复用。' },
+      },
+      required: ['todoId', 'rid', 'operationId'], additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'work_ado_state_sync',
+    description: '按指定ADO版本及当前状态受控更新工作的关联ADO状态，写后回读。版本冲突不覆盖，结果未知不重放；不会把外部同步等同工作验收。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todoId: { type: 'string' }, operationId: { type: 'string' },
+        expectedRevision: { type: 'integer', minimum: 1 }, expectedState: { type: 'string' }, targetState: { type: 'string' },
+      },
+      required: ['todoId', 'operationId', 'expectedRevision', 'expectedState', 'targetState'], additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'work_external_action_continue',
+    description: '核对或执行已持久化的外部动作。仅使用现有授权，不能批准待人工审批动作。ADO结果未知仅回读，汇报可显式用原消息ID续投。',
+    inputSchema: {
+      type: 'object', properties: { actionId: { type: 'string' }, retryReport: { type: 'boolean' } },
+      required: ['actionId'], additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'acp_list_agents',
+    description: '列出已注册的本地 ACP（Agent Client Protocol）代理配置与已发现的本地 CLI 候选。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeDisabled: { type: 'boolean' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'acp_dispatch_task',
+    description: '将同一工作的执行请求持久入队并立即返回，管家可继续响应。必须先纳入工作并复用requestId；确认模式等待人工批准，自主模式由后台执行。临时会话请使用ACP工作台。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string' },
+        workspaceRoot: { type: 'string' },
+        prompt: { type: 'string' },
+        todoId: { type: 'string' },
+        requestId: { type: 'string', description: '此轮委派的稳定请求ID，重试必须复用。' },
+        isolateWorktree: { type: 'boolean' },
+        autonomyMode: { type: 'string', enum: ['readonly', 'confirm', 'autonomous'] },
+        title: { type: 'string' },
+      },
+      required: ['prompt', 'todoId', 'requestId'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'acp_session_status',
+    description: '查询当前 ACP 会话的运行状态、计划进度、待审批权限数及最新输出。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionKey: { type: 'string' },
+      },
       additionalProperties: false,
     },
   },
@@ -397,6 +657,316 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
     }
     if (tool === 'run_scheduled_task') {
       return response(await requireScheduledTaskAdapter().run(requiredString(args, 'id')));
+    }
+    if (tool === 'list_work_cards') {
+      const ledger = useWorkLedger.getState();
+      ledger.syncWithTodos();
+      const stageFilter = optionalString(args, 'stage');
+      const includeDone = optionalBoolean(args, 'includeDone') ?? false;
+      const cards = useWorkLedger.getState().cards
+        .filter((c) => (stageFilter ? c.state.stage === stageFilter : includeDone || c.state.stage !== 'done'))
+        .slice(0, LIMIT)
+        .map((c) => ({
+          todoId: c.id,
+          title: c.title,
+          goal: c.state.goal,
+          stage: c.state.stage,
+          waitState: c.state.waitState,
+          waitReason: c.state.waitReason,
+          nextStep: c.state.nextStep,
+          autonomyMode: c.state.autonomyMode,
+          requirementsVersion: c.state.requirementsVersion ?? 0,
+          contentVersion: c.state.contentVersion ?? 0,
+          acceptance: c.state.acceptance,
+          visibility: c.state.visibility,
+          adoWorkItemId: c.adoWorkItemId,
+          sessions: ledger.sessions
+            .filter((s) => s.todoId === c.id)
+            .map((s) => ({ id: s.id, runtime: s.runtime, controlMode: s.controlMode, workspaceRoot: s.workspaceRoot })),
+          validEvidences: ledger.evidences.filter((e) => e.todoId === c.id && e.passed && !e.stale).length,
+          completionGate: evaluateCardCompletionGate(c, ledger.evidences),
+        }));
+      return response({ items: cards, returned: cards.length });
+    }
+    if (tool === 'create_work_card') {
+      const assertAccount = captureWorkLedgerAccount();
+      const acceptance = Array.isArray(args.acceptance) ? args.acceptance.filter((item): item is string => typeof item === 'string' && !!item.trim()).map((item) => item.trim()) : [];
+      if (!acceptance.length) throw new Error('持续跟进工作必须明确至少一项验收条件');
+      const adoWorkItemId = typeof args.adoWorkItemId === 'number' && Number.isInteger(args.adoWorkItemId) && args.adoWorkItemId > 0 ? args.adoWorkItemId : undefined;
+      const rid = optionalString(args, 'rid'); const mid = optionalString(args, 'mid');
+      const card = await useWorkLedger.getState().createCard({ requestId: requiredString(args, 'requestId'), title: requiredString(args, 'title'), goal: requiredString(args, 'goal'), acceptance,
+        boundaries: Array.isArray(args.boundaries) ? args.boundaries.filter((item): item is string => typeof item === 'string' && !!item.trim()) : [],
+        ownerKind: 'ai_suggested', enroll: true, source: adoWorkItemId ? 'ado' : mid ? 'message' : 'manual', rid, mid, adoWorkItemId,
+        adoProject: optionalString(args, 'adoProject'), projectKey: optionalString(args, 'projectKey') ?? optionalString(args, 'adoProject') ?? null,
+      });
+      const ledger = useWorkLedger.getState();
+      assertAccount();
+      const workspaceRoot = optionalString(args, 'workspaceRoot');
+      if (workspaceRoot && !ledger.links.some((link) => link.todoId === card.id && link.kind === 'kanban_card' && link.externalId === card.id)) await ledger.upsertLink({ todoId: card.id, kind: 'kanban_card', externalId: card.id, project: card.state.projectKey, repo: workspaceRoot, rid: card.rid, headSha: null, title: '工作目录', webUrl: null, stateSnapshot: 'workspace' });
+      assertAccount();
+      if (card.adoWorkItemId) await ledger.upsertLink({ todoId: card.id, kind: 'ado_work_item', externalId: String(card.adoWorkItemId), project: card.adoProject, repo: null, rid: card.rid, headSha: null, title: card.title, webUrl: null, stateSnapshot: null });
+      assertAccount();
+      if (card.rid && card.mid) await ledger.upsertLink({ todoId: card.id, kind: 'message', externalId: card.mid, project: card.state.projectKey, repo: null, rid: card.rid, headSha: null, title: '来源消息', webUrl: null, stateSnapshot: null });
+      assertAccount();
+      return response({ card, completionGate: evaluateCardCompletionGate(card, ledger.evidences) });
+    }
+    if (tool === 'update_work_card') {
+      const todoId = requiredString(args, 'todoId');
+      const card = useWorkLedger.getState().cards.find((item) => item.id === todoId);
+      if (!card) throw new Error('指定工作不存在');
+      if (optionalString(args, 'stage') === 'done') await observeWorkArtifacts(todoId);
+      const scopeChange = Object.hasOwn(args, 'goal') || Object.hasOwn(args, 'acceptance') || Object.hasOwn(args, 'boundaries') || optionalBoolean(args, 'rework') === true;
+      if (scopeChange && (typeof args.expectedRequirementsVersion !== 'number' || !Number.isInteger(args.expectedRequirementsVersion) || args.expectedRequirementsVersion < 0)) throw new Error('修改工作要求前必须提供预读的 expectedRequirementsVersion');
+      const updated = await useWorkLedger.getState().updateCard(todoId, {
+        expectedRequirementsVersion: typeof args.expectedRequirementsVersion === 'number' ? args.expectedRequirementsVersion : card.state.requirementsVersion ?? 0,
+        expectedContentVersion: typeof args.expectedContentVersion === 'number' ? args.expectedContentVersion : card.state.contentVersion ?? 0,
+        ...(optionalString(args, 'stage') ? { stage: optionalString(args, 'stage') as WorkCardStage } : {}),
+        ...(optionalString(args, 'waitState') ? { waitState: optionalString(args, 'waitState') as WorkCardWaitState } : {}),
+        ...(optionalString(args, 'waitReason') ? { waitReason: optionalString(args, 'waitReason')! } : {}),
+        ...(optionalString(args, 'nextStep') ? { nextStep: optionalString(args, 'nextStep')! } : {}),
+        ...(optionalString(args, 'goal') ? { goal: optionalString(args, 'goal')! } : {}),
+        ...(Array.isArray(args.acceptance) ? { acceptance: args.acceptance.filter((item): item is string => typeof item === 'string' && !!item.trim()) } : {}),
+        ...(Array.isArray(args.boundaries) ? { boundaries: args.boundaries.filter((item): item is string => typeof item === 'string' && !!item.trim()) } : {}),
+        ...(optionalBoolean(args, 'rework') ? { rework: true } : {}),
+      });
+      return response({ todoId: updated.id, stage: updated.state.stage, waitState: updated.state.waitState,
+        requirementsVersion: updated.state.requirementsVersion ?? 0, contentVersion: updated.state.contentVersion ?? 0,
+        completionGate: evaluateCardCompletionGate(updated, useWorkLedger.getState().evidences) });
+    }
+    if (tool === 'record_work_evidence') {
+      const todoId = requiredString(args, 'todoId');
+      const claimedKind = requiredString(args, 'kind');
+      if (!['test_run', 'ci_build', 'pr_status', 'diff_check', 'agent_report'].includes(claimedKind)) throw new Error('Agent 不能登记人工接受或未知证据类型');
+      const title = requiredString(args, 'title');
+      const claimedPassed = optionalBoolean(args, 'passed') ?? true;
+      const ev = await useWorkLedger.getState().addEvidence({
+        todoId,
+        sessionId: null,
+        kind: 'agent_report',
+        title,
+        summary: `Agent 声明（未独立核对）：${claimedKind} / ${claimedPassed ? '声称通过' : '声称未通过'}。${optionalString(args, 'summary') ?? ''}`,
+        headSha: optionalString(args, 'headSha') ?? null,
+        workspaceRoot: null,
+        webUrl: null,
+        passed: false,
+        criterionIds: Array.isArray(args.criterionIds) ? args.criterionIds.filter((item): item is string => typeof item === 'string' && !!item.trim()) : [],
+        requirementsVersion: typeof args.requirementsVersion === 'number' && Number.isInteger(args.requirementsVersion) ? args.requirementsVersion : undefined,
+        contentVersion: typeof args.contentVersion === 'number' && Number.isInteger(args.contentVersion) ? args.contentVersion : undefined,
+      });
+      return response({ evidenceId: ev.id, todoId: ev.todoId, kind: ev.kind, passed: ev.passed, stale: ev.stale, claimedKind, claimedPassed, verification: 'agent_statement_unverified' });
+    }
+    if (tool === 'verify_work_ci_evidence') {
+      const buildId = args.buildId;
+      const requirementsVersion = args.requirementsVersion;
+      const contentVersion = args.contentVersion;
+      if (typeof buildId !== 'number' || !Number.isInteger(buildId) || typeof requirementsVersion !== 'number' || !Number.isInteger(requirementsVersion) || typeof contentVersion !== 'number' || !Number.isInteger(contentVersion)) throw new Error('可信 CI 核对需要准确的构建 ID 和工作版本');
+      const evidence = await verifyWorkCiEvidence({ workId: requiredString(args, 'todoId'), project: requiredString(args, 'project'), buildId, requirementsVersion, contentVersion,
+        criterionIds: Array.isArray(args.criterionIds) ? args.criterionIds.filter((item): item is string => typeof item === 'string') : [] });
+      return response({ evidence, verification: 'ado_build_api', scope: 'ci_status_only' });
+    }
+    if (tool === 'memory_search') {
+      const query = optionalString(args, 'query');
+      const category = optionalString(args, 'category') as ButlerMemoryCategory | undefined;
+      const workspaceRoot = optionalString(args, 'workspaceRoot');
+      const rawLimit = typeof args.limit === 'number' && Number.isFinite(args.limit) ? args.limit : 6;
+      const entries = await useButlerMemory.getState().recallRelevantMemories({
+        query,
+        category,
+        workspaceRoot: workspaceRoot ?? null,
+        limit: rawLimit,
+      });
+      return response({
+        paused: useButlerMemory.getState().memoryPaused,
+        returned: entries.length,
+        items: entries.map((m) => ({
+          id: m.id,
+          category: m.category,
+          title: m.title,
+          content: m.content,
+          tags: m.tags,
+          workspaceRoot: m.workspaceRoot,
+          pinned: m.pinned,
+          recallCount: m.recallCount,
+        })),
+      });
+    }
+    if (tool === 'memory_save') {
+      const category = requiredString(args, 'category') as ButlerMemoryCategory;
+      const title = requiredString(args, 'title');
+      const content = requiredString(args, 'content');
+      const tags = Array.isArray(args.tags)
+        ? args.tags.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+        : [];
+      const saved = await useButlerMemory.getState().upsertMemory({
+        category,
+        title,
+        content,
+        tags,
+        workspaceRoot: optionalString(args, 'workspaceRoot') ?? null,
+        pinned: optionalBoolean(args, 'pinned') ?? false,
+        sourceKind: 'conversation',
+      });
+      return response({
+        id: saved.id,
+        category: saved.category,
+        title: saved.title,
+        pinned: saved.pinned,
+      });
+    }
+    if (tool === 'memory_delete') {
+      const id = requiredString(args, 'id');
+      const deleted = await useButlerMemory.getState().deleteMemory(id);
+      return response({ id, deleted });
+    }
+    if (tool === 'assistant_daily_brief') {
+      const rawKind = optionalString(args, 'kind') ?? 'focus_digest';
+      const kind: PersonalAssistantBriefKind =
+        rawKind === 'morning_brief' || rawKind === 'evening_review' || rawKind === 'focus_digest'
+          ? rawKind
+          : 'focus_digest';
+      const snapshot = generatePersonalAssistantBrief(kind);
+      const saveDigest = optionalBoolean(args, 'saveDigest') ?? false;
+      const saved = saveDigest ? await saveAssistantSnapshotDigest(snapshot) : null;
+      return response({
+        kind: snapshot.kind,
+        dateKey: snapshot.dateKey,
+        title: snapshot.title,
+        metrics: snapshot.metrics,
+        focusItems: snapshot.focusItems,
+        commitments: snapshot.commitments,
+        actionItems: snapshot.actionItems,
+        markdown: snapshot.markdown,
+        ...(saved ? { digestId: saved.id } : {}),
+      });
+    }
+    if (tool === 'workflow_report_generate') {
+      const todoId = optionalString(args, 'todoId');
+      const sessionKey = optionalString(args, 'sessionKey');
+      const ledger = useWorkLedger.getState();
+      const acpState = useAcpAgents.getState();
+      const card = todoId ? ledger.cards.find((c) => c.id === todoId) ?? null : null;
+      const acpSession = sessionKey
+        ? acpState.sessions[sessionKey] ?? null
+        : todoId
+          ? Object.values(acpState.sessions).find((s) => s.linkedTodoId === todoId) ?? null
+          : null;
+      const report = buildWorkflowExecutionReport({
+        card,
+        acpSession,
+        sessions: todoId ? ledger.sessions.filter((s) => s.todoId === todoId) : [],
+        evidences: todoId ? ledger.evidences.filter((e) => e.todoId === todoId) : [],
+        links: todoId ? ledger.links.filter((l) => l.todoId === todoId) : [],
+      });
+      if (optionalBoolean(args, 'recordEvidence') && todoId) {
+        await recordReportAsWorkEvidence(todoId, report);
+      }
+      if (optionalBoolean(args, 'distillMemory')) {
+        await distillReportToMemory(report);
+      }
+      return response(report);
+    }
+    if (tool === 'workflow_report_publish') {
+      const todoId = requiredString(args, 'todoId');
+      const ledger = useWorkLedger.getState();
+      const card = ledger.cards.find((item) => item.id === todoId);
+      if (!card) throw new Error('指定工作不存在');
+      const acpSession = Object.values(useAcpAgents.getState().sessions).find((session) => session.linkedTodoId === todoId) ?? null;
+      const report = buildWorkflowExecutionReport({ card, acpSession, sessions: ledger.sessions, evidences: ledger.evidences, links: ledger.links });
+      const action = await publishWorkReport({ workId: todoId, rid: requiredString(args, 'rid'), reportId: requiredString(args, 'operationId'), reportTitle: report.title, reportGeneratedAt: report.generatedAt, markdown: report.markdown });
+      return response({ action, deliveryConfirmed: action.state === 'acknowledged' || action.state === 'completed' });
+    }
+    if (tool === 'work_ado_state_sync') {
+      const expectedRevision = args.expectedRevision;
+      if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision <= 0) throw new Error('expectedRevision 必须是正整数');
+      const action = await syncWorkAdoState({ workId: requiredString(args, 'todoId'), operationId: requiredString(args, 'operationId'), expectedRevision, expectedState: requiredString(args, 'expectedState'), targetState: requiredString(args, 'targetState') });
+      return response({ action, syncConfirmed: action.state === 'acknowledged' || action.state === 'completed' });
+    }
+    if (tool === 'work_external_action_continue') {
+      const action = await executePreparedExternalAction(requiredString(args, 'actionId'), false, optionalBoolean(args, 'retryReport'));
+      return response({ action, deliveryConfirmed: action.state === 'acknowledged' || action.state === 'completed' });
+    }
+    if (tool === 'acp_list_agents') {
+      const includeDisabled = optionalBoolean(args, 'includeDisabled') ?? true;
+      const acpState = useAcpAgents.getState();
+      const agents = acpState.agents.filter((a) => includeDisabled || a.enabled);
+      return response({
+        agents: agents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          preset: a.preset,
+          command: a.command,
+          args: a.args,
+          enabled: a.enabled,
+          autoApproveSafeReads: a.autoApproveSafeReads,
+        })),
+        discovered: acpState.discovered,
+        activeSessions: Object.keys(acpState.sessions).length,
+      });
+    }
+    if (tool === 'acp_dispatch_task') {
+      const prompt = requiredString(args, 'prompt');
+      const todoId = requiredString(args, 'todoId');
+      const requestId = requiredString(args, 'requestId');
+      const agentId = optionalString(args, 'agentId');
+      const ledger = useWorkLedger.getState();
+      const card = ledger.cards.find((item) => item.id === todoId);
+      if (!card) throw new Error('正式委派需先用 create_work_card 纳入同一件工作');
+      if (!card.state.goal?.trim() || !card.state.acceptance.length) throw new Error('请先明确工作目标和验收条件');
+      const workspaceRoot = optionalString(args, 'workspaceRoot') ??
+        ledger.links.find((link) => link.todoId === todoId && link.kind === 'kanban_card' && link.stateSnapshot === 'workspace')?.repo ??
+        ledger.sessions.find((session) => session.todoId === todoId)?.workspaceRoot ?? '';
+      const acp = useAcpAgents.getState();
+      const targetAgent =
+        (agentId ? acp.agents.find((a) => a.id === agentId) : undefined) ??
+        acp.agents.find((a) => a.enabled);
+      if (!targetAgent) {
+        throw new Error('尚未配置或启用本地 ACP 客户端');
+      }
+      if (!workspaceRoot) {
+        throw new Error('请提供工作区路径 workspaceRoot');
+      }
+      const specText = renderDispatchSpec({ title: card.title, goal: `${card.state.goal}\n本次推进要求：${prompt}`,
+        acceptance: card.state.acceptance, boundaries: card.state.boundaries, evidence: card.note ? [{ label: '工作补充说明', text: card.note }] : [] });
+      const action = await ledger.prepareDispatchAction({
+        idempotencyKey: JSON.stringify(['acp-dispatch', todoId, requestId]), todoId, actionKind: 'session_create',
+        specJson: JSON.stringify({ specText, runtime: 'acp', acpAgentId: targetAgent.id, repoRootOverride: workspaceRoot,
+          isolateWorktree: optionalBoolean(args, 'isolateWorktree') ?? false,
+          requirementsVersion: card.state.requirementsVersion ?? 0, contentVersion: card.state.contentVersion ?? 0 }),
+        requireConfirmation: card.state.autonomyMode !== 'autonomous',
+      });
+      return response({ accepted: true, todoId, actionId: action.id, state: action.state, agentId: targetAgent.id,
+        workspaceRoot, message: action.state === 'awaiting_approval' ? '工作已保留，等待本轮委派授权' : '工作已持久入队，后台将按可用资源执行；尚未宣告执行完成' });
+    }
+    if (tool === 'acp_session_status') {
+      const sessionKey = optionalString(args, 'sessionKey');
+      const sessions = useAcpAgents.getState().sessions;
+      if (sessionKey) {
+        const s = sessions[sessionKey];
+        if (!s) throw new Error(`未找到 ACP 会话 ${sessionKey}`);
+        return response({
+          sessionKey: s.sessionKey,
+          acpSessionId: s.acpSessionId,
+          agentName: s.agentName,
+          status: s.status,
+          mode: s.modes?.currentModeId ?? null,
+          plan: s.plan,
+          pendingPermissions: s.pendingPermissions.length,
+          toolCalls: s.toolCalls.length,
+          lastMessage: s.messages.at(-1)?.text ?? '',
+        });
+      }
+      return response({
+        sessions: Object.values(sessions).map((s) => ({
+          sessionKey: s.sessionKey,
+          acpSessionId: s.acpSessionId,
+          agentName: s.agentName,
+          title: s.title,
+          status: s.status,
+          workspaceRoot: s.workspaceRoot,
+          linkedTodoId: s.linkedTodoId,
+          pendingPermissions: s.pendingPermissions.length,
+        })),
+      });
     }
     throw new Error(`RocketX 不支持动态工具 ${tool || 'unknown'}`);
   } catch (error) {

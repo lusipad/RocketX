@@ -5,10 +5,15 @@ import {
   ChevronDown,
   CircleAlert,
   FolderOpen,
+  GitBranch,
   Loader2,
+  Mic,
+  MoreHorizontal,
   PanelLeft,
+  PanelRight,
   RefreshCw,
   Send,
+  Settings,
   Square,
   X,
 } from 'lucide-react';
@@ -20,12 +25,16 @@ import {
   type CodexArtifact,
 } from '../lib/codexArtifacts';
 import { isTauriRuntime } from '../lib/client';
+import { PI_CONFIGURED_STORAGE_KEY } from '../lib/runtimeMode';
 import { openDesktopDialog } from '../platform/desktopDialog';
+import { revealDesktopPath } from '../platform/desktopOpener';
 import { renderMarkdownDoc, StableStreamingMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { resolvePortalWorkContext } from '../lib/workContext';
 import { useCodexStreamingView } from '../lib/useCodexStreamingText';
 import type { CodexHostInput } from '../agent/codexHostInput';
 import type { CodexImageInput } from '../lib/codexImages';
+import { useAgentComposerDraft, useAgentComposerDrafts, type AgentComposerRequest } from '../stores/agentComposerDrafts';
 import {
   useCodexWorkspace,
   type CodexFollowUpMode,
@@ -34,9 +43,15 @@ import {
   type CodexWorkspaceMessage,
 } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
+import { useUI } from '../stores/ui';
+import { useWorkLedger } from '../stores/workLedger';
 import ButlerConversationHistory from './ButlerConversationHistory';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
-import CodexArtifactPanel, { CodexArtifactLink } from './CodexArtifactPanel';
+import ButlerWorkPortalDock, { type PortalTab } from './ButlerWorkPortalDock';
+import { CodexArtifactLink } from './CodexArtifactPanel';
+import PiQuickOnboardingCard from './PiQuickOnboardingCard';
+import AgentComposerFeedback from './AgentComposerFeedback';
+import LocalVoiceControls from './LocalVoiceControls';
 import CodexImagePicker, {
   CodexGeneratedImages,
   CodexImageAttachments,
@@ -130,6 +145,7 @@ function ComposerMenu({
   choices,
   disabled,
   onChange,
+  footerAction,
 }: {
   ariaLabel: string;
   label: string;
@@ -137,6 +153,7 @@ function ComposerMenu({
   choices: readonly ComposerChoice[];
   disabled?: boolean;
   onChange: (value: string) => void;
+  footerAction?: { label: string; icon?: React.ReactNode; onClick: () => void };
 }) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -182,6 +199,22 @@ function ComposerMenu({
             {choice.description ? <small>{choice.description}</small> : null}
           </button>
         ))}
+        {footerAction ? (
+          <div className="border-t border-line/50 mt-1 pt-1">
+            <button
+              type="button"
+              role="menuitem"
+              className="text-primary hover:text-primary-hover font-medium flex items-center gap-1.5 w-full text-left py-1.5 px-2 rounded hover:bg-fill-hover text-xs transition-colors"
+              onClick={() => {
+                detailsRef.current?.removeAttribute('open');
+                footerAction.onClick();
+              }}
+            >
+              {footerAction.icon}
+              <span>{footerAction.label}</span>
+            </button>
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -224,12 +257,25 @@ function ConversationMessage({
   progressive?: boolean;
   streaming?: boolean;
 }) {
+  const isAssistant = entry.role === 'assistant';
+  const engineName = 'Pi';
   return (
     <article data-speaker={entry.role} className={`codex-native-message${streaming ? ' is-streaming' : ''}`}>
-      <span>{entry.role === 'assistant' ? 'Codex' : '你'}</span>
+      <div className="codex-native-speaker flex items-center gap-1.5 mb-1.5 text-xs font-semibold text-ink-2">
+        {isAssistant ? (
+          <>
+            <span className="flex h-5 w-5 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Bot size={13} />
+            </span>
+            <span>{engineName}</span>
+          </>
+        ) : (
+          <span>你</span>
+        )}
+      </div>
       <div className="butler-conversation-markdown">
         {entry.text
-          ? entry.role === 'assistant'
+          ? isAssistant
             ? progressive
               ? <StableStreamingMarkdown text={entry.text} renderLink={renderLink} />
               : renderMarkdownDoc(entry.text, undefined, renderLink)
@@ -266,11 +312,73 @@ const FOLLOW_UP_CHOICES: readonly ComposerChoice[] = [
 ];
 
 function effortLabel(effort: string): string {
-  return ({ low: '低', medium: '中', high: '高', xhigh: '超高' } as Record<string, string>)[effort] ?? effort;
+  const map: Record<string, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+    xhigh: '超高',
+    minimal: '极简',
+    ultra: '极致',
+    none: '关闭',
+    off: '关闭',
+  };
+  return map[effort.toLowerCase()] ?? effort;
 }
 
-export default function ButlerConversation({ embedded = false }: { embedded?: boolean }) {
+const MODERN_MODEL_LABELS: Record<string, string> = {
+  'deepseek-v4-flash': 'DeepSeek V4 Flash',
+  'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
+  'deepseek-v4-pro': 'DeepSeek V4 Pro (推理)',
+  'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro (推理)',
+  'deepseek-reasoner': 'DeepSeek R1 (深度推理)',
+  'deepseek/deepseek-reasoner': 'DeepSeek R1 (深度推理)',
+  'deepseek-r1': 'DeepSeek R1 (深度推理)',
+  'deepseek-chat': 'DeepSeek V3',
+  'deepseek/deepseek-chat': 'DeepSeek V3',
+  'claude-sonnet-5.5': 'Claude Sonnet 5.5',
+  'anthropic/claude-sonnet-5.5': 'Claude Sonnet 5.5',
+  'claude-opus-5.5': 'Claude Opus 5.5',
+  'anthropic/claude-opus-5.5': 'Claude Opus 5.5',
+  'claude-haiku-5.5': 'Claude Haiku 5.5',
+  'anthropic/claude-haiku-5.5': 'Claude Haiku 5.5',
+  'claude-3-7-sonnet-20250219': 'Claude 3.7 Sonnet',
+  'anthropic/claude-3-7-sonnet-20250219': 'Claude 3.7 Sonnet',
+  'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
+  'gpt-6.1-sol': 'GPT-6.1 Sol (工程/代码)',
+  'openai/gpt-6.1-sol': 'GPT-6.1 Sol (工程/代码)',
+  'gpt-6-astra': 'GPT-6 Astra (多智能体)',
+  'openai/gpt-6-astra': 'GPT-6 Astra (多智能体)',
+  'gpt-6-luna': 'GPT-6 Luna (极速)',
+  'openai/gpt-6-luna': 'GPT-6 Luna (极速)',
+  'o3-mini': 'o3-mini (高速推理)',
+  'openai/o3-mini': 'o3-mini (高速推理)',
+  'gemini-4-argon': 'Gemini 4 Argon',
+  'google/gemini-4-argon': 'Gemini 4 Argon',
+  'gemini-3.8-flash': 'Gemini 3.8 Flash',
+  'google/gemini-3.8-flash': 'Gemini 3.8 Flash',
+  'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'qwen3-coder': 'Qwen 3 Coder (本地编码)',
+  'ollama/qwen3-coder': 'Qwen 3 Coder (本地编码)',
+  'qwen3:8b': 'Qwen 3 8B',
+  'qwen3.8-27b': 'Qwen 3.8 27B',
+  'deepseek-r1:8b': 'DeepSeek R1 8B',
+};
+
+function formatModelLabel(id: string, defaultName?: string): string {
+  if (MODERN_MODEL_LABELS[id]) return MODERN_MODEL_LABELS[id];
+  const stripped = id.replace(/^(deepseek|anthropic|openai|google|ollama)\//i, '');
+  if (MODERN_MODEL_LABELS[stripped]) return MODERN_MODEL_LABELS[stripped];
+  if (defaultName && defaultName !== id) return defaultName;
+  return stripped;
+}
+
+export default function ButlerConversation({ embedded = false, workBrief }: { embedded?: boolean; workBrief?: React.ReactNode }) {
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+  const scope = useCodexWorkspace((state) => state.scope);
+  const aiRuntimeProvider = useUI((state) => state.aiRuntimeProvider);
+  const isPi = aiRuntimeProvider === 'pi';
+  const engineName = 'Pi';
   const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const status = useCodexWorkspace((state) => state.status);
@@ -289,6 +397,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const followUpMode = useCodexWorkspace((state) => state.followUpMode);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
   const connect = useCodexWorkspace((state) => state.connect);
+  const reconnectRuntime = useCodexWorkspace((state) => state.reconnectRuntime);
   const refreshFromCodex = useCodexWorkspace((state) => state.refreshFromCodex);
   const handoffToCodex = useCodexWorkspace((state) => state.handoffToCodex);
   const send = useCodexWorkspace((state) => state.send);
@@ -298,10 +407,45 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const setPermissionPreset = useCodexWorkspace((state) => state.setPermissionPreset);
   const setFollowUpMode = useCodexWorkspace((state) => state.setFollowUpMode);
   const clearComposerDraft = useCodexWorkspace((state) => state.clearComposerDraft);
-  const [input, setInput] = useState('');
-  const [images, setImages] = useState<CodexImageInput[]>([]);
+  const composerTarget = { kind: 'butler' as const, scope, workspaceRoot, recipientId: activeThreadId ?? null };
+  const { key: composerKey, draft } = useAgentComposerDraft(composerTarget);
+  const input = draft.text;
+  const images = draft.images;
+  const imageReadKeysRef = useRef(new Set<string>());
+  const [imageReadKeys, setImageReadKeys] = useState(new Set<string>());
+  const readingImages = imageReadKeys.has(composerKey);
+  const setReadingImages = (reading: boolean) => {
+    if (reading) imageReadKeysRef.current.add(composerKey);
+    else imageReadKeysRef.current.delete(composerKey);
+    setImageReadKeys(new Set(imageReadKeysRef.current));
+  };
+  const setInput = useCallback((text: string) => useAgentComposerDrafts.getState().edit(composerKey, { text }), [composerKey]);
+  const setImages = useCallback((nextImages: CodexImageInput[]) => useAgentComposerDrafts.getState().edit(composerKey, { images: nextImages }), [composerKey]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<CodexArtifact | null>(null);
+  const [artifactThreadId, setArtifactThreadId] = useState<string | null>(null);
+  const [portalOpen, setPortalOpen] = useState(false);
+  const [voicePanelOpen, setVoicePanelOpen] = useState(false);
+  const [portalTab, setPortalTab] = useState<PortalTab>('workcard');
+  const setModule = useUI((state) => state.setModule);
+  const setButlerView = useUI((state) => state.setButlerView);
+  const butlerSidebarCollapsed = useUI((state) => state.butlerSidebarCollapsed);
+  const toggleButlerSidebarCollapsed = useUI((state) => state.toggleButlerSidebarCollapsed);
+  const ledgerCards = useWorkLedger((state) => state.cards);
+  const ledgerSessions = useWorkLedger((state) => state.sessions);
+  const ledgerLinks = useWorkLedger((state) => state.links);
+
+  const linkedCard = useMemo(() => {
+    return resolvePortalWorkContext({
+      cards: ledgerCards, sessions: ledgerSessions, acpSessions: [], activeThreadId,
+      activeWorkspaceRoot: workspaceRoot, currentRuntime: 'pi', selectedCardId: null,
+    }).card;
+  }, [activeThreadId, ledgerSessions, ledgerCards, workspaceRoot]);
+
+  const linkedBranch = useMemo(() => {
+    if (!linkedCard) return null;
+    return ledgerLinks.find((l) => l.todoId === linkedCard.id && l.kind === 'git_branch')?.externalId ?? null;
+  }, [linkedCard, ledgerLinks]);
   const [refreshingFromCodex, setRefreshingFromCodex] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const historyCloseRef = useRef<HTMLButtonElement>(null);
@@ -309,7 +453,12 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const autoOpenedArtifactMessageRef = useRef<string>();
   const activeThread = threads.find((thread) => thread.id === activeThreadId);
-  const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
+  const activeModel = models.find((model) =>
+    model.model === selectedModel
+    || model.id === selectedModel
+    || (selectedModel && model.model.endsWith(`/${selectedModel}`))
+    || (selectedModel && selectedModel.endsWith(`/${model.model}`))
+  );
   const running = status === 'running' || status === 'waiting-input';
   const latestActivity = events.at(-1);
   const completedMessage = !running && messages.at(-1)?.role === 'assistant'
@@ -321,25 +470,27 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
     : completedMessage;
   const activityStatus = running
     ? '正在工作'
-    : status === 'interrupted' || error === 'Codex 本轮已中断'
+    : status === 'interrupted' || error === 'Pi 本轮已中断' || error === 'Codex 本轮已中断'
       ? '已中断'
       : events.some((event) => event.status === 'failed')
         ? '未完成'
         : '已完成';
   const desktopRuntime = isTauriRuntime();
+  let hasSavedPiConfig = false;
+  try { hasSavedPiConfig = localStorage.getItem(PI_CONFIGURED_STORAGE_KEY) === '1'; } catch { /* Storage may be unavailable. */ }
   const canCompose = desktopRuntime
     && Boolean(workspaceRoot)
     && !['idle', 'connecting', 'interrupted', 'external', 'unavailable'].includes(status);
-  const refreshLabel = status === 'external' ? '在 RocketX 继续' : '从 Codex 刷新';
+  const refreshLabel = status === 'external' ? '在 RocketX 继续' : '同步会话状态';
   const composerPlaceholder = status === 'external'
     ? '点击上方“在 RocketX 继续”'
     : running
       ? (followUpMode === 'steer' ? '输入指令，立即调整当前任务' : '输入后续消息，将在当前任务后执行')
-      : '给 Codex 一个任务';
-  const title = activeThread?.name?.trim() || activeThread?.preview.trim() || '新任务';
+      : activeThreadId ? '补充要求，或说说下一步想做什么…' : '告诉我你想完成什么，也可以粘贴资料或添加图片…';
+  const title = activeThread?.name?.trim() || activeThread?.preview.trim() || '新事情';
   const modelChoices = useMemo<ComposerChoice[]>(() => models.map((model) => ({
     id: model.model,
-    label: model.displayName,
+    label: formatModelLabel(model.model, model.displayName),
     description: model.description,
   })), [models]);
   const effortChoices = useMemo<ComposerChoice[]>(() => (
@@ -354,11 +505,30 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
   const renderArtifactLink = useCallback<MarkdownLinkRenderer>((label, href) => {
     const artifact = codexArtifactFromLink(label, href, workspaceRoot);
     return artifact
-      ? <CodexArtifactLink artifact={artifact} label={label} onOpen={setSelectedArtifact} />
+      ? <CodexArtifactLink artifact={artifact} label={label} onOpen={(art) => {
+          setSelectedArtifact(art);
+          setArtifactThreadId(activeThreadId ?? null);
+          setPortalTab('artifact');
+          setPortalOpen(true);
+        }} />
       : undefined;
-  }, [workspaceRoot]);
+  }, [activeThreadId, workspaceRoot]);
 
-  const closeArtifact = useCallback((): void => setSelectedArtifact(null), []);
+
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.altKey && (event.key === 'p' || event.key === 'P')) {
+        event.preventDefault();
+        setPortalOpen((current) => !current);
+      } else if ((event.ctrlKey || event.metaKey) && (event.key === 'b' || event.key === 'B')) {
+        event.preventDefault();
+        toggleButlerSidebarCollapsed();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [toggleButlerSidebarCollapsed]);
 
   const closeHistory = useCallback((): void => {
     setHistoryOpen(false);
@@ -377,7 +547,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
       if (event.key !== 'Tab') return;
       const panel = historyPanelRef.current;
       if (!panel) return;
-      const focusable = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')]
+      const focusable = [...panel.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), summary')]
         .filter((item) => item.getClientRects().length > 0);
       const first = focusable[0];
       const last = focusable.at(-1);
@@ -399,15 +569,24 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
     setInput(composerDraft);
     clearComposerDraft();
     requestAnimationFrame(() => textareaRef.current?.focus());
-  }, [clearComposerDraft, composerDraft]);
+  }, [clearComposerDraft, composerDraft, setInput]);
+
+  useEffect(() => {
+    setSelectedArtifact(null);
+    setArtifactThreadId(null);
+    autoOpenedArtifactMessageRef.current = undefined;
+  }, [activeThreadId, scope, workspaceRoot]);
 
   useEffect(() => {
     const latest = [...messages].reverse().find((entry) => entry.role === 'assistant' && entry.text);
     if (!latest || autoOpenedArtifactMessageRef.current === latest.id) return;
     autoOpenedArtifactMessageRef.current = latest.id;
     const artifacts = codexArtifactsFromMarkdown(latest.text, workspaceRoot);
-    if (artifacts.length > 0) setSelectedArtifact(artifacts.at(-1) ?? null);
-  }, [messages, workspaceRoot]);
+    if (artifacts.length > 0) {
+      setSelectedArtifact(artifacts.at(-1) ?? null);
+      setArtifactThreadId(activeThreadId ?? null);
+    }
+  }, [activeThreadId, messages, workspaceRoot]);
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -422,34 +601,53 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
     events,
     requests,
     queuedMessages,
-  ]);
+  ], composerKey);
 
   const chooseWorkspace = async (): Promise<void> => {
-    if (!isTauriRuntime()) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
-    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+    if (!isTauriRuntime()) throw new Error('网页版没有本地 Pi 执行面，请使用 RocketX 桌面端');
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择工作区' });
     if (typeof path !== 'string') return;
     await setWorkspaceRoot(path);
     await connect();
   };
 
-  const submit = async (text = input, modeOverride?: CodexFollowUpMode): Promise<void> => {
-    const value = text.trim();
-    if (!value && images.length === 0) return;
-    const outgoingImages = images;
-    setInput('');
-    setImages([]);
+  const dispatchRequest = async (request: AgentComposerRequest): Promise<void> => {
+    let requestKey = composerKey;
+    let submitted = false;
     stickToBottom.current = true;
     try {
-      await send(value, outgoingImages, modeOverride);
+      await send(request.text, request.images, request.options.mode, {
+        threadId: request.target.recipientId ?? undefined,
+        workspaceRoot: request.target.workspaceRoot,
+        scope: request.target.scope,
+        onSubmitted: () => { submitted = true; },
+        onThreadCreated: (threadId) => {
+          requestKey = useAgentComposerDrafts.getState().bindRecipient(requestKey, request.id, threadId);
+        },
+      });
+      useAgentComposerDrafts.getState().finish(requestKey, request.id);
     } catch (reason) {
-      setInput(value);
-      setImages(outgoingImages);
-      toast.error(reason, '任务没有发出');
+      useAgentComposerDrafts.getState().finish(requestKey, request.id, reason, submitted);
     }
+  };
+
+  const submit = async (text = input, modeOverride?: CodexFollowUpMode): Promise<void> => {
+    if (!canCompose || imageReadKeysRef.current.has(composerKey)) return;
+    const request = useAgentComposerDrafts.getState().begin(composerTarget, { mode: modeOverride }, text);
+    if (request) await dispatchRequest(request);
+  };
+
+  const retryRequest = (failed: AgentComposerRequest): void => {
+    const request = useAgentComposerDrafts.getState().begin(composerTarget, undefined, undefined, failed.id);
+    if (request) void dispatchRequest(request);
   };
 
   const openInCodex = async (): Promise<void> => {
     try {
+      if (isPi && workspaceRoot) {
+        await revealDesktopPath(workspaceRoot);
+        return;
+      }
       if (activeThreadId) {
         const result = await handoffToCodex();
         if (result === 'unavailable') {
@@ -461,7 +659,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
       const result = workspaceRoot ? await openCodexNewThread('', workspaceRoot) : 'unavailable';
       if (result === 'unavailable') throw new Error('Codex App 没有响应');
     } catch (reason) {
-      toast.error(reason, '无法打开 Codex App');
+      toast.error(reason, isPi ? '无法打开工作区目录' : '无法打开 Codex App');
     }
   };
 
@@ -481,26 +679,26 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
         requestAnimationFrame(() => textareaRef.current?.focus());
       } else {
         toast.success(added > 0
-          ? `已从 Codex 同步 ${added} 个新步骤`
+          ? `已同步 ${added} 个新步骤`
           : '已同步并接回 RocketX');
         requestAnimationFrame(() => textareaRef.current?.focus());
       }
     } catch (reason) {
-      toast.error(reason, '无法从 Codex 刷新');
+      toast.error(reason, '无法同步会话状态');
     } finally {
       setRefreshingFromCodex(false);
     }
   };
 
   const suggestions = useMemo(() => [
-    '梳理这个工作区目前最需要处理的问题',
-    '查看当前改动，并给出下一步建议',
-    '帮我定位最近一次失败的原因',
+    { title: '梳理一件事', description: '从目标到下一步', prompt: '帮我梳理这件事的目标、已有信息和下一步：' },
+    { title: '检查项目改动', description: '看清改了什么、哪里有问题', prompt: '检查当前项目的改动，说明已经完成什么、还有哪些问题需要处理。' },
+    { title: '整理一份资料', description: '提炼重点，形成可用内容', prompt: '帮我整理下面的资料，提炼重点和需要跟进的事项：' },
   ], []);
 
   return (
-    <div className={`butler-conversation-layout codex-native-workspace${selectedArtifact ? ' has-artifact' : ''} ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
-      <ButlerConversationHistory />
+    <div className={`butler-conversation-layout codex-native-workspace${butlerSidebarCollapsed ? ' sidebar-collapsed' : ''}${portalOpen ? ' has-portal' : ''} ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
+      {!butlerSidebarCollapsed ? <ButlerConversationHistory /> : null}
       {historyOpen ? (
         <div className="butler-conversation-mobile-drawer">
           <button type="button" tabIndex={-1} aria-label="关闭任务列表" className="butler-conversation-mobile-backdrop" onClick={closeHistory} />
@@ -508,9 +706,7 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
             <button ref={historyCloseRef} type="button" aria-label="关闭任务列表" className="butler-conversation-mobile-close" onClick={closeHistory}>
               <X size={17} aria-hidden="true" />
             </button>
-            <div className="h-full" onClickCapture={(event) => {
-              if ((event.target as HTMLElement).closest('button')) closeHistory();
-            }}>
+            <div className="h-full">
               <ButlerConversationHistory onNavigate={closeHistory} />
             </div>
           </div>
@@ -518,19 +714,36 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
       ) : null}
 
       <section className="butler-conversation-pane" aria-label="Codex 任务">
-        <header className="butler-conversation-header">
-          <div className="min-w-0">
-            <span>{workspaceRoot
-              ? workspaceRoot === defaultWorkspaceRoot
-                ? '临时会话'
-                : workspaceRoot === butlerWorkspaceRoot
-                  ? '管家会话'
-                  : workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1)
-              : 'Codex'}</span>
-            <h2>{title}</h2>
-            {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot}</p> : null}
+        <header className="butler-conversation-header work-first-conversation-header rcx-glass-header bg-surface-3">
+          <div className="flex items-center gap-2 min-w-0">
+            {butlerSidebarCollapsed ? (
+              <button
+                type="button"
+                onClick={toggleButlerSidebarCollapsed}
+                title="展开会话列表 (Ctrl+B)"
+                aria-label="展开会话列表"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
+              >
+                <PanelLeft size={16} />
+              </button>
+            ) : null}
+            <h2 className="text-sm font-semibold text-ink truncate">{title}</h2>
+            {linkedCard ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setPortalTab('workcard');
+                  setPortalOpen(true);
+                }}
+                className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary-light px-2 py-0.5 text-2xs font-medium text-primary hover:bg-primary/20 transition-colors shrink-0"
+                title="查看这件工作的详情与成果"
+              >
+                <span>关联工作</span>
+              </button>
+            ) : null}
           </div>
           <div className="butler-conversation-header-actions">
+            <button type="button" className="codex-native-open-app" onClick={() => setButlerView('kanban')}>工作看板 <ArrowUpRight size={14} aria-hidden="true" /></button>
             <button
               ref={historyButtonRef}
               type="button"
@@ -542,16 +755,14 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
               <PanelLeft size={15} aria-hidden="true" />
               任务
             </button>
-            {activeThreadId ? (
+            {activeThreadId && status === 'external' ? (
               <button
                 type="button"
                 aria-label={refreshLabel}
                 title={running
                   ? '任务运行中，完成后再刷新'
-                  : status === 'external'
-                    ? '保留 Codex App 原任务，并从最新内容创建可编辑分支'
-                    : '同步 Codex App 的最新内容'}
-                disabled={!desktopRuntime || running || status === 'connecting' || refreshingFromCodex}
+                  : '保留 Codex App 原任务，并从最新内容创建可编辑分支'}
+                disabled={!desktopRuntime || running || refreshingFromCodex}
                 onClick={() => void refreshCodexThread()}
                 className="codex-native-refresh"
               >
@@ -561,69 +772,119 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                 {refreshingFromCodex ? '刷新中' : refreshLabel}
               </button>
             ) : null}
+            <details className="work-first-conversation-actions">
+              <summary aria-label="更多对话操作"><MoreHorizontal size={16} aria-hidden="true" /></summary>
+              <div>
+              {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot === defaultWorkspaceRoot || workspaceRoot === butlerWorkspaceRoot ? '管家会话' : workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1)}</p> : null}
+              {linkedBranch ? <p title={linkedBranch}><GitBranch size={12} aria-hidden="true" />{linkedBranch}</p> : null}
+              {activeThreadId && status !== 'external' ? (
+                <button
+                  type="button"
+                  disabled={!desktopRuntime || running || refreshingFromCodex}
+                  onClick={() => void refreshCodexThread()}
+                  className="codex-native-open-app"
+                >
+                  <RefreshCw size={14} aria-hidden="true" />{refreshLabel}
+                </button>
+              ) : null}
             <button
               type="button"
-              disabled={!desktopRuntime || running || status === 'connecting' || status === 'external'}
+              disabled={!desktopRuntime || running || status === 'connecting' || (!isPi && status === 'external')}
               onClick={() => void openInCodex()}
               className="codex-native-open-app"
             >
               <ArrowUpRight size={14} aria-hidden="true" />
-              {status === 'external' ? '已交给 Codex' : '在 Codex 中打开'}
+              {isPi ? '打开目录' : (status === 'external' ? '已交给 Codex' : '在 Codex 中打开')}
+            </button>
+              </div>
+            </details>
+            <button
+              type="button"
+              aria-label={portalOpen ? '收起任务工作台' : '打开任务工作台'}
+              aria-pressed={portalOpen}
+              onClick={() => setPortalOpen((current) => !current)}
+              className="codex-native-open-app"
+            >
+              <PanelRight size={14} aria-hidden="true" />
+              详情与成果
             </button>
           </div>
         </header>
 
+        {workBrief}
         <main ref={scrollRef} onScroll={onScroll} className="codex-native-transcript">
           {!desktopRuntime ? (
             <div className="codex-native-landing">
               <span><Bot size={24} aria-hidden="true" /></span>
-              <h1>网页版没有本地 Codex 执行面</h1>
-              <p>消息、工作台和确定性功能仍可使用；运行 Codex 任务、Skills、Memory 和审批请打开 RocketX 桌面端。</p>
+              <h1>在桌面端向管家交代事情</h1>
+              <p>这里可以查看消息和已有工作。要处理本机文件、运行任务，请打开 RocketX 桌面端。</p>
             </div>
           ) : !workspaceRoot ? (
             <div className="codex-native-landing">
               <span><FolderOpen size={24} aria-hidden="true" /></span>
-              <h1>选择一个工作区</h1>
-              <p>Codex 会在这里读取代码、运行工具并维护任务记忆。</p>
+              <h1>先选择要处理的项目</h1>
+              <p>选择文件夹后，管家才能查看和处理其中的文件。</p>
               <button type="button" onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法打开工作区'))}>
                 <FolderOpen size={15} aria-hidden="true" />
                 选择文件夹
               </button>
             </div>
-          ) : status === 'connecting' || status === 'idle' ? (
+          ) : status === 'idle' && messages.length === 0 ? (
+            <div className="codex-native-landing">
+              <h1>尚未连接 {engineName}</h1>
+              <p>连接后可读取会话与执行状态。</p>
+              <button type="button" onClick={() => void connect().catch((reason) => toast.error(reason, '连接执行器失败'))}>连接执行器</button>
+            </div>
+          ) : status === 'connecting' && messages.length === 0 ? (
             <div className="codex-native-landing">
               <Loader2 size={24} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              <h1>正在连接 Codex</h1>
-              <p>正在读取模型、权限、插件和任务。</p>
+              <h1>正在连接 {engineName}</h1>
+              <p>正在启动本地引擎并加载模型。</p>
+              <button type="button" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, '重新连接失败'))}>重新连接</button>
             </div>
-          ) : status === 'unavailable' ? (
-            <div className="codex-native-landing is-error">
-              <CircleAlert size={24} aria-hidden="true" />
-              <h1>Codex Runtime 不可用</h1>
-              <p>{error || '当前运行时缺少必需能力，请升级 Codex 后重试。'}</p>
-              <div>
-                <button type="button" onClick={() => void connect().catch(() => undefined)}>重试</button>
-                <button type="button" onClick={() => void chooseWorkspace().catch(() => undefined)}>更换工作区</button>
+          ) : status === 'unavailable' && messages.length === 0 ? (
+            <div className="flex h-full items-start justify-center overflow-y-auto p-6">
+              <div className="w-full max-w-xl space-y-4">
+                <section className="space-y-3 rounded-xl border border-line bg-surface-4 p-4">
+                  <h1 className="font-semibold text-ink">{engineName} 连接未成功</h1>
+                  <p role="alert" className="whitespace-pre-wrap break-words text-sm text-ink-2">{error || '本地引擎未能完成连接，请重试。'}</p>
+                  <button type="button" className="rounded-lg bg-primary px-3 py-2 text-sm text-white" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, '重新连接失败'))}>使用已保存配置重试</button>
+                </section>
+                {hasSavedPiConfig ? <details className="rounded-xl border border-line p-3">
+                  <summary className="cursor-pointer text-sm text-ink-2">修改模型配置</summary>
+                  <div className="mt-3"><PiQuickOnboardingCard /></div>
+                </details> : <PiQuickOnboardingCard />}
               </div>
             </div>
-          ) : !activeThreadId && messages.length === 0 ? (
-            <div className="codex-native-landing">
-              <span><Bot size={24} aria-hidden="true" /></span>
-              <h1>从一个任务开始</h1>
-              <p>描述结果即可。Codex 会选择合适的 Skill、工具和步骤。</p>
-              <div className="codex-native-suggestions">
+          ) : messages.length === 0 && !running && status !== 'external' && status !== 'interrupted' ? (
+            <div className="codex-native-landing work-first-welcome">
+              <span><Bot size={22} aria-hidden="true" /></span>
+              <h1>有什么事交给我？</h1>
+              <div className="codex-native-suggestions work-first-suggestions">
                 {suggestions.map((suggestion) => (
-                  <button key={suggestion} type="button" onClick={() => void submit(suggestion)}>{suggestion}</button>
+                  <button key={suggestion.title} type="button" disabled={!canCompose || !draft.loaded || Boolean(draft.pending)} onClick={() => {
+                    setInput(input.trim() ? `${input}\n${suggestion.prompt}` : suggestion.prompt);
+                    textareaRef.current?.focus();
+                  }}>
+                    <span className="font-medium text-ink block mb-0.5">{suggestion.title}</span>
+                    <span className="text-xs text-ink-3 block">{suggestion.description}</span>
+                  </button>
                 ))}
               </div>
             </div>
           ) : (
-            <div className="codex-native-transcript-inner">
+            <div className="codex-native-transcript-inner space-y-4 py-6">
+              {status === 'connecting' || status === 'idle' || status === 'unavailable' ? (
+                <div role={status === 'unavailable' ? 'alert' : 'status'} className="rounded-lg border border-line bg-surface-2 p-3 text-xs text-ink-2">
+                  {status === 'connecting' ? '正在连接执行器，当前保留已读取的历史记录。' : '执行器尚未连接，当前显示已读取的记录，最新状态未确认。'}
+                  {status !== 'connecting' ? <button type="button" className="ml-2 text-primary hover:underline" onClick={() => void connect().catch((reason) => toast.error(reason, '重新连接失败'))}>重新连接执行器</button> : null}
+                </div>
+              ) : null}
               {status === 'interrupted' ? (
-                <section className="codex-native-interruption" role="alert" aria-label="Codex 本轮已中断">
+                <section className="codex-native-interruption" role="alert" aria-label="Pi 本轮已中断">
                   <div>
-                    <h2>Codex 本轮已中断</h2>
-                    <p>{error || '本地 Codex Runtime 已退出。已保留收到的部分结果。'}</p>
+                    <h2>Pi 本轮已中断</h2>
+                    <p>{error || '本地 Pi Runtime 已退出。已保留收到的部分结果。'}</p>
                   </div>
                   <button
                     type="button"
@@ -701,21 +962,32 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
         </main>
 
         <footer className="butler-conversation-footer codex-native-footer">
-          <div className="codex-native-composer">
+          <div className="codex-native-composer work-first-composer">
+            <div className="work-first-composer-target" id="butler-composer-target"><Bot size={13} aria-hidden="true" /><span>发给管家</span><span aria-hidden="true">·</span><strong>{activeThreadId ? linkedCard?.title || title : '新事情'}</strong></div>
+            <AgentComposerFeedback draft={draft} onRetry={retryRequest} />
+            {readingImages ? <p role="status" className="text-xs text-ink-3">正在读取图片，读取完成后可发送。</p> : null}
             {status === 'external' ? (
               <div id="codex-external-composer-notice" className="codex-native-composer-notice" role="status">
                 <CircleAlert size={14} aria-hidden="true" />
                 <span>Codex App 保留原任务；点击上方“在 RocketX 继续”会创建可编辑分支。</span>
               </div>
             ) : null}
-            <CodexImagePreviews images={images} onChange={setImages} />
+            <fieldset disabled={readingImages} className="m-0 border-0 p-0"><CodexImagePreviews images={images} onChange={setImages} /></fieldset>
             <textarea
               ref={textareaRef}
+              data-work-composer="pi"
+              data-work-session-id={activeThreadId ?? ''}
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              onPaste={(event) => void pasteCodexImages(event, images, setImages)}
+              onPaste={(event) => {
+                if (imageReadKeysRef.current.has(composerKey) && event.clipboardData.files.length > 0) {
+                  event.preventDefault();
+                  return;
+                }
+                void pasteCodexImages(event, images, setImages, setReadingImages);
+              }}
               onKeyDown={(event) => {
-                if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+                if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
                 if ((event.metaKey || event.ctrlKey) && event.shiftKey) {
                   event.preventDefault();
                   const opposite = followUpMode === 'steer' ? 'queue' : 'steer';
@@ -727,26 +999,34 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                 void submit();
               }}
               disabled={!canCompose}
-              aria-label="给 Codex 的任务"
-              aria-describedby={status === 'external' ? 'codex-external-composer-notice' : undefined}
+              aria-label="给管家的要求"
+              aria-describedby={`butler-composer-target${status === 'external' ? ' codex-external-composer-notice' : ''}`}
               placeholder={composerPlaceholder}
               rows={1}
             />
             <div className="codex-native-composer-bar">
               <div>
-                <CodexImagePicker images={images} onChange={setImages} disabled={!canCompose} />
+                <CodexImagePicker key={composerKey} images={images} onChange={setImages} disabled={!canCompose || readingImages} onReadingChange={setReadingImages} />
+                <details className="work-first-composer-settings">
+                  <summary><Settings size={14} aria-hidden="true" />对话设置</summary>
+                  <div className="work-first-composer-settings-content">
                 <ComposerMenu
                   ariaLabel="模型"
-                  label={activeModel?.displayName ?? '模型'}
+                  label={formatModelLabel(selectedModel, activeModel?.displayName ?? (selectedModel || '模型'))}
                   value={selectedModel}
                   choices={modelChoices}
                   disabled={!canCompose}
                   onChange={(model) => void setModel(model).catch((reason) => toast.error(reason))}
+                  footerAction={{
+                    label: '配置模型与 API Key…',
+                    icon: <Settings size={13} aria-hidden="true" />,
+                    onClick: () => setModule('settings'),
+                  }}
                 />
-                {activeModel && activeModel.supportedReasoningEfforts.length > 1 ? (
+                {activeModel && activeModel.supportedReasoningEfforts && activeModel.supportedReasoningEfforts.length > 0 ? (
                   <ComposerMenu
                     ariaLabel="推理强度"
-                    label={selectedEffort ? effortLabel(selectedEffort) : '推理'}
+                    label={selectedEffort ? `思考: ${effortLabel(selectedEffort)}` : '思考'}
                     value={selectedEffort ?? ''}
                     choices={effortChoices}
                     disabled={!canCompose}
@@ -761,6 +1041,22 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                   disabled={!canCompose}
                   onChange={(preset) => void setPermissionPreset(preset as 'ask' | 'auto' | 'full').catch((reason) => toast.error(reason))}
                 />
+                  </div>
+                </details>
+                <details className="work-first-composer-voice" onToggle={(event) => setVoicePanelOpen(event.currentTarget.open)}>
+                  <summary><Mic size={14} aria-hidden="true" /><span>语音</span></summary>
+                  <div>
+                    {voicePanelOpen && <LocalVoiceControls
+                      targetKey={composerKey}
+                      disabled={!canCompose || !draft.loaded || readingImages}
+                      replyText={[...messages].reverse().find((message) => message.role === 'assistant' && !message.pending)?.text ?? ''}
+                      onTranscript={(text) => {
+                        const current = useAgentComposerDrafts.getState().drafts[composerKey]?.text ?? '';
+                        useAgentComposerDrafts.getState().edit(composerKey, { text: [current, text].filter(Boolean).join('\n') });
+                      }}
+                    />}
+                  </div>
+                </details>
                 {running ? (
                   <ComposerMenu
                     ariaLabel="后续消息处理方式"
@@ -781,17 +1077,34 @@ export default function ButlerConversation({ embedded = false }: { embedded?: bo
                   type="button"
                   aria-label={running ? '发送后续消息' : '发送'}
                   title={running ? 'Enter 发送；Ctrl+Shift+Enter 使用另一种后续方式' : 'Enter 发送；Shift+Enter 换行'}
-                  disabled={!canCompose || (!input.trim() && images.length === 0)}
+                  disabled={!canCompose || !draft.loaded || readingImages || Boolean(draft.pending) || (!input.trim() && images.length === 0)}
                   onClick={() => void submit()}
                 >
                   <Send size={14} aria-hidden="true" />
+                  <span>{running ? (followUpMode === 'steer' ? '立即调整' : '加入队列') : '发送'}</span>
                 </button>
               </div>
             </div>
           </div>
         </footer>
       </section>
-      {selectedArtifact ? <CodexArtifactPanel artifact={selectedArtifact} onClose={closeArtifact} /> : null}
+      {portalOpen ? (
+        <ButlerWorkPortalDock
+          onClose={() => {
+            setPortalOpen(false);
+            setSelectedArtifact(null);
+          }}
+          activeArtifact={selectedArtifact}
+          activeThreadId={activeThreadId ?? null}
+          artifactThreadId={artifactThreadId}
+          activeWorkspaceRoot={workspaceRoot}
+          currentRuntime="pi"
+          onCloseArtifact={() => setSelectedArtifact(null)}
+          events={events}
+          initialTab={portalTab}
+          onTabChange={setPortalTab}
+        />
+      ) : null}
     </div>
   );
 }

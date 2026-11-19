@@ -66,6 +66,39 @@ test('无账号停在 guest，不启动账号数据、Kernel 或后台任务', a
   assert.equal(coordinator.getState().stage, 'guest');
 });
 
+test('本地工作区尚在启动时登录，随后为真实账号重新恢复数据和消息', async () => {
+  const hydrated: string[] = [];
+  const loaded: string[] = [];
+  const kernel: string[] = [];
+  let current = auth('authed', 'local-user');
+  let release!: () => void;
+  let reachedRuntime!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const reached = new Promise<void>((resolve) => { reachedRuntime = resolve; });
+  const coordinator = createStartupCoordinator({
+    steps: {
+      preparePlatform: async () => {},
+      restoreAuth: async () => {},
+      readAuth: () => current,
+      hydrateAccount: (userId) => { hydrated.push(userId); },
+      loadCoreData: async () => { loaded.push(current.userId!); },
+      initializeRuntime: async () => { reachedRuntime(); await gate; },
+      initializeKernel: async () => { kernel.push(current.userId!); },
+      startBackground: async () => {},
+    },
+    onState: () => {},
+  });
+  const local = coordinator.start();
+  await reached;
+  current = auth('authed', 'team-user');
+  const connected = coordinator.start();
+  release();
+  await Promise.all([local, connected]);
+  assert.deepEqual(hydrated, ['local-user', 'team-user']);
+  assert.deepEqual(loaded, ['local-user', 'team-user']);
+  assert.deepEqual(kernel, ['team-user']);
+});
+
 test('阶段超时进入可重试错误，重试成功后恢复 ready', async () => {
   const calls: string[] = [];
   const states: StartupState[] = [];

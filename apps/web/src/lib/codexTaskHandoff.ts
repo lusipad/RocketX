@@ -12,8 +12,9 @@ export async function handoffToCodexTask(
 ): Promise<CodexTaskHandoffResult> {
   const prompt = text.trim();
   if (!prompt) throw new Error('任务内容不能为空');
-  if (useUI.getState().aiRuntimeProvider !== 'codex') {
-    throw new Error('当前 AI 运行时不是 Codex');
+  const provider = useUI.getState().aiRuntimeProvider;
+  if (provider !== 'pi') {
+    throw new Error('当前未启用 Pi 运行时');
   }
   useUI.getState().openButlerConversation();
 

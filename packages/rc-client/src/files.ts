@@ -53,6 +53,8 @@ export interface FileByteStream {
   total: number | null;
   /** content-type 的主体部分（去掉 charset 等参数）；响应没给时为 null */
   contentType: string | null;
+  /** 原始响应类型，文本预览需要其中的 charset。 */
+  contentTypeHeader?: string;
 }
 
 /** 传输被掐断且续传用尽时抛它，保留原始错误，别让英文底层串直接糊到用户脸上 */
@@ -132,7 +134,11 @@ export async function fetchFileResponse(
   const absolute = /^https?:\/\//i.test(path);
   const base = context.baseUrl.replace(/\/+$/, '');
   const url = absolute ? path : `${base}${path}`;
-  const ownServer = !absolute || (!!base && (url === base || url.startsWith(`${base}/`)));
+  const appUrl = typeof location !== 'undefined' ? location.href : undefined;
+  const serverUrl = base || appUrl;
+  const serverOrigin = serverUrl && new URL(serverUrl, appUrl).origin;
+  const ownServer = !!serverOrigin && new URL(url, appUrl).origin === serverOrigin
+    && (!absolute || !base || url === base || url.startsWith(`${base}/`));
   const extra = { ...IDENTITY_ENCODING, ...request?.headers };
   const abort = request?.signal ? { signal: request.signal } : {};
   const authHeaders: Record<string, string> = auth && ownServer
@@ -150,7 +156,6 @@ export async function fetchFileResponse(
   } else {
     let current = url;
     let headers: Record<string, string> = authHeaders;
-    const serverOrigin = base ? new URL(base).origin : '';
     for (let redirects = 0; ; redirects += 1) {
       response = await doFetch(current, {
         headers,
@@ -186,7 +191,8 @@ export async function openFileStream(
   options?: FileStreamOptions,
 ): Promise<FileByteStream> {
   const first = await fetchFileResponse(context, path, { signal: options?.signal });
-  const contentType = first.headers.get('content-type')?.split(';', 1)[0]?.trim() || null;
+  const contentTypeHeader = first.headers.get('content-type') ?? undefined;
+  const contentType = contentTypeHeader?.split(';', 1)[0]?.trim() || null;
   const contentEncoding = first.headers.get('content-encoding')?.trim().toLowerCase();
   const isCompressed = !!contentEncoding && contentEncoding !== 'identity';
   const total = isCompressed ? null : parseContentLength(first.headers.get('content-length'));
@@ -199,6 +205,7 @@ export async function openFileStream(
     const bytes = new Uint8Array(await blob.arrayBuffer());
     return {
       contentType,
+      contentTypeHeader,
       total: total ?? bytes.length,
       stream: new ReadableStream<Uint8Array>({
         start(controller) {
@@ -308,7 +315,7 @@ export async function openFileStream(
     },
   });
 
-  return { stream, total, contentType };
+  return { stream, total, contentType, contentTypeHeader };
 }
 
 /** 收完整条流；中断续传由 openFileStream 兜住 */
@@ -319,8 +326,8 @@ async function drain(
     signal?: AbortSignal;
     onProgress?: (loaded: number, total: number | null) => void;
   },
-): Promise<{ chunks: Uint8Array[]; contentType: string | null }> {
-  const { stream, total, contentType } = await openFileStream(context, path, { signal: options?.signal });
+): Promise<{ chunks: Uint8Array[]; contentType: string | null; contentTypeHeader?: string }> {
+  const { stream, total, contentType, contentTypeHeader } = await openFileStream(context, path, { signal: options?.signal });
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let loaded = 0;
@@ -339,7 +346,7 @@ async function drain(
   } finally {
     reader.releaseLock();
   }
-  return { chunks, contentType };
+  return { chunks, contentType, contentTypeHeader };
 }
 
 export async function fetchFile(context: RcRestEndpointContext, path: string): Promise<Blob> {
@@ -364,8 +371,8 @@ export async function fetchFileWithProgress(
     onProgress?: (loaded: number, total: number | null) => void;
   },
 ): Promise<Blob> {
-  const { chunks, contentType } = await drain(context, path, options);
-  return new Blob(chunks as BlobPart[], { type: contentType ?? 'application/octet-stream' });
+  const { chunks, contentTypeHeader } = await drain(context, path, options);
+  return new Blob(chunks as BlobPart[], { type: contentTypeHeader ?? 'application/octet-stream' });
 }
 
 export async function getRoomFiles(context: RcRestEndpointContext, rid: string, type: RoomType, count = 50): Promise<RcRoomFile[]> {

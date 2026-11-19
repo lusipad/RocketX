@@ -11,8 +11,6 @@ function createDeps(
 ): ButlerTaskHandoffDependencies {
   const opens: string[] = [];
   const queued: Array<{ rid: string; prompt: string }> = [];
-  const copied: string[] = [];
-  const notices: string[] = [];
   const calls = {
     connect: 0,
     startTask: [] as Array<{ text: string; title: string }>,
@@ -20,7 +18,7 @@ function createDeps(
   };
 
   const base: ButlerTaskHandoffDependencies = {
-    getProvider: () => 'codex',
+    getProvider: () => 'pi',
     openConversation: () => {
       opens.push('opened');
     },
@@ -41,20 +39,12 @@ function createDeps(
     draftHostedRoomPrompt: (rid, prompt) => {
       queued.push({ rid, prompt });
     },
-    copyDeepSeekPrompt: async (prompt) => {
-      copied.push(prompt);
-    },
-    notifyDeepSeekPaste: () => {
-      notices.push('notified');
-    },
     ...overrides,
   };
 
   Object.assign(base, {
     __opens: opens,
     __queued: queued,
-    __copied: copied,
-    __notices: notices,
     __calls: calls,
   });
   return base;
@@ -81,7 +71,7 @@ test('房间交接只预填 canonical 托管指令，不创建 provider 专用�
   assert.doesNotMatch(source, /roomButlerSessions|queueDeepSeekRoomPrompt/);
 });
 
-test('Codex provider 在无工作区时只打开管家并写入 Codex 草稿', async () => {
+test('Pi provider 在无工作区时只打开管家并写入任务草稿', async () => {
   const deps = createDeps();
   const result = await handoffToButlerTaskWith('  整理这段消息  ', '房间总结', deps);
   const internals = deps as ButlerTaskHandoffDependencies & {
@@ -95,7 +85,7 @@ test('Codex provider 在无工作区时只打开管家并写入 Codex 草稿', a
   };
 
   assert.deepEqual(result, {
-    provider: 'codex',
+    provider: 'pi',
     status: 'drafted',
   });
   assert.deepEqual(internals.__opens, ['opened']);
@@ -105,20 +95,27 @@ test('Codex provider 在无工作区时只打开管家并写入 Codex 草稿', a
   assert.deepEqual(internals.__queued, []);
 });
 
-test('DeepSeek 全局任务不触碰 Codex，而是复制提示词并打开官方 DSH Web', async () => {
+test('Pi provider 在已有工作区时连接并直接启动管家任务', async () => {
+  const calls = {
+    connect: 0,
+    startTask: [] as Array<{ text: string; title: string }>,
+    setComposerDraft: [] as string[],
+  };
+  let status = 'idle';
   const deps = createDeps({
-    getProvider: () => 'deepseek',
+    getProvider: () => 'pi',
     getCodexWorkspace: () => ({
       workspaceRoot: 'D:/Repos/rocketchatx',
-      status: 'ready',
+      status,
       connect: async () => {
-        throw new Error('deepseek route should not connect codex');
+        calls.connect += 1;
+        status = 'ready';
       },
-      startTask: async () => {
-        throw new Error('deepseek route should not start codex task');
+      startTask: async (text, title) => {
+        calls.startTask.push({ text, title });
       },
-      setComposerDraft: () => {
-        throw new Error('deepseek route should not set codex draft');
+      setComposerDraft: (text) => {
+        calls.setComposerDraft.push(text);
       },
     }),
   });
@@ -130,29 +127,26 @@ test('DeepSeek 全局任务不触碰 Codex，而是复制提示词并打开官�
   const internals = deps as ButlerTaskHandoffDependencies & {
     __opens: string[];
     __queued: Array<{ rid: string; prompt: string }>;
-    __copied: string[];
-    __notices: string[];
-    __calls: {
-      connect: number;
-      startTask: Array<{ text: string; title: string }>;
-      setComposerDraft: string[];
-    };
   };
 
   assert.deepEqual(result, {
-    provider: 'deepseek',
-    status: 'copied',
+    provider: 'pi',
+    status: 'started',
   });
   assert.deepEqual(internals.__opens, ['opened']);
   assert.deepEqual(internals.__queued, []);
-  assert.deepEqual(internals.__copied, ['请总结这 3 条消息并标出承诺']);
-  assert.deepEqual(internals.__notices, ['notified']);
+  assert.equal(calls.connect, 1);
+  assert.deepEqual(calls.startTask, [{
+    text: '请总结这 3 条消息并标出承诺',
+    title: '项目群 · 总结这段',
+  }]);
+  assert.deepEqual(calls.setComposerDraft, []);
 });
 
-test('DeepSeek 房间任务预填同一托管 session 的 @ai 指令并打开侧栏', async () => {
+test('Pi 房间任务预填同一托管 session 的 @ai 指令并打开侧栏', async () => {
   const openedRooms: string[] = [];
   const deps = createDeps({
-    getProvider: () => 'deepseek',
+    getProvider: () => 'pi',
     openRoomPanel: (rid) => openedRooms.push(rid),
   });
   const result = await handoffToButlerTaskWith(
@@ -164,13 +158,11 @@ test('DeepSeek 房间任务预填同一托管 session 的 @ai 指令并打开侧
   const internals = deps as ButlerTaskHandoffDependencies & {
     __opens: string[];
     __queued: Array<{ rid: string; prompt: string }>;
-    __copied: string[];
   };
 
-  assert.deepEqual(result, { provider: 'deepseek', status: 'drafted' });
+  assert.deepEqual(result, { provider: 'pi', status: 'drafted' });
   assert.deepEqual(openedRooms, ['room-1']);
   assert.deepEqual(internals.__opens, []);
-  assert.deepEqual(internals.__copied, []);
   assert.deepEqual(internals.__queued, [{
     prompt: '请总结房间消息',
     rid: 'room-1',

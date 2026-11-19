@@ -150,9 +150,9 @@ interface CodexWorkspaceState {
   connect: (options?: { refreshThreads?: boolean }) => Promise<void>;
   refreshCatalog: () => Promise<void>;
   refreshThreads: () => Promise<void>;
-  startThread: (name?: string) => Promise<string>;
-  startTask: (text: string, name?: string) => Promise<string>;
-  resumeThread: (threadId: string) => Promise<void>;
+  startThread: (name?: string, onCreated?: (threadId: string) => void) => Promise<string>;
+  startTask: (text: string, name?: string, target?: { workspaceRoot: string; background: boolean }) => Promise<string>;
+  resumeThread: (threadId: string, target?: { workspaceRoot: string; background: boolean }) => Promise<void>;
   refreshFromCodex: () => Promise<number>;
   handoffToCodex: () => Promise<'opened-existing' | 'unavailable'>;
   renameThread: (threadId: string, name: string) => Promise<void>;
@@ -161,10 +161,12 @@ interface CodexWorkspaceState {
     text: string,
     images?: readonly CodexImageInput[],
     modeOverride?: CodexFollowUpMode,
+    target?: { threadId?: string; workspaceRoot: string; scope: string; onThreadCreated?: (threadId: string) => void; onSubmitted?: () => void },
   ) => Promise<void>;
   setComposerDraft: (text: string) => void;
   clearComposerDraft: () => void;
   interrupt: () => Promise<void>;
+  interruptThread: (threadId: string) => Promise<void>;
   resolveRequest: (requestId: string, resolution: CodexRequestResolution) => void;
   setModel: (model: string) => Promise<void>;
   setEffort: (effort: string | null) => Promise<void>;
@@ -177,6 +179,7 @@ interface CodexWorkspaceState {
   openArtifact: (path: string) => Promise<void>;
   revealArtifact: (path: string) => Promise<void>;
   setSkillEnabled: (path: string, enabled: boolean) => Promise<void>;
+  reconnectRuntime: () => Promise<void>;
   shutdown: () => Promise<void>;
 }
 
@@ -186,6 +189,7 @@ let controller: AppServerController | undefined;
 let controllerFactory: ControllerFactory = (options) => new AppServerController(options);
 let resumeThreadRequestId = 0;
 let connectRequest: Promise<void> | undefined;
+let connectionGeneration = 0;
 let handoffInProgress = false;
 const controllerOperations = new Set<symbol>();
 let defaultWorkspaceRequest: Promise<string> | undefined;
@@ -221,6 +225,18 @@ function record(value: unknown): Record<string, unknown> {
 
 function message(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+function detachRuntime(): AppServerController | undefined {
+  connectionGeneration += 1;
+  connectRequest = undefined;
+  const previous = controller;
+  controller = undefined;
+  return previous;
+}
+
+function stopDetachedRuntime(): void {
+  void detachRuntime()?.stop().catch(() => undefined);
 }
 
 function isActiveWriterError(value: unknown): boolean {
@@ -622,7 +638,11 @@ function onNotification(method: string, value: unknown): void {
     status: 'ready',
     activeTurnId: undefined,
     streamingText: '',
-    error: interrupted ? 'Codex 本轮已中断' : failed ? 'Codex 本轮未完成' : null,
+    error: interrupted
+      ? 'Pi 本轮已中断'
+      : failed
+        ? ((() => { const msg = record(turn.error).message; return typeof msg === 'string' && msg.trim() ? msg.trim() : ''; })() || 'Pi 本轮未完成')
+        : null,
     events: thread.events.map((event) => event.status === 'running'
       ? { ...event, status: unsuccessful ? 'failed' as const : 'completed' as const }
       : event),
@@ -693,12 +713,20 @@ async function onServerRequest(request: {
 }
 
 function makeController(): AppServerController {
+  const scope = useCodexWorkspace.getState().scope;
   let managedController: AppServerController;
   managedController = controllerFactory({
-    onNotification,
-    onServerRequest,
+    onNotification: (method, params) => {
+      if (controller === managedController && useCodexWorkspace.getState().scope === scope) onNotification(method, params);
+    },
+    onServerRequest: (request) => {
+      if (controller !== managedController || useCodexWorkspace.getState().scope !== scope) {
+        throw new Error('运行服务或账号已切换');
+      }
+      return onServerRequest(request);
+    },
     onInterrupted: (error) => {
-      if (controller !== managedController) return;
+      if (controller !== managedController || useCodexWorkspace.getState().scope !== scope) return;
       const current = useCodexWorkspace.getState();
       rejectPendingRequests(error.message);
       const nextThreadStates = Object.fromEntries(
@@ -731,8 +759,7 @@ function makeController(): AppServerController {
           } satisfies CodexThreadState];
         }),
       ) as Record<string, CodexThreadState>;
-      controller = undefined;
-      connectRequest = undefined;
+      stopDetachedRuntime();
       useCodexWorkspace.setState((state) => {
         const activeThread = state.activeThreadId
           ? nextThreadStates[state.activeThreadId] ?? emptyThreadState('unavailable')
@@ -740,6 +767,7 @@ function makeController(): AppServerController {
         return {
           threadStates: nextThreadStates,
           ...projectedThreadState(activeThread),
+          error: activeThread.error ?? error.message,
         };
       });
     },
@@ -752,15 +780,25 @@ async function sendThreadMessageUnsafe(
   value: string,
   images: readonly CodexImageInput[] = [],
   modeOverride?: CodexFollowUpMode,
+  onSubmitted?: () => void,
 ): Promise<void> {
   const text = value.trim();
   const imageList = [...images];
   if (!text && imageList.length === 0) return;
+  const scope = useCodexWorkspace.getState().scope;
   if (!controller) await useCodexWorkspace.getState().connect();
   const state = useCodexWorkspace.getState();
+  const runtime = controller;
+  const assertCurrentRuntime = () => {
+    if (!runtime || controller !== runtime || useCodexWorkspace.getState().scope !== scope) {
+      throw new Error('运行服务或账号已切换，原请求未继续发送');
+    }
+  };
+  assertCurrentRuntime();
   const thread = currentThreadState(state, threadId);
   const runtimeSelection = threadSelection(thread, state);
   await ensureControllerWorkspace(thread.workspaceRoot || state.workspaceRoot);
+  assertCurrentRuntime();
   if (thread.activeTurnId || thread.status === 'running' || thread.status === 'waiting-input') {
     const followUp = modeOverride ?? state.followUpMode;
     if (followUp === 'queue' || imageList.length > 0) {
@@ -772,7 +810,9 @@ async function sendThreadMessageUnsafe(
     }
     if (!thread.activeTurnId) throw new Error('Codex Turn 尚未就绪，暂时无法 Steer');
     const input: UserInput[] = [{ type: 'text', text, text_elements: [] }];
-    await controller!.steerTurn(threadId, thread.activeTurnId, input);
+    onSubmitted?.();
+    await runtime!.steerTurn(threadId, thread.activeTurnId, input);
+    assertCurrentRuntime();
     setThreadState(threadId, (current) => ({
       ...current,
       messages: [...current.messages, { id: id('user'), role: 'user', text }],
@@ -781,9 +821,10 @@ async function sendThreadMessageUnsafe(
   }
   let materialized = { paths: [] as string[], roots: [] as string[] };
   if (imageList.length > 0) {
-    const sessionId = controller!.currentSessionId;
+    const sessionId = runtime!.currentSessionId;
     if (!sessionId) throw new Error('Codex Runtime 尚未准备好附件目录');
     materialized = await materializeCodexImages(sessionId, imageList);
+    assertCurrentRuntime();
   }
   const input: UserInput[] = [
     ...(text ? [{ type: 'text' as const, text, text_elements: [] }] : []),
@@ -804,9 +845,12 @@ async function sendThreadMessageUnsafe(
     }],
   }));
   try {
-    const turnId = await controller!.startTurn(threadId, input, runtimeSelection, {
+    onSubmitted?.();
+    const turnId = await runtime!.startTurn(threadId, input, runtimeSelection, {
       runtimeWorkspaceRoots: materialized.roots,
+      workspaceRoot: thread.workspaceRoot || state.workspaceRoot,
     });
+    assertCurrentRuntime();
     setThreadState(threadId, (current) => ({
       ...current,
       activeTurnId: turnId,
@@ -815,7 +859,9 @@ async function sendThreadMessageUnsafe(
       runtimeSelection,
     }));
   } catch (error) {
-    setThreadState(threadId, (current) => ({ ...current, status: 'ready', error: message(error) }));
+    if (controller === runtime && useCodexWorkspace.getState().scope === scope) {
+      setThreadState(threadId, (current) => ({ ...current, status: 'ready', error: message(error) }));
+    }
     throw error;
   }
 }
@@ -825,8 +871,9 @@ async function sendThreadMessage(
   value: string,
   images: readonly CodexImageInput[] = [],
   modeOverride?: CodexFollowUpMode,
+  onSubmitted?: () => void,
 ): Promise<void> {
-  return withControllerOperation(() => sendThreadMessageUnsafe(threadId, value, images, modeOverride));
+  return withControllerOperation(() => sendThreadMessageUnsafe(threadId, value, images, modeOverride, onSubmitted));
 }
 
 export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
@@ -859,8 +906,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   hydrate: (scope) => {
     if (!scope || scope === get().scope) return;
-    void controller?.stop();
-    controller = undefined;
+    stopDetachedRuntime();
     rejectPendingRequests('账号已切换');
     const saved = readCodexWorkspaceProfile(scope);
     const workspaceRoot = typeof saved.workspaceRoot === 'string' ? saved.workspaceRoot : '';
@@ -983,9 +1029,8 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       return;
     }
     const reusedRuntime = controller?.switchWorkspaceRoot(normalized) === true;
-    if (!reusedRuntime && !Object.keys(current.threadStates).length) {
-      await controller?.stop();
-      controller = undefined;
+    if (!reusedRuntime && (connectRequest || !Object.keys(current.threadStates).length)) {
+      stopDetachedRuntime();
     }
     set({
       workspaceRoot: normalized,
@@ -1033,53 +1078,73 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     if (!get().workspaceRoot) throw new Error('请先选择工作区');
     if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
     if (connectRequest) return connectRequest;
+    const generation = ++connectionGeneration;
+    const scope = get().scope;
+    const workspaceRoot = get().workspaceRoot;
+    const activeController = controller ??= makeController();
+    const isCurrent = () => generation === connectionGeneration
+      && controller === activeController && get().scope === scope;
     set((state) => state.activeThreadId
       ? { error: null }
       : { status: 'connecting', error: null });
-    connectRequest = (async () => {
-      const activeController = controller ??= makeController();
+    const request = (async () => {
       try {
-        const catalog = await activeController.connect(id('workspace'), get().workspaceRoot);
+        const catalog = await activeController.connect(id('workspace'), workspaceRoot);
+        if (!isCurrent()) return;
         const defaults = defaultSelection(catalog, get());
         set((state) => ({
           ...catalog,
           ...defaults,
-          ...(state.activeThreadId ? {} : { status: 'ready' as const, error: null }),
+          status: state.activeThreadId && (state.status === 'running' || state.status === 'waiting-input')
+            ? state.status : 'ready',
+          error: null,
         }));
         persist(get());
         if (options?.refreshThreads !== false) await get().refreshThreads();
       } catch (error) {
-        await activeController.stop().catch(() => undefined);
-        if (controller === activeController) controller = undefined;
-        set((state) => ({
-          ...(state.activeThreadId ? {} : { status: 'unavailable' as const }),
-          error: message(error),
-        }));
+        if (isCurrent()) {
+          detachRuntime();
+          set({ status: 'unavailable', error: message(error) });
+        }
+        void activeController.stop().catch(() => undefined);
         throw error;
       } finally {
-        connectRequest = undefined;
+        if (generation === connectionGeneration) connectRequest = undefined;
       }
     })();
-    return connectRequest;
+    connectRequest = request;
+    return request;
   },
 
   refreshCatalog: async () => {
     if (!controller) await get().connect();
-    const catalog = await controller!.refreshCatalog(get().activeThreadId);
-    set(catalog);
+    const runtime = controller;
+    const scope = get().scope;
+    const catalog = await runtime!.refreshCatalog(get().activeThreadId);
+    if (controller === runtime && get().scope === scope) set(catalog);
   },
 
   refreshThreads: async () => {
     if (!controller) return;
-    set({ threads: await controller.listThreads(threadWorkspaceRoots(get())) });
+    const runtime = controller;
+    const scope = get().scope;
+    const threads = await runtime.listThreads(threadWorkspaceRoots(get()));
+    if (controller === runtime && get().scope === scope) set({ threads });
   },
 
-  startThread: async (name) => {
+  startThread: async (name, onCreated) => {
     return withControllerOperation(async () => {
       const workspaceRoot = get().workspaceRoot;
-      await ensureControllerWorkspace(workspaceRoot);
+      const scope = get().scope;
+      const previousThreadId = get().activeThreadId;
       const runtimeSelection = selection();
-      const thread = await controller!.startThread(runtimeSelection, name);
+      await ensureControllerWorkspace(workspaceRoot);
+      const runtime = controller;
+      if (!runtime || get().scope !== scope || get().workspaceRoot !== workspaceRoot) {
+        throw new Error('新任务的账号或工作区已切换');
+      }
+      const thread = await runtime.startThread(runtimeSelection, name, workspaceRoot);
+      if (get().scope !== scope || controller !== runtime) throw new Error('新任务的运行服务或账号已切换');
       set((state) => ({
         threadStates: {
           ...state.threadStates,
@@ -1091,20 +1156,24 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         },
         composerDraft: '',
       }));
-      setActiveThread(thread.id, 'ready');
+      if (get().activeThreadId === previousThreadId && get().workspaceRoot === workspaceRoot) setActiveThread(thread.id, 'ready');
+      onCreated?.(thread.id);
       await get().refreshThreads();
       return thread.id;
     });
   },
 
-  startTask: async (text, name) => {
+  startTask: async (text, name, target) => {
     return withControllerOperation(async () => {
       const prompt = text.trim();
       if (!prompt) throw new Error('任务内容不能为空');
-      const workspaceRoot = get().workspaceRoot;
+      const workspaceRoot = target?.workspaceRoot || get().workspaceRoot;
+      const scope = get().scope;
       await ensureControllerWorkspace(workspaceRoot);
       const runtimeSelection = selection();
-      const thread = await controller!.startThread(runtimeSelection, name);
+      const runtime = controller!;
+      const thread = await runtime.startThread(runtimeSelection, name, workspaceRoot);
+      if (get().scope !== scope || controller !== runtime) throw new Error('后台任务的账号或运行服务已切换');
       set((state) => ({
         threadStates: {
           ...state.threadStates,
@@ -1114,22 +1183,22 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
             runtimeSelection,
           },
         },
-        composerDraft: '',
+        ...(!target?.background ? { composerDraft: '' } : {}),
       }));
-      setActiveThread(thread.id, 'ready');
+      if (!target?.background) setActiveThread(thread.id, 'ready');
       await get().refreshThreads();
       await sendThreadMessage(thread.id, prompt);
       return thread.id;
     });
   },
 
-  resumeThread: async (threadId) => {
+  resumeThread: async (threadId, target) => {
     const requestId = ++resumeThreadRequestId;
     if (!controller) await get().connect();
     let activeController = controller!;
     const existing = get().threadStates[threadId];
     if (existing) {
-      setActiveThread(threadId, existing.status);
+      if (!target?.background) setActiveThread(threadId, existing.status);
       await ensureControllerWorkspace(existing.workspaceRoot || get().workspaceRoot);
       try {
         const loaded = await activeController.readThread(threadId);
@@ -1144,7 +1213,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       return;
     }
     const runtimeSelection = selection();
-    const workspaceRoot = get().workspaceRoot;
+    const workspaceRoot = target?.workspaceRoot || get().workspaceRoot;
     await ensureControllerWorkspace(workspaceRoot);
     set((state) => ({
       threadStates: {
@@ -1159,11 +1228,11 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         },
       },
     }));
-    setActiveThread(threadId, 'connecting');
+    if (!target?.background) setActiveThread(threadId, 'connecting');
     try {
       const loadThread = async () => {
         await ensureControllerWorkspace(workspaceRoot);
-        const thread = await activeController.resumeThread(threadId, runtimeSelection);
+        const thread = await activeController.resumeThread(threadId, runtimeSelection, workspaceRoot);
         const loaded = await activeController.readThread(thread.id);
         return { thread, loaded };
       };
@@ -1172,9 +1241,8 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         result = await loadThread();
       } catch (error) {
         if (!isRuntimeDisconnectedError(error)) throw error;
-        await activeController.stop().catch(() => undefined);
-        if (controller === activeController) controller = undefined;
-        connectRequest = undefined;
+        if (controller === activeController) detachRuntime();
+        void activeController.stop().catch(() => undefined);
         await get().connect({ refreshThreads: false });
         if (!controller) throw new Error('Codex Runtime 重新连接失败');
         activeController = controller;
@@ -1208,7 +1276,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
           },
         },
       }));
-      if (requestId === resumeThreadRequestId && get().activeThreadId === threadId) setActiveThread(thread.id, 'ready');
+      if (!target?.background && requestId === resumeThreadRequestId && get().activeThreadId === threadId) setActiveThread(thread.id, 'ready');
     } catch (error) {
       if (!isActiveWriterError(error)) {
         setThreadState(threadId, (thread) => ({
@@ -1239,7 +1307,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
           },
         },
       }));
-      if (requestId === resumeThreadRequestId && get().activeThreadId === threadId) setActiveThread(threadId, 'external');
+      if (!target?.background && requestId === resumeThreadRequestId && get().activeThreadId === threadId) setActiveThread(threadId, 'external');
     }
   },
 
@@ -1384,8 +1452,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       await unsubscribeThreadIfSupported(activeController, current.activeThreadId).catch(() => undefined);
       if (activeController) {
         if (controller === activeController) {
-          controller = undefined;
-          connectRequest = undefined;
+          detachRuntime();
         }
         await activeController.stop();
       }
@@ -1447,13 +1514,32 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     });
   },
 
-  send: async (value, images = [], modeOverride) => {
+  send: async (value, images = [], modeOverride, target) => {
     const text = value.trim();
     const imageList = [...images];
     if (!text && imageList.length === 0) return;
+    const origin = target ?? {
+      threadId: get().activeThreadId,
+      workspaceRoot: get().workspaceRoot,
+      scope: get().scope,
+    };
+    let threadId = origin.threadId;
+    if (get().scope !== origin.scope) throw new Error('账号已切换，请回到原账号继续发送');
     if (!controller) await get().connect();
-    if (!get().activeThreadId) await get().startThread(text.slice(0, 48) || '图片任务');
-    await sendThreadMessage(get().activeThreadId!, text, imageList, modeOverride);
+    if (get().scope !== origin.scope) throw new Error('账号已切换，请回到原账号继续发送');
+    if (!threadId) {
+      // A new task may only be created in the workspace selected when Send was pressed.
+      if (get().workspaceRoot !== origin.workspaceRoot || get().activeThreadId) {
+        throw new Error('发送目标已切换，请回到原工作区重试');
+      }
+      threadId = await get().startThread(text.slice(0, 48) || '图片任务', origin.onThreadCreated);
+    }
+    if (get().scope !== origin.scope) throw new Error('账号已切换，请回到原账号继续发送');
+    const thread = get().threadStates[threadId];
+    if (!thread || (thread.workspaceRoot && thread.workspaceRoot !== origin.workspaceRoot)) {
+      throw new Error('原会话或工作区已不可用，请核对发送目标');
+    }
+    await sendThreadMessage(threadId, text, imageList, modeOverride, origin.onSubmitted);
   },
 
   setComposerDraft: (composerDraft) => set({ composerDraft }),
@@ -1461,14 +1547,21 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   clearComposerDraft: () => set({ composerDraft: '' }),
 
   interrupt: async () => {
-    const state = get();
-    if (!state.activeThreadId) return;
-    const thread = currentThreadState(state, state.activeThreadId, state.status);
-    if (controller && thread.activeTurnId) {
-      await controller.interruptTurn(state.activeThreadId, thread.activeTurnId).catch(() => undefined);
+    const threadId = get().activeThreadId;
+    if (threadId) await get().interruptThread(threadId);
+  },
+
+  interruptThread: async (threadId) => {
+    const thread = get().threadStates[threadId];
+    if (!thread) throw new Error('未找到原任务的运行状态，无法确认本轮已停止');
+    if (thread.activeTurnId) {
+      if (!controller) throw new Error('原运行服务已断开，无法确认本轮已停止');
+      await controller.interruptTurn(threadId, thread.activeTurnId);
+    } else if (thread.status === 'running' || thread.status === 'waiting-input' || thread.status === 'external') {
+      throw new Error('原任务的运行标识未知，需到原端核对是否已停止');
     }
-    rejectPendingRequests('用户已停止当前任务', state.activeThreadId);
-    setThreadState(state.activeThreadId, (current) => ({
+    rejectPendingRequests('用户已停止当前任务', threadId);
+    setThreadState(threadId, (current) => ({
       ...current,
       status: 'ready',
       activeTurnId: undefined,
@@ -1651,10 +1744,26 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     }));
   },
 
+  reconnectRuntime: async () => {
+    rejectPendingRequests('切换 AI 运行时');
+    stopDetachedRuntime();
+    if (!get().scope) {
+      get().hydrate('local:workspace');
+    }
+    const generation = connectionGeneration;
+    const scope = get().scope;
+    set({ status: 'idle', error: null });
+    if (!isTauriRuntime()) return;
+    await get().ensureDefaultWorkspace();
+    if (generation !== connectionGeneration || get().scope !== scope) return;
+    if (get().workspaceRoot) {
+      await get().connect();
+    }
+  },
+
   shutdown: async () => {
     rejectPendingRequests('Codex 工作区已关闭');
-    await controller?.stop();
-    controller = undefined;
+    stopDetachedRuntime();
     set({ status: 'idle', activeThreadId: undefined, activeTurnId: undefined });
   },
 }));
@@ -1751,8 +1860,7 @@ export function setCodexWorkspaceControllerFactory(factory: ControllerFactory): 
 
 export async function resetCodexWorkspaceForTests(): Promise<void> {
   rejectPendingRequests('测试重置');
-  await controller?.stop();
-  controller = undefined;
+  stopDetachedRuntime();
   handoffInProgress = false;
   controllerOperations.clear();
   defaultWorkspaceRequest = undefined;

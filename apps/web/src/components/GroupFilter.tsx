@@ -58,7 +58,7 @@ function FolderDialog({
   const dialogRef = useDialogBehavior(onClose);
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -69,7 +69,7 @@ function FolderDialog({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl"
+        className="w-80 rounded-2xl border border-line bg-surface-4 p-5 shadow-pop"
       >
         <div className="mb-3 text-base font-semibold text-ink">{title}</div>
         <input
@@ -189,13 +189,17 @@ export default function GroupFilter({
   ];
 
   const btnCls = (active: boolean) =>
-    `flex h-8 items-center gap-2 rounded-md px-2 text-xs transition ${
-      active ? 'bg-fill-active font-medium text-ink' : 'text-ink-2 hover:bg-fill-hover'
+    `flex h-8 items-center gap-2 rounded-xl px-2.5 text-xs transition ${
+      active
+        ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
+        : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
     }`;
 
   const compactBtnCls = (active: boolean) =>
-    `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition ${
-      active ? 'bg-fill-1 text-primary' : 'text-ink-2 hover:bg-fill-hover hover:text-primary'
+    `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition ${
+      active
+        ? 'bg-surface-4 text-primary shadow-raise ring-1 ring-line/80'
+        : 'text-ink-2 hover:bg-fill-hover hover:text-primary'
     }`;
 
   const selectFilter = (key: ConvFilter) => {
@@ -275,8 +279,8 @@ export default function GroupFilter({
   };
 
   return (
-    <aside className={`flex shrink-0 flex-col border-r border-line-strong bg-surface-2 ${
-      collapsed ? 'w-12 min-h-0 overflow-x-hidden p-2' : 'w-[150px] px-2 py-3'
+    <aside className={`flex shrink-0 flex-col border-r border-line bg-surface-2 ${
+      collapsed ? 'w-12 min-h-0 overflow-x-hidden p-2' : 'w-[156px] px-2.5 py-3'
     }`}>
       {collapsed ? (
         <>

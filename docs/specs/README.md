@@ -21,6 +21,9 @@
 | [工作台与 Azure DevOps](workbench.md) | 确定性查询、计划层级、工作项和写操作确认 |
 | [个人效率](personal-productivity.md) | 待办、日历、通讯录、下载记录 |
 | [管家任务](butler-tasks.md) | Codex 与 DeepSeek 独立视图、原生会话、配置、审批、停止与后端边界 |
+| [Agent 工作台输入与工作上下文](agent-workspace-input-and-context.md) | 2026-11-15 重构 S1 增量规格：草稿、发送目标、工作详情与汇报进度；实施与验证状态单独追踪 |
+| [Agent 工作台执行、验收与可靠投递](agent-workspace-execution-and-delivery.md) | S2–S5：原生交接、版本验收、后台跟进、ADO／汇报出站、账号与资料复用 |
+| [可选本地语音](local-voice.md) | S6：Windows 离线 CPU 识别、可编辑转写、手动朗读、取消和平台限制 |
 | [Skills、Plugins 与 Apps](skills-and-plugins.md) | 发现、详情、启停、安装、卸载和能力边界 |
 | [Memory](memory.md) | Codex 原生 Memory 的启用、存储边界和失败语义 |
 | [已安排任务](scheduled-tasks.md) | 本机计划、触发、立即运行、无人值守限制和结果 |

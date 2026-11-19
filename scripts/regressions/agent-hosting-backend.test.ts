@@ -12,8 +12,8 @@ test('AI 托管继承全局独占运行时，不再保存房间级后端偏好',
   assert.match(panel, /agentBackend\(session\)/);
   assert.doesNotMatch(panel, /setSelectedBackend|roomHostingBackend|setRoomHostingBackend|setDefaultHostingBackend/);
   assert.doesNotMatch(panel, /托管后端/);
-  assert.match(panel, /nextDshRuntimeSummary/);
-  assert.match(panel, /activeDshRuntimeSummary/);
+  assert.match(panel, /nextCodexRuntimeSummary/);
+  assert.match(panel, /activeCodexRuntimeSummary/);
   assert.match(panel, /<span className="text-ink-3">后端<\/span>/);
   assert.match(panel, /backendLabel\(agentBackend\(session\)\)/);
   assert.match(chat, /aria-label="配置 AI 托管"/);
@@ -30,11 +30,11 @@ test('Codex 专属动作只在 Codex 运行时出现，通用入口使用 AI 管
   const pullRequests = readFileSync('apps/web/src/components/AdoLists.tsx', 'utf8');
   const quickSwitcher = readFileSync('apps/web/src/components/QuickSwitcher.tsx', 'utf8');
 
-  assert.match(runtime, /aiRuntimeProvider === 'codex'/);
+  assert.match(runtime, /aiRuntimeProvider === 'pi'/);
   assert.match(runtime, /description: '用 AI 管家总结当前会话未读消息'/);
   assert.match(runtime, /description: '打开 AI 管家，可直接跟上问题'/);
-  assert.match(messages, /features\.ai && getAiRuntimeProvider\(\) === 'codex'/);
-  assert.match(messages, /Codex 提取为待办/);
+  assert.match(messages, /features\.ai && getAiRuntimeProvider\(\) === 'pi'/);
+  assert.match(messages, /AI 提取为待办/);
   assert.match(pullRequests, />\s*AI 审查\s*</);
   assert.match(quickSwitcher, /handoffToButlerTask/);
 });

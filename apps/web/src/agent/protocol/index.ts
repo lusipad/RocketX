@@ -19,4 +19,4 @@ export {
   type CodexTransport,
   type ServerRequestContext,
 } from './client';
-export { TauriCodexTransport } from './tauriTransport';
+export { TauriPiTransport } from './tauriTransport';

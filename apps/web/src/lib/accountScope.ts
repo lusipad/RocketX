@@ -10,11 +10,19 @@
  * 让所有 store 重新加载。效果:
  *   - B 登录看不到 A 的待办/草稿/日历/备注名/ADO 配置(此前是内容泄露);
  *   - B 的 GroupFilter prune 洗的是 B 自己的分组,不再把 A 的分组内容永久擦空;
- *   - A 再登录时归档原样搬回,数据不丢。
+ *   - A 再登录时归档原样搬回,数据不丢;
+ *   - 免登录本地模式使用 `local-user@local`,首次连接真实 Rocket.Chat 账号且该账号尚无归档时直接认领本地数据。
  */
 import { getServerBase } from './client';
 
+export const LOCAL_MODE_USER_ID = 'local-user';
+export const LOCAL_ACCOUNT_OWNER = `${LOCAL_MODE_USER_ID}@local`;
+
 const OWNER_KEY = 'rcx-owner';
+
+export function currentDataOwner(): string | null {
+  try { return localStorage.getItem(OWNER_KEY); } catch { return null; }
+}
 
 /** 跟账号走的本地数据。设备级的(rcx-auth/server/site-url/theme)不在内 */
 const SCOPED_KEYS = [
@@ -36,20 +44,58 @@ const SCOPED_KEYS = [
   'rcx-wi-last-projects',
   'rcx-agent-environments',
   'rcx-butler-attention',
+  'rc_work_ledger_v1',
   // 旧版“成果”功能已下线，但遗留数据仍必须随账号隔离。
   'rcx-butler-artifacts',
   'rcx-butler-errand-runs',
 ];
 
+function hasArchivedAccountData(owner: string): boolean {
+  for (const key of SCOPED_KEYS) {
+    if (localStorage.getItem(`${key}#${owner}`) !== null) return true;
+  }
+  return false;
+}
+
 /**
- * 登录成功后调用。返回 'switched' 表示换了账号且已完成数据搬移,
+ * 登录成功或进入本地模式后调用。返回 'switched' 表示换了账号且已完成数据搬移,
  * 调用方应立即 location.reload() 让所有 store 从搬好的数据重新加载。
  */
 export function ensureAccountScope(userId: string): 'ok' | 'switched' {
   try {
-    const owner = `${userId}@${getServerBase() || 'same-origin'}`;
+    const owner = userId === LOCAL_MODE_USER_ID
+      ? LOCAL_ACCOUNT_OWNER
+      : `${userId}@${getServerBase() || 'same-origin'}`;
     const prev = localStorage.getItem(OWNER_KEY);
     if (prev === owner) return 'ok';
+    // A bare legacy JSON cache without its account marker cannot be assigned to
+    // the first person who signs in. Preserve it separately for local recovery.
+    let preservedTodos = false;
+    if (!prev) {
+      const raw = localStorage.getItem('rcx-todos');
+      if (raw !== null) {
+        let suffix = 0;
+        let key = 'rcx-unassigned-todos';
+        while (localStorage.getItem(key) !== null && localStorage.getItem(key) !== raw) {
+          key = `rcx-unassigned-todos-${++suffix}`;
+        }
+        localStorage.setItem(key, raw);
+        localStorage.removeItem('rcx-todos');
+        preservedTodos = true;
+      }
+      const archivedKey = `rcx-todos#${owner}`;
+      const archived = localStorage.getItem(archivedKey);
+      if (archived !== null) {
+        localStorage.setItem('rcx-todos', archived);
+        localStorage.removeItem(archivedKey);
+        preservedTodos = true;
+      }
+    }
+    if (prev === LOCAL_ACCOUNT_OWNER && owner !== LOCAL_ACCOUNT_OWNER && !hasArchivedAccountData(owner)) {
+      // 从免登录本地模式首次绑定到真实账号：直接认领刚才在本地模式下配好的项目、日历与工作台数据
+      localStorage.setItem(OWNER_KEY, owner);
+      return 'ok';
+    }
     if (prev) {
       // 归档上一个账号的数据
       for (const k of SCOPED_KEYS) {
@@ -68,7 +114,7 @@ export function ensureAccountScope(userId: string): 'ok' | 'switched' {
     }
     localStorage.setItem(OWNER_KEY, owner);
     // 首次(prev 为空)只是认领现有数据,不需要 reload
-    return prev ? 'switched' : 'ok';
+    return prev || preservedTodos ? 'switched' : 'ok';
   } catch {
     // 存储不可用时无从隔离,也不该拦住登录
     return 'ok';

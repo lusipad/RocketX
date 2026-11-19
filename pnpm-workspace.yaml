@@ -15,6 +15,7 @@ allowBuilds:
   'protobufjs@7.6.5': false
 minimumReleaseAgeExclude:
   - '@deepseek-ai/*'
+  - '@earendil-works/*'
 supportedArchitectures:
   cpu:
     - x64

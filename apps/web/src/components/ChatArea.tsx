@@ -57,7 +57,7 @@ function HeaderButton({
     <button
       title={label}
       onClick={onClick}
-      className={`flex h-8 w-8 items-center justify-center rounded-md transition ${
+      className={`flex h-7 w-7 items-center justify-center rounded-lg transition ${
         active
           ? 'bg-primary-light text-primary'
           : onClick
@@ -111,6 +111,9 @@ export default function ChatArea({
   const localAgent = useSharedAgent((s) => (agentSessionKey ? s.sessions[agentSessionKey] : undefined));
   const remoteAgent = useSharedAgent((s) => (agentSessionKey ? s.remoteCards[agentSessionKey] : undefined));
   const me = useAuth((s) => s.user);
+  const localMode = useAuth((s) => s.localMode);
+  const exitLocalMode = useAuth((s) => s.exitLocalMode);
+  const setModule = useUI((state) => state.setModule);
   const openRoom = useChat((s) => s.openRoom);
   const joinRoom = useChat((s) => s.joinRoom);
   const parentRoom = useChat((s) => {
@@ -178,15 +181,62 @@ export default function ChatArea({
   }, [butlerPanelOpen]);
 
   if (!activeRid) {
+    if (localMode) {
+      return (
+        <main className="flex flex-1 flex-col items-center justify-center bg-surface-3 px-6 text-center">
+          <div className="flex max-w-lg flex-col items-center gap-4 rounded-2xl border border-line bg-surface-4 px-10 py-9 shadow-card">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary-light text-primary shadow-raise">
+              <Bot size={32} />
+            </div>
+            <div>
+              <div className="text-base font-semibold text-ink">当前处于本地使用模式</div>
+              <p className="mt-1.5 max-w-md text-xs leading-5 text-ink-3">
+                尚未登录 Rocket.Chat 服务器；AI 管家、统一看板、隔离 Git Worktree 子代理、待办与日历均已就绪，数据保存在本机。
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+              {features.butler ? (
+                <button
+                  type="button"
+                  onClick={() => setModule('butler-view')}
+                  className="h-9 rounded-xl bg-primary px-4 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
+                >
+                  打开 AI 管家
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setModule('todos')}
+                className="h-9 rounded-xl border border-line bg-surface-3 px-4 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover hover:text-ink"
+              >
+                打开统一看板 / 待办
+              </button>
+              <button
+                type="button"
+                onClick={() => void exitLocalMode()}
+                className="h-9 rounded-xl border border-line bg-surface-3 px-4 text-xs font-medium text-primary shadow-raise transition hover:bg-primary-light"
+              >
+                连接 Rocket.Chat
+              </button>
+            </div>
+          </div>
+        </main>
+      );
+    }
     return (
-      <main className="flex flex-1 flex-col items-center justify-center gap-4 bg-surface-3">
-        <div className="flex h-24 w-24 items-center justify-center rounded-full bg-fill-1">
-          <MessageCircle size={40} className="text-ink-3" />
-        </div>
-        <div className="text-sm text-ink-3">选择一个会话，开始高效沟通</div>
-        <div className="text-xs text-ink-3">
-          提示：<kbd className="rounded border border-line px-1.5 py-0.5">Ctrl</kbd> +{' '}
-          <kbd className="rounded border border-line px-1.5 py-0.5">K</kbd> 快速切换会话
+      <main className="flex flex-1 flex-col items-center justify-center bg-surface-3 p-6">
+        <div className="flex flex-col items-center gap-4 rounded-2xl border border-line-soft bg-surface-2/60 px-10 py-9 shadow-raise">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-surface-4 shadow-raise">
+            <MessageCircle size={30} className="text-primary" />
+          </div>
+          <div className="text-sm font-medium text-ink-2">选择一个会话，开始高效沟通</div>
+          <div className="flex items-center gap-1.5 text-xs text-ink-3">
+            <span>提示：</span>
+            <kbd className="rounded-md border border-line bg-surface-4 px-1.5 py-0.5 font-sans text-2xs font-medium text-ink-2 shadow-raise">Ctrl</kbd>
+            <span>+</span>
+            <kbd className="rounded-md border border-line bg-surface-4 px-1.5 py-0.5 font-sans text-2xs font-medium text-ink-2 shadow-raise">K</kbd>
+            <span>快速切换会话</span>
+          </div>
         </div>
       </main>
     );
@@ -256,7 +306,7 @@ export default function ChatArea({
         }}
         onDrop={onDrop}
       >
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
+        <header className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
           {/* 头像点开群信息（飞书就是这个交互） */}
           <button
             onClick={() => togglePanel({ kind: 'info' })}
@@ -293,7 +343,7 @@ export default function ChatArea({
                 </button>
               ) : null}
               {features.sharedAgent && !agentPresence ? (
-                <div className="flex h-7 shrink-0 overflow-hidden rounded-full border border-line bg-surface text-xs font-medium text-ink-2 transition hover:border-primary/40">
+                <div className="flex h-7 shrink-0 overflow-hidden rounded-full border border-line bg-surface-4 text-xs font-medium text-ink-2 shadow-raise transition hover:border-primary/40">
                   <button
                     aria-label="配置 AI 托管"
                     title="选择项目并配置共享 AI 托管"
@@ -322,7 +372,7 @@ export default function ChatArea({
                   aria-label="打开 AI 托管控制面"
                   title={`打开共享 AI 托管 · ${agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''} · 由 @${agentPresence.username} 托管`}
                   onClick={() => setPanel({ kind: 'agent', tmid: agentSessionKey })}
-                  className="flex h-7 max-w-[300px] shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-gradient-to-r from-primary-light to-surface px-2.5 text-xs text-primary shadow-sm transition hover:border-primary/50 hover:from-primary-light/90 hover:to-primary-light/50"
+                  className="flex h-7 max-w-[300px] shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-gradient-to-r from-primary-light to-surface-4 px-2.5 text-xs text-primary shadow-raise transition hover:border-primary/50 hover:from-primary-light/90 hover:to-primary-light/50"
                 >
                   <span className="relative flex h-2 w-2 shrink-0">
                     {agentBusy ? <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-50" /> : null}
@@ -357,7 +407,7 @@ export default function ChatArea({
               room?.topic && <div className="truncate text-xs text-ink-3">{room.topic}</div>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 rounded-xl border border-line-soft bg-surface-2/80 p-0.5">
             {hasUnread ? (
               <HeaderButton
                 icon={ListRestart}
@@ -487,7 +537,7 @@ export default function ChatArea({
             </span>
             <button
               onClick={() => void joinRoom(activeRid)}
-              className="h-7 shrink-0 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover"
+              className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
             >
               加入{prid ? '讨论' : '频道'}
             </button>

@@ -85,7 +85,8 @@ test('app-server 启动参数跟随 CLI 版本，--stdio 不再写死（新版�
   // 按 app-server --help 是否列出 --stdio 决定传不传
   assert.match(proc, /fn app_server_args_for_help\(help: &str\)/);
   assert.match(proc, /help\.contains\("--stdio"\)/);
-  assert.match(proc, /let launch_args = match app_server_launch_args\(&resolved\)/);
+  assert.match(proc, /let launch_args = match native_launch_args\s*\.map\(Ok\)\s*\.unwrap_or_else\(\|\| app_server_launch_args\(&resolved\)\)/);
+  assert.match(proc, /fn probe_native_profile[\s\S]*?run_bounded_output[\s\S]*?app_server_args_for_help\(&help_text\)/);
   assert.match(proc, /app_server_launch_args\(&resolved\)[\s\S]*?mark_exit\(supervisor_now_ms\(\), false\)/);
   // 不能再无条件传 --stdio
   assert.doesNotMatch(proc, /args\(\["app-server", "--stdio"\]\)/);

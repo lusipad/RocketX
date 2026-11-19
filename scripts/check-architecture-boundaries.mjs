@@ -20,7 +20,6 @@ const ADAPTER_FILES = new Set([
   'apps/web/src/agent/attachments.ts',
   'apps/web/src/agent/businessMcp.ts',
   'apps/web/src/agent/codexTransfer.ts',
-  'apps/web/src/agent/dsh/DshController.ts',
   'apps/web/src/agent/protocol/tauriTransport.ts',
   'apps/web/src/kernel/runtime.tsx',
   'apps/web/src/lan/runtime.ts',
@@ -51,6 +50,7 @@ const ADAPTER_FILES = new Set([
   'apps/web/src/platform/desktopProcess.ts',
   'apps/web/src/platform/desktopRuntime.ts',
   'apps/web/src/platform/desktopShortcut.ts',
+  'apps/web/src/platform/localVoice.ts',
 ]);
 
 /**

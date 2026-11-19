@@ -30,7 +30,7 @@ import { loadWorkspaceSource, parseWorkspaceConfig, type WorkspaceConfig } from 
 import { fetchWorkspaceConfig } from '../lib/workspaceConfigSource';
 
 type FirstRunStep = 'principles' | 'desktop' | 'setup';
-type DesktopExitTarget = 'setup' | 'personal';
+type DesktopExitTarget = 'setup' | 'personal' | 'local';
 type DesktopResults = {
   notifications: DesktopDefaultsEffectResult;
   autostart: DesktopDefaultsEffectResult;
@@ -108,7 +108,13 @@ function canRetry(result: DesktopDefaultsEffectResult): boolean {
   return result === 'denied' || result === 'unavailable' || result === 'failed';
 }
 
-export default function FirstRunPage({ onContinue }: { onContinue: () => void }) {
+export default function FirstRunPage({
+  onContinue,
+  onEnterLocal,
+}: {
+  onContinue: () => void;
+  onEnterLocal?: () => void;
+}) {
   const existingSource = loadWorkspaceSource();
   const [desktopDefaultsRecord] = useState(() =>
     loadDesktopDefaultsRecord(typeof localStorage === 'undefined' ? undefined : localStorage),
@@ -177,6 +183,11 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
     }
   };
 
+  const continueLocal = () => {
+    completeFirstRun(localStorage);
+    if (onEnterLocal) onEnterLocal();
+    else onContinue();
+  };
   const continuePersonal = () => {
     completeFirstRun(localStorage);
     onContinue();
@@ -186,6 +197,7 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
     setDesktopExitTarget(target);
     if (!showDesktopStep) {
       if (target === 'setup') setStep('setup');
+      else if (target === 'local') continueLocal();
       else continuePersonal();
       return;
     }
@@ -377,9 +389,15 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 >
                   {showDesktopStep ? '继续：设置桌面体验' : '继续：选择如何加入'} <ArrowRight size={15} />
                 </button>
-                <button onClick={() => openDesktopStep('personal')} className="mt-1 h-8 w-full text-xs text-white/50 hover:text-white/75">
-                  稍后连接，先进入个人设置
-                </button>
+                <div className="mt-1.5 flex items-center justify-center gap-4">
+                  <button type="button" onClick={() => openDesktopStep('local')} className="h-8 text-xs font-medium text-white/80 hover:text-white">
+                    暂不连接，直接本地使用
+                  </button>
+                  <span className="text-white/25">·</span>
+                  <button type="button" onClick={() => openDesktopStep('personal')} className="h-8 text-xs text-white/50 hover:text-white/75">
+                    手动填写服务器登录
+                  </button>
+                </div>
               </div>
             </section>
           </div>
@@ -530,12 +548,13 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
                 <button
                   onClick={() => {
                     if (desktopExitTarget === 'setup') setStep('setup');
+                    else if (desktopExitTarget === 'local') continueLocal();
                     else continuePersonal();
                   }}
                   disabled={desktopBusy}
                   className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {desktopExitTarget === 'setup' ? '继续加入团队' : '进入个人设置'}
+                  {desktopExitTarget === 'setup' ? '继续加入团队' : desktopExitTarget === 'local' ? '进入本地工作区' : '进入个人设置'}
                   <ArrowRight size={14} />
                 </button>
               )}
@@ -641,7 +660,9 @@ export default function FirstRunPage({ onContinue }: { onContinue: () => void })
 
                   <div className="mt-7 border-t border-line pt-5 text-center text-xs text-ink-3">
                     没有团队配置？{' '}
-                    <button onClick={continuePersonal} className="text-primary hover:underline">进入个人设置</button>
+                    <button type="button" onClick={continuePersonal} className="text-primary hover:underline">手动连接服务器</button>
+                    {' · '}
+                    <button type="button" onClick={continueLocal} className="font-medium text-primary hover:underline">暂不连接，直接本地使用</button>
                   </div>
                 </>
               ) : (

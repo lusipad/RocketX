@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { isTauri } from '../lib/http';
 import { getLocalDataSchema, readLocalData, writeLocalData } from '../lib/localDataContract';
+import { currentDataOwner } from '../lib/accountScope';
+import { captureButlerAccountGeneration, captureButlerRuntimeAccountContext, subscribeButlerAccountSelection, waitForButlerAccountReady } from '../platform/butlerAccountReady';
 import {
   addNativeTodo,
   deleteNativeTodo,
@@ -165,10 +167,15 @@ function resolveDesktopId(id: string): string {
  */
 let lastEnqueued: Promise<void> = Promise.resolve();
 
-function enqueueDesktop(task: () => Promise<void>): void {
+function enqueueDesktop(task: (assertAccount: () => void) => Promise<void>): void {
+  const assertAccount = captureButlerAccountGeneration();
+  const admittedReady = desktopReady;
   const run = desktopQueue.then(async () => {
-    await desktopReady;
-    await task();
+    await admittedReady;
+    await waitForButlerAccountReady();
+    assertAccount();
+    await task(assertAccount);
+    assertAccount();
   });
   // 队列本身要活下去，所以吞掉异常；lastEnqueued 保留原始 promise 供调用方 await
   desktopQueue = run.catch((error) => {
@@ -187,6 +194,15 @@ function enqueueDesktop(task: () => Promise<void>): void {
  */
 export function awaitLastTodoWrite(): Promise<void> {
   return lastEnqueued;
+}
+
+/** Await the selected account's initial migration and read before consuming its todos. */
+export async function awaitTodoAccountReady(): Promise<void> {
+  if (!isTauri) return;
+  const assertAccount = captureButlerAccountGeneration();
+  await desktopReady;
+  await waitForButlerAccountReady();
+  assertAccount();
 }
 
 /** 今天（本地时区）的 YYYY-MM-DD */
@@ -228,7 +244,7 @@ interface TodoState {
 }
 
 export const useTodos = create<TodoState>((set, get) => ({
-  todos: load(),
+  todos: isTauri ? [] : load(),
 
   add: (todo) => {
     const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
@@ -255,16 +271,18 @@ export const useTodos = create<TodoState>((set, get) => ({
     set({ todos });
 
     pendingAdds.add(id);
-    enqueueDesktop(async () => {
+    enqueueDesktop(async (assertAccount) => {
       try {
         const saved = fromNative(
           await addNativeTodo(toNativeNewTodo(todo)),
         );
+        assertAccount();
         desktopIds.set(id, saved.id);
         set((state) => ({
           todos: state.todos.map((item) => (item.id === id ? saved : item)),
         }));
       } catch (error) {
+        assertAccount();
         set((state) => ({ todos: state.todos.filter((item) => item.id !== id) }));
         throw error;
       } finally {
@@ -284,18 +302,20 @@ export const useTodos = create<TodoState>((set, get) => ({
       return;
     }
 
-    enqueueDesktop(async () => {
+    enqueueDesktop(async (assertAccount) => {
       const resolvedId = resolveDesktopId(id);
       try {
         const saved = fromNative(
           await updateNativeTodo(resolvedId, toNativePatch(patch)),
         );
+        assertAccount();
         set((state) => ({
           todos: state.todos.map((todo) =>
             todo.id === id || todo.id === resolvedId ? saved : todo,
           ),
         }));
       } catch (error) {
+        assertAccount();
         if (previous) {
           set((state) => ({
             todos: state.todos.map((todo) =>
@@ -322,18 +342,20 @@ export const useTodos = create<TodoState>((set, get) => ({
       return;
     }
 
-    enqueueDesktop(async () => {
+    enqueueDesktop(async (assertAccount) => {
       const resolvedId = resolveDesktopId(id);
       try {
         const saved = fromNative(
           await updateNativeTodo(resolvedId, { done }),
         );
+        assertAccount();
         set((state) => ({
           todos: state.todos.map((todo) =>
             todo.id === id || todo.id === resolvedId ? saved : todo,
           ),
         }));
       } catch (error) {
+        assertAccount();
         set((state) => ({
           todos: state.todos.map((todo) =>
             todo.id === id || todo.id === resolvedId ? previous : todo,
@@ -354,12 +376,14 @@ export const useTodos = create<TodoState>((set, get) => ({
       return;
     }
 
-    enqueueDesktop(async () => {
+    enqueueDesktop(async (assertAccount) => {
       const resolvedId = resolveDesktopId(id);
       try {
         await deleteNativeTodo(resolvedId);
+        assertAccount();
         desktopIds.delete(id);
       } catch (error) {
+        assertAccount();
         if (previous) set((state) => ({ todos: [previous, ...state.todos] }));
         throw error;
       }
@@ -378,39 +402,58 @@ export const useTodos = create<TodoState>((set, get) => ({
       return;
     }
 
-    enqueueDesktop(async () => {
+    enqueueDesktop(async (assertAccount) => {
       try {
         for (const todo of completed) {
           await deleteNativeTodo(resolveDesktopId(todo.id));
+          assertAccount();
         }
       } finally {
+        assertAccount();
         const stored = await listNativeTodos();
+        assertAccount();
         set({ todos: stored.map(fromNative) });
       }
     });
   },
 }));
 
-async function hydrateDesktop(): Promise<void> {
-  const legacyJson = legacyTodosForDesktop();
+async function hydrateDesktop(assertAccount: () => void): Promise<void> {
+  await waitForButlerAccountReady();
+  assertAccount();
+  const legacyJson = currentDataOwner() === captureButlerRuntimeAccountContext().accountScope
+    ? legacyTodosForDesktop() : null;
   if (legacyJson !== null) {
     try {
       await migrateNativeTodos(legacyJson);
+      assertAccount();
       localStorage.removeItem(KEY);
     } catch (error) {
+      assertAccount();
       console.warn('[Todos] 旧待办迁移失败，将在下次启动时重试', error);
     }
   }
 
   try {
     const stored = (await listNativeTodos()).map(fromNative);
+    assertAccount();
     const pending = useTodos.getState().todos.filter((todo) => pendingAdds.has(todo.id));
     useTodos.setState({
       todos: [...pending, ...stored.filter((todo) => !pendingAdds.has(todo.id))],
     });
   } catch (error) {
+    assertAccount();
     console.warn('[Todos] 无法从 SQLite 加载待办', error);
   }
 }
 
-if (isTauri) desktopReady = hydrateDesktop();
+if (isTauri) subscribeButlerAccountSelection(() => {
+  pendingAdds.clear();
+  desktopIds.clear();
+  desktopQueue = Promise.resolve();
+  lastEnqueued = Promise.resolve();
+  useTodos.setState({ todos: [] });
+  const assertAccount = captureButlerAccountGeneration();
+  desktopReady = hydrateDesktop(assertAccount);
+  void desktopReady.catch(() => undefined);
+});

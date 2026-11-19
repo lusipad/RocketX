@@ -32,6 +32,7 @@ export default function ThreadPanel() {
   const rid = useChat((s) => s.activeRid);
   const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
   const rootId = useChat((s) => (s.rightPanel?.kind === 'thread' ? s.rightPanel.mid : null));
+  const panelRoot = useChat((s) => s.rightPanel?.kind === 'thread' ? s.rightPanel.root : undefined);
   const all = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const send = useChat((s) => s.send);
   const toggleThreadFollow = useChat((s) => s.toggleThreadFollow);
@@ -67,7 +68,7 @@ export default function ThreadPanel() {
     [slashQuery, slashCommands],
   );
 
-  const root = useMemo(() => all?.find((m) => m._id === rootId), [all, rootId]);
+  const root = useMemo(() => all?.find((m) => m._id === rootId) ?? panelRoot, [all, rootId, panelRoot]);
   const replies = useMemo(
     () => (all ?? []).filter((m) => m.tmid === rootId).sort((a, b) => tsMs(a.ts) - tsMs(b.ts)),
     [all, rootId],
@@ -257,9 +258,9 @@ export default function ThreadPanel() {
             </button>
           </div>
         )}
-        {root ? (
+        {root && <MessageItem message={root} mine={root.u._id === myId} grouped={false} inThread />}
+        {root || replies.length ? (
           <>
-            <MessageItem message={root} mine={root.u._id === myId} grouped={false} inThread />
             <div className="my-3 flex items-center gap-2">
               <div className="h-px flex-1 bg-line" />
               <span className="text-xs text-ink-3">
@@ -283,7 +284,9 @@ export default function ThreadPanel() {
             })}
           </>
         ) : (
-          <div className="py-10 text-center text-sm text-ink-3">话题加载中…</div>
+          <div className="py-10 text-center text-sm text-ink-3">
+            {panelRoot === null ? '无法查看话题主消息' : '话题加载中…'}
+          </div>
         )}
       </div>
 

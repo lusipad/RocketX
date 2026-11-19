@@ -284,7 +284,7 @@ pub(crate) fn sample_png() -> Vec<u8> {
 /// Windows 凭据管理器条目的备份/恢复 guard：install 时先备份原值并写入
 /// 测试配置，Drop 时恢复原值（原本没有则删除测试写入）。任何路径都会恢复。
 pub(crate) struct KeychainGuard {
-    service: &'static str,
+    service: String,
     account: &'static str,
     original: Option<String>,
 }
@@ -295,7 +295,9 @@ impl KeychainGuard {
         account: &'static str,
         value: &str,
     ) -> Result<Self, String> {
-        let entry = keyring::Entry::new(service, account)
+        crate::credential_scope::set_application_identifier("com.lusipad.rocketx.live-e2e")?;
+        let service = crate::credential_scope::service_name(service)?;
+        let entry = keyring::Entry::new(&service, account)
             .map_err(|error| format!("keychain 不可用（{service}）：{error}"))?;
         let original = match entry.get_password() {
             Ok(value) => Some(value),
@@ -315,7 +317,7 @@ impl KeychainGuard {
 
 impl Drop for KeychainGuard {
     fn drop(&mut self) {
-        let Ok(entry) = keyring::Entry::new(self.service, self.account) else {
+        let Ok(entry) = keyring::Entry::new(&self.service, self.account) else {
             eprintln!("live-e2e 清理告警：keychain 不可用（{}）", self.service);
             return;
         };

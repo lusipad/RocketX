@@ -46,7 +46,7 @@ interface AgentAttachmentRuntimePath {
 
 export type AgentAttachmentDestination =
   | { kind: 'codex'; sessionId: string }
-  | { kind: 'dsh'; connectionId: string; leaseId: string };
+  | { kind: 'pi'; sessionId: string };
 
 async function writeAgentAttachment(
   destination: AgentAttachmentDestination,
@@ -54,16 +54,14 @@ async function writeAgentAttachment(
   bytes: Uint8Array,
 ): Promise<AgentAttachmentRuntimePath> {
   const metadata = new TextEncoder().encode(JSON.stringify(
-    destination.kind === 'codex'
-      ? { sessionId: destination.sessionId, relativePath }
-      : { connectionId: destination.connectionId, leaseId: destination.leaseId, relativePath },
+    { sessionId: destination.sessionId, relativePath },
   ));
   const request = new Uint8Array(4 + metadata.length + bytes.length);
   new DataView(request.buffer).setUint32(0, metadata.length, true);
   request.set(metadata, 4);
   request.set(bytes, 4 + metadata.length);
   return invoke<AgentAttachmentRuntimePath>(
-    destination.kind === 'codex' ? 'codex_agent_attachment_write' : 'dsh_agent_attachment_write',
+    destination.kind === 'pi' ? 'pi_agent_attachment_write' : 'codex_agent_attachment_write',
     request,
   );
 }
@@ -91,7 +89,7 @@ export async function materializeCodexImages(
   const batch = `composer-${crypto.randomUUID()}`;
   for (const [index, image] of images.entries()) {
     const runtime = await writeAgentAttachment(
-      { kind: 'codex', sessionId },
+      { kind: 'pi', sessionId },
       `${batch}/${index + 1}-${safeSegment(image.name, 'image')}`,
       dataUrlBytes(image.dataUrl),
     );

@@ -8,6 +8,7 @@ import {
   mergePrefsCache,
 } from '../lib/prefsCache';
 import { humanError, toast } from './toast';
+import { useAuth } from './auth';
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -106,6 +107,15 @@ export const usePrefs = create<PrefsState>((set, get) => ({
 
     inflight = (async () => {
       set({ error: null });
+      if (useAuth.getState().localMode) {
+        try {
+          const nativeCache = await loadNativePrefsCache();
+          set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...nativeCache }, loaded: true, error: null });
+        } finally {
+          inflight = null;
+        }
+        return;
+      }
       try {
         // 服务器不响应时不能无限转圈——超时后给出可见的错误和重试入口
         const explicit = await withTimeout(rest.domains.preferences.getExplicitPreferences(), 8000);
@@ -128,6 +138,11 @@ export const usePrefs = create<PrefsState>((set, get) => ({
   update: async (patch) => {
     const prev = get().prefs;
     set({ prefs: { ...prev, ...patch } });
+    if (useAuth.getState().localMode) {
+      mergePrefsCache(patch);
+      await mergeNativePrefsCache(patch);
+      return;
+    }
     try {
       await savePreferences(patch);
       // 服务端写成功后落本地镜像（issue #351）：下次启动若服务端拉取失败，

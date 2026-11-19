@@ -645,37 +645,47 @@ export default function WorkbenchPage() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="flex w-[180px] shrink-0 flex-col border-r border-line-strong bg-fill-2 p-3">
-        <div className="px-2 py-1.5 text-base font-semibold text-ink">工作台</div>
-        {tabs.map(({ key, label, icon: Icon, badge, danger }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
-              tab === key ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
-            }`}
-          >
-            <Icon size={16} />
-            <span className="min-w-0 truncate">{label}</span>
-            {badge ? (
-              <span
-                className={`ml-auto text-xs ${danger ? 'font-medium text-danger' : 'text-ink-3'}`}
-              >
-                {badge}
-              </span>
-            ) : null}
-          </button>
-        ))}
+      <aside className="flex w-[196px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">工作台</div>
+        <div className="flex flex-col gap-0.5">
+          {tabs.map(({ key, label, icon: Icon, badge, danger }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              aria-current={tab === key ? 'page' : undefined}
+              className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition ${
+                tab === key
+                  ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <Icon size={16} className={tab === key ? 'text-primary' : ''} />
+              <span className="min-w-0 truncate">{label}</span>
+              {badge ? (
+                <span
+                  className={`ml-auto rounded-full px-1.5 py-0.5 text-2xs font-medium ${
+                    danger ? 'bg-danger/10 text-danger' : 'bg-fill-1 text-ink-3'
+                  }`}
+                >
+                  {badge}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
 
         {canUseCustomQueries && customQueries.length > 0 && (
           <>
-            <div className="mt-4 mb-1 px-2 text-xs font-medium text-ink-3">自定义查询</div>
+            <div className="mt-4 mb-1.5 px-2.5 text-xs font-medium text-ink-3">自定义查询</div>
+            <div className="flex flex-col gap-0.5">
             {customQueries.map((q) => (
               <div key={q.id} className="group relative">
                 <button
                   onClick={() => setTab(`query:${q.id}`)}
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
-                    tab === `query:${q.id}` ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-sm transition ${
+                    tab === `query:${q.id}`
+                      ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
+                      : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
                   }`}
                 >
                   <Search size={14} />
@@ -699,6 +709,7 @@ export default function WorkbenchPage() {
                 </button>
               </div>
             ))}
+            </div>
           </>
         )}
 
@@ -732,8 +743,8 @@ export default function WorkbenchPage() {
           <ProfileContributionsPage />
         </Suspense>
       ) : connected && tab !== 'overview' ? (
-        <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
-          <div className="flex items-center justify-between pb-3">
+        <main className="flex min-w-0 flex-1 flex-col bg-surface-3">
+          <div className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-6">
             <span className="text-base font-semibold text-ink">
               {activeQuery ? activeQuery.name : tabs.find((t) => t.key === tab)?.label}
               <span className="ml-2 text-xs font-normal text-ink-3">
@@ -742,17 +753,17 @@ export default function WorkbenchPage() {
             </span>
             {activeQuery ? (
               <div className="flex items-center gap-2">
-                <div className="flex h-8 items-center rounded-md border border-line p-0.5">
+                <div className="flex h-8 items-center rounded-xl border border-line bg-surface-2 p-0.5">
                   {QUERY_VIEW_OPTIONS.map(({ key, label, icon: Icon }) => {
                     const active = (queryViews[activeQuery.id] ?? 'list') === key;
                     return (
                       <button
                         key={key}
                         onClick={() => setQueryView(activeQuery.id, key)}
-                        className={`flex h-7 items-center gap-1 rounded px-2.5 text-xs transition ${
+                        className={`flex h-7 items-center gap-1 rounded-lg px-2.5 text-xs transition ${
                           active
-                            ? 'bg-primary-light text-primary'
-                            : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
+                            ? 'bg-surface-4 font-medium text-ink shadow-raise'
+                            : 'text-ink-3 hover:text-ink'
                         }`}
                         title={`${label}视图`}
                       >
@@ -791,7 +802,7 @@ export default function WorkbenchPage() {
               refreshBar
             )}
           </div>
-
+          <div className="flex min-h-0 flex-1 flex-col p-6">
           {activeQuery ? (
             visibleQueryState.loading[activeQuery.id] !== undefined &&
             !visibleQueryState.cache[activeQuery.id] ? (
@@ -845,9 +856,10 @@ export default function WorkbenchPage() {
           ) : (
             <BuildList builds={builds} />
           )}
+          </div>
         </main>
       ) : (
-        <main className="flex min-w-0 flex-1 overflow-hidden bg-fill-2">
+        <main className="flex min-w-0 flex-1 overflow-hidden bg-surface-3">
           {/* -------- 主区：待处理队列 -------- */}
           <div className="flex min-w-0 flex-1 flex-col overflow-y-auto px-7 py-6">
             <header className="flex shrink-0 items-start justify-between pb-5">
@@ -880,20 +892,54 @@ export default function WorkbenchPage() {
               </div>
             )}
 
+            {connected && (
+              <div className="mb-5 grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+                <div className="rounded-2xl border border-line bg-surface-4 px-4 py-3 shadow-raise">
+                  <div className="text-xs text-ink-3">待处理队列</div>
+                  <div className="mt-1 text-lg font-semibold text-ink">{queue.length}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTab('workitems')}
+                  className="rounded-2xl border border-line bg-surface-4 px-4 py-3 text-left shadow-raise transition hover:border-primary/40 hover:shadow-card"
+                >
+                  <div className="text-xs text-ink-3">工作项</div>
+                  <div className="mt-1 text-lg font-semibold text-ink">{workItems.length}</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTab('prs')}
+                  className="rounded-2xl border border-line bg-surface-4 px-4 py-3 text-left shadow-raise transition hover:border-primary/40 hover:shadow-card"
+                >
+                  <div className="text-xs text-ink-3">拉取请求</div>
+                  <div className="mt-1 text-lg font-semibold text-ink">{reviewPrs.length + myPrs.length}</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTab('builds')}
+                  className="rounded-2xl border border-line bg-surface-4 px-4 py-3 text-left shadow-raise transition hover:border-primary/40 hover:shadow-card"
+                >
+                  <div className="text-xs text-ink-3">构建</div>
+                  <div className="mt-1 text-lg font-semibold text-ink">{builds.length}</div>
+                </button>
+              </div>
+            )}
+
             {connected && loading && !lastRefresh ? (
               <SkeletonRows rows={6} />
             ) : queue.length === 0 ? (
-              /* 无事可做时只占一行，不用一整屏的空卡片去证明「这里是空的」 */
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
-                <CheckCircle2 size={32} className="text-success" />
-                <div className="text-sm text-ink-2">今天没有待处理的事</div>
-                <div className="max-w-sm text-xs leading-relaxed text-ink-3">
-                  这里会汇总：逾期与今天到期的待办、失败的构建、等你评审的 PR、
-                  分配给你的工作项。在聊天消息上右键「标记为待办」也会出现在这里。
+              <div className="flex flex-1 flex-col items-center justify-center text-center">
+                <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-line-soft bg-surface-2/60 px-10 py-8 shadow-raise">
+                  <CheckCircle2 size={32} className="text-success" />
+                  <div className="text-sm font-medium text-ink-2">今天没有待处理的事</div>
+                  <div className="max-w-sm text-xs leading-relaxed text-ink-3">
+                    这里会汇总：逾期与今天到期的待办、失败的构建、等你评审的 PR、
+                    分配给你的工作项。在聊天消息上右键「标记为待办」也会出现在这里。
+                  </div>
                 </div>
               </div>
             ) : (
-              <div className="overflow-hidden rounded-xl bg-surface-4 shadow-raise">
+              <div className="overflow-hidden rounded-2xl border border-line bg-surface-4 shadow-card">
                 {queue.map((item) => (
                   <QueueRow
                     key={item.key}
@@ -931,7 +977,7 @@ export default function WorkbenchPage() {
           </div>
 
           {/* -------- 右栏：日程 + 收藏 -------- */}
-          <aside className="flex w-[280px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line-strong bg-surface-4 px-4 py-6">
+          <aside className="flex w-[288px] shrink-0 flex-col gap-5 overflow-y-auto border-l border-line bg-surface-2/50 px-4 py-6">
             <section>
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">

@@ -38,7 +38,7 @@ test('DSH 运行时归档只进入 Windows full 包，slim 仅携带 bridge，�
   assert.equal(runtimePackage.dependencies?.['@deepseek-ai/dsh'], '0.2.1-rc.2');
 
   assert.doesNotMatch(tauriConfig.build?.beforeDevCommand ?? '', /prepare:dsh-runtime/);
-  assert.equal(tauriConfig.build?.beforeBuildCommand, 'pnpm -w prepare:sidecars && pnpm --filter @rcx/web build');
+  assert.equal(tauriConfig.build?.beforeBuildCommand, 'pnpm -w prepare:sidecars && pnpm -w prepare:pi-runtime && pnpm --filter @rcx/web build');
   assert.equal(tauriConfig.bundle?.resources?.['src/dsh_bridge.mjs'], 'dsh_bridge.mjs');
   assert.equal(tauriConfig.bundle?.resources?.['target/dsh-runtime.tar.gz'], undefined);
   assert.equal(fullConfig.bundle?.resources?.['target/dsh-runtime.tar.gz'], 'full-resources/dsh-runtime.tar.gz');

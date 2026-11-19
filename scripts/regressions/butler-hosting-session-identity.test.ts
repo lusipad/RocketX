@@ -44,20 +44,16 @@ test('房间侧栏打开 AI 管家时应把当前托管 session 作为焦点传�
   );
 });
 
-test('房间 AI 使用私人 provider 会话，AI 托管才复用 sharedAgent 的房间 session', () => {
+test('房间 AI 使用私人 Pi 会话，AI 托管才复用 sharedAgent 的房间 session', () => {
   const panel = read('apps/web/src/components/ButlerPanel.tsx');
-  const privateDsh = read('apps/web/src/stores/privateRoomDsh.ts');
   const agentPanel = read('apps/web/src/components/AgentPanel.tsx');
 
-  assert.match(panel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/, 'Codex 私人会话应按账号和房间恢复');
-  assert.match(panel, /useCodexWorkspace\.getState\(\)\.send/, 'Codex 私人消息应直接进入个人 thread');
-  assert.match(panel, /usePrivateRoomDsh/, 'DeepSeek 应使用独立的私人房间状态');
+  assert.match(panel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/, '私人会话应按账号和房间恢复');
+  assert.match(panel, /useCodexWorkspace\.getState\(\)\.send/, 'Pi 私人消息应直接进入个人 thread');
   assert.match(panel, /仅你可见，不会向当前房间发送消息/, '界面应明确私人可见性');
   assert.doesNotMatch(panel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|HostedConversationTranscript/);
+  assert.doesNotMatch(panel, /usePrivateRoomDsh|privateRoomDsh/);
   assert.doesNotMatch(panel, /send\(`?@ai/);
-  assert.match(privateDsh, /PRIVATE_ROOM_DSH_STORAGE_KEY = 'rcx-private-room-dsh-sessions-v1'/);
-  assert.match(privateDsh, /privateRoomDshKey\(options\.scope, options\.rid\)/);
-  assert.doesNotMatch(privateDsh, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting/);
   assert.match(agentPanel, /useSharedAgent/, '托管控制面应直接读取 sharedAgent');
   assert.match(agentPanel, /const tmid = sessionKey \?\?/, '共享托管仍应使用显式房间 session key');
 });

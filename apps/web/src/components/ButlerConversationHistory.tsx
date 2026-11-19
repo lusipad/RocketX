@@ -6,15 +6,20 @@ import {
   Bot,
   CalendarClock,
   ChevronRight,
+  Cpu,
   FolderMinus,
   FolderOpen,
   GitPullRequest,
   Loader2,
   MessageSquarePlus,
   MoreHorizontal,
+  PanelLeft,
   Pencil,
   Plus,
   Search,
+  Settings,
+  Sparkles,
+  SquareKanban,
 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
@@ -33,11 +38,13 @@ import {
   useAgentEnvironments,
 } from '../stores/agentEnvironments';
 import { useAuth } from '../stores/auth';
+import { resolveButlerAccountScope } from '../stores/butlerMemory';
 import { useChat } from '../stores/chat';
 import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
 import { useSharedAgent } from '../stores/sharedAgent';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
+import { useWorkLedger } from '../stores/workLedger';
 import ButlerProjectConfigDialog, { type ButlerProjectConfigPatch } from './ButlerProjectConfigDialog';
 import { ConfirmDialog } from './Dialog';
 
@@ -74,6 +81,7 @@ function ageLabel(timestamp: number): string {
 
 export default function ButlerConversationHistory({ onNavigate }: { onNavigate?: () => void }) {
   const userId = useAuth((state) => state.user?._id);
+  const localMode = useAuth((state) => state.localMode);
   const activeView = useUI((state) => state.butlerView);
   const aiRuntimeProvider = useUI((state) => state.aiRuntimeProvider);
   const setButlerView = useUI((state) => state.setButlerView);
@@ -95,6 +103,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const threadStates = useCodexWorkspace((state) => state.threadStates);
   const activeThreadId = useCodexWorkspace((state) => state.activeThreadId);
   const activeTurnId = useCodexWorkspace((state) => state.activeTurnId);
+  const models = useCodexWorkspace((state) => state.models);
+  const selectedModel = useCodexWorkspace((state) => state.selectedModel);
+  const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
+  const activeCardCount = useWorkLedger((state) => state.cards.filter((c) => !c.done).length);
   const hydrate = useCodexWorkspace((state) => state.hydrate);
   const ensureDefaultWorkspace = useCodexWorkspace((state) => state.ensureDefaultWorkspace);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
@@ -121,11 +133,14 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const [workspaceToConfigure, setWorkspaceToConfigure] = useState<string | null>(null);
   const [collapsedWorkspace, setCollapsedWorkspace] = useState<string | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [moreFeaturesOpen, setMoreFeaturesOpen] = useState(() => ['assistant', 'acp-hub', 'routines', 'plugins'].includes(activeView));
   const [hostedSectionExpandedOverride, setHostedSectionExpandedOverride] = useState<boolean | null>(null);
   const pinyinReady = usePinyinReady();
   const [expandedHostedGroups, setExpandedHostedGroups] = useState<Record<string, boolean>>({});
   const desktopRuntime = isTauriRuntime();
-  const codexRuntime = aiRuntimeProvider === 'codex';
+  const piRuntime = aiRuntimeProvider === 'pi';
+  const nativeRuntime = piRuntime;
+  const workspaceScope = userId ? `${getServerBase() || 'same-origin'}:${userId}` : 'local:workspace';
   const hostedSessions = useHostedSessionItems(hostedSessionsByKey, hostedRemoteCardsByKey);
   const hostedSessionCount = hostedSessions.length;
   const hostedActiveSessionCount = hostedSessions.filter((session) => session.status !== 'ended').length;
@@ -133,18 +148,22 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const hostedSectionExpanded = hostedSectionExpandedOverride ?? hostedSectionExpandedDefault;
 
   useEffect(() => {
-    if (!codexRuntime || !userId) return;
-    hydrate(`${getServerBase() || 'same-origin'}:${userId}`);
-  }, [codexRuntime, hydrate, userId]);
+    if (!nativeRuntime) return;
+    hydrate(workspaceScope);
+  }, [hydrate, nativeRuntime, workspaceScope]);
 
   useEffect(() => {
-    if (!codexRuntime || !desktopRuntime || !workspaceRoot || status !== 'idle') return;
+    if (!nativeRuntime || !desktopRuntime || !workspaceRoot || status !== 'idle') return;
     void connect().catch(() => undefined);
-  }, [codexRuntime, connect, desktopRuntime, status, workspaceRoot]);
+  }, [connect, desktopRuntime, nativeRuntime, status, workspaceRoot]);
 
   useEffect(() => {
     setHistoryExpanded(false);
   }, [workspaceRoot]);
+
+  useEffect(() => {
+    if (['assistant', 'acp-hub', 'routines', 'plugins'].includes(activeView)) setMoreFeaturesOpen(true);
+  }, [activeView]);
 
   useEffect(() => {
     if (selectedHostedSessionKey) setHostedSectionExpandedOverride(null);
@@ -248,7 +267,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     hostingProjectPaths,
     systemWorkspaceRoots,
   ]);
-  const firstHostingProjectIndex = projectEntries.findIndex((entry) => entry.kind === 'hosting');
+  const visibleProjectEntries = projectEntries.filter((entry) => entry.kind === 'hosting'
+    || (threadCounts.get(entry.path) ?? 0) > 0
+    || (entry.path === workspaceRoot && Boolean(activeThreadId)));
+  const firstHostingProjectIndex = visibleProjectEntries.findIndex((entry) => entry.kind === 'hosting');
   const hostedSessionGroups = useMemo(() => {
     const groups = new Map<string, HostedSessionGroup>();
 
@@ -381,15 +403,15 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       {desktopRuntime && status === 'unavailable' ? <p className="butler-codex-task-empty">{error}</p> : null}
       {(!desktopRuntime || status !== 'unavailable') && visibleThreads.length === 0 ? (
         <p className="butler-codex-task-empty">
-          {!desktopRuntime ? '请使用 RocketX 桌面端运行 Codex 任务' : '还没有对话'}
+          {!desktopRuntime ? '请使用 RocketX 桌面端运行 AI 管家任务' : '还没有对话'}
         </p>
       ) : null}
     </nav>
   );
 
   const chooseWorkspace = async (): Promise<boolean> => {
-    if (!isTauriRuntime()) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
-    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+    if (!isTauriRuntime()) throw new Error('网页版没有本地 Pi 执行面，请使用 RocketX 桌面端');
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择工作区' });
     if (typeof path !== 'string') return false;
     ensureEnvironment({ path });
     await setWorkspaceRoot(path);
@@ -443,21 +465,29 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   };
 
   const createConversation = async (): Promise<void> => {
+    const accountScope = resolveButlerAccountScope();
+    const runtimeScope = useCodexWorkspace.getState().scope;
+    const isCurrentAccount = () => resolveButlerAccountScope() === accountScope
+      && useCodexWorkspace.getState().scope === runtimeScope;
     try {
       await ensureDefaultWorkspace();
+      if (!isCurrentAccount()) return;
       const butlerRoot = useCodexWorkspace.getState().butlerWorkspaceRoot;
       if (!butlerRoot) throw new Error('系统管家工作区尚未准备好');
       if (useCodexWorkspace.getState().workspaceRoot !== butlerRoot) {
         await setWorkspaceRoot(butlerRoot);
+        if (!isCurrentAccount()) return;
         await connect();
       } else if (useCodexWorkspace.getState().status === 'idle') {
         await connect();
       }
-      setButlerView('conversation');
+      if (!isCurrentAccount()) return;
       await startThread();
+      if (!isCurrentAccount()) return;
+      setButlerView('conversation');
       onNavigate?.();
     } catch (reason) {
-      toast.error(reason, '无法新建对话');
+      if (isCurrentAccount()) toast.error(reason, '无法新建对话');
     }
   };
 
@@ -481,8 +511,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
 
   const hostedSessionsNavigation = (
     <section
-      className={`butler-hosted-sessions${codexRuntime ? '' : ' is-standalone'}`}
+      className={`butler-hosted-sessions${nativeRuntime ? '' : ' is-standalone'}`}
       aria-label="共享 AI 托管"
+      hidden={(!userId && hostedSessionCount === 0) || undefined}
     >
       <button
         type="button"
@@ -571,10 +602,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     </section>
   );
 
-  if (!codexRuntime) {
+  if (!nativeRuntime) {
     return (
       <aside className="butler-conversation-history" aria-label="AI 管家导航">
-        <div className="butler-codex-product-switcher">
+        <div className="butler-codex-product-switcher flex h-[52px] min-h-[52px] items-center justify-between border-b border-line px-3.5">
           <button
             type="button"
             className="butler-codex-back-rocketx"
@@ -585,59 +616,130 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           </button>
           <div className="butler-codex-product-title"><strong>AI 管家</strong></div>
         </div>
-        <div className="m-3 rounded-lg bg-fill-1 px-3 py-2 text-xs leading-5 text-ink-3">
-          {aiRuntimeProvider === 'deepseek'
-            ? '普通对话由 DSH 原生页面提供；私人房间 AI 会话同样仅你可见。'
-            : '当前未启用执行引擎；仍可查看房间托管记录。'}
+        <div className="mx-3 my-2.5 rounded-xl border border-line bg-surface-4 p-3 text-xs leading-5 text-ink-2 shadow-raise">
+          配置模型后，就可以向管家交代事情。已有工作和会话仍可查看，私人房间 AI 会话同样仅你可见。
+          <button
+            type="button"
+            onClick={() => { setModule('settings'); onNavigate?.(); }}
+            className="mt-2.5 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
+          >
+            <Bot size={13} />
+            配置管家
+          </button>
         </div>
-        {hostedSessionsNavigation}
+        {aiRuntimeProvider === 'none' ? (
+          <div className="mx-3 mb-2 space-y-1 text-xs">
+            <button
+              type="button"
+              aria-current={activeView === 'kanban' ? 'page' : undefined}
+              onClick={() => { setButlerView('kanban'); onNavigate?.(); }}
+              className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 transition ${
+                activeView === 'kanban'
+                  ? 'bg-surface-4 font-semibold text-ink shadow-raise ring-1 ring-line'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <span className="flex items-center gap-2"><SquareKanban size={13} />我的工作</span>
+            </button>
+            <button
+              type="button"
+              aria-current={activeView === 'assistant' ? 'page' : undefined}
+              onClick={() => { setButlerView('assistant'); onNavigate?.(); }}
+              className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 transition ${
+                activeView === 'assistant'
+                  ? 'bg-surface-4 font-semibold text-ink shadow-raise ring-1 ring-line'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <span className="flex items-center gap-2"><Sparkles size={13} />个人助理</span>
+            </button>
+            <button
+              type="button"
+              aria-current={activeView === 'acp-hub' ? 'page' : undefined}
+              onClick={() => { setButlerView('acp-hub'); onNavigate?.(); }}
+              className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 transition ${
+                activeView === 'acp-hub'
+                  ? 'bg-surface-4 font-semibold text-ink shadow-raise ring-1 ring-line'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <span className="flex items-center gap-2"><Cpu size={13} />ACP 客户端</span>
+            </button>
+          </div>
+        ) : null}
+        {hostedSessionCount > 0 ? hostedSessionsNavigation : null}
       </aside>
     );
   }
 
   return (
-    <aside className="butler-conversation-history" aria-label="AI 管家导航">
-      <div className="butler-codex-product-switcher">
-        <button
-          type="button"
-          className="butler-codex-back-rocketx"
-          aria-label="返回 RocketX"
-          onClick={() => setModule('messages')}
-        >
-          <ArrowLeft size={16} aria-hidden="true" />
-        </button>
-        <div className="butler-codex-product-title">
-          <strong>AI 管家</strong>
+    <aside className="butler-conversation-history work-first-navigation" aria-label="AI 管家导航">
+      <div className="butler-codex-product-switcher flex h-[52px] min-h-[52px] items-center justify-between border-b border-line px-3.5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {!localMode ? (
+            <button
+              type="button"
+              className="butler-codex-back-rocketx p-1 -ml-1 text-ink-3 hover:text-ink transition-colors rounded-md hover:bg-fill-hover"
+              aria-label="返回 RocketX"
+              onClick={() => setModule('messages')}
+            >
+              <ArrowLeft size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+          <div className="butler-codex-product-title flex items-center gap-1.5 truncate">
+            <strong className="text-sm font-semibold text-ink">AI 管家</strong>
+          </div>
         </div>
-        <button
-          type="button"
-          aria-label={searchOpen ? '关闭对话搜索' : '搜索对话'}
-          aria-pressed={searchOpen}
-          onClick={() => setSearchOpen((current) => !current)}
-        >
-          <Search size={16} aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          aria-label="切换到 Codex App"
-          disabled={!desktopRuntime || openingCodex || (
-            activeView === 'conversation' && Boolean(activeThreadId) && (Boolean(activeTurnId) || status === 'external')
-          )}
-          onClick={() => void openCodex()}
-        >
-          {openingCodex
-            ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            : <ArrowUpRight size={13} aria-hidden="true" />}
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            aria-label={searchOpen ? '关闭对话搜索' : '搜索对话'}
+            aria-pressed={searchOpen}
+            onClick={() => setSearchOpen((current) => !current)}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-fill-hover hover:text-ink transition-colors"
+          >
+            <Search size={14} aria-hidden="true" />
+          </button>
+          {desktopRuntime && !piRuntime ? (
+            <button
+              type="button"
+              aria-label="切换到 Codex App"
+              disabled={openingCodex || (
+                activeView === 'conversation' && Boolean(activeThreadId) && (Boolean(activeTurnId) || status === 'external')
+              )}
+              onClick={() => void openCodex()}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-fill-hover hover:text-ink transition-colors"
+            >
+              {openingCodex
+                ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                : <ArrowUpRight size={13} aria-hidden="true" />}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => useUI.getState().toggleButlerSidebarCollapsed()}
+            title="收起会话列表 (Ctrl+B)"
+            aria-label="收起会话列表"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-fill-hover hover:text-ink transition-colors"
+          >
+            <PanelLeft size={14} aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
-      <header>
-        <button type="button" disabled={!desktopRuntime} onClick={() => void createConversation()} aria-label="新对话">
-          <MessageSquarePlus size={15} aria-hidden="true" />
-          新对话
+      <header className="px-2.5 pt-2.5 pb-1.5">
+        <button
+          type="button"
+          disabled={!desktopRuntime}
+          onClick={() => void createConversation()}
+          aria-label="新管家对话"
+          className="flex h-8.5 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover active:scale-[0.99] disabled:opacity-50"
+        >
+          <MessageSquarePlus size={14} className="text-white" aria-hidden="true" />
+          <span className="text-white">新管家对话</span>
         </button>
         {searchOpen ? (
-          <label className="butler-codex-task-search">
+          <label className="butler-codex-task-search mt-2">
             <Search size={14} aria-hidden="true" />
             <input
               autoFocus
@@ -651,40 +753,160 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         ) : null}
       </header>
 
-      <nav className="butler-codex-surface-nav" aria-label="Codex 工作区">
+      <nav className="butler-codex-surface-nav work-first-primary-nav" aria-label="AI 协作">
         <button
           type="button"
+          aria-current={activeView === 'conversation' ? 'page' : undefined}
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+            activeView === 'conversation'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+          }`}
+          onClick={() => {
+            setButlerView('conversation');
+            onNavigate?.();
+          }}
+        >
+          <span className="flex items-center gap-2.5">
+            <Bot size={15} className={activeView === 'conversation' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <span>管家</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          aria-current={activeView === 'kanban' ? 'page' : undefined}
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+            activeView === 'kanban'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+          }`}
+          onClick={() => {
+            setButlerView('kanban');
+            onNavigate?.();
+          }}
+        >
+          <span className="flex items-center gap-2.5">
+            <SquareKanban size={15} className={activeView === 'kanban' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <span>我的工作</span>
+          </span>
+          {activeCardCount > 0 ? (
+            <span className="rounded-full bg-primary-light px-1.5 py-0.5 text-2xs font-semibold text-primary">
+              {activeCardCount}
+            </span>
+          ) : null}
+        </button>
+
+        <details className="work-first-more-features" open={moreFeaturesOpen} onToggle={(event) => setMoreFeaturesOpen(event.currentTarget.open)}>
+          <summary><MoreHorizontal size={15} aria-hidden="true" /><span>更多功能</span><ChevronRight size={13} aria-hidden="true" /></summary>
+          <div className="work-first-secondary-nav">
+        <button
+          type="button"
+          aria-current={activeView === 'assistant' ? 'page' : undefined}
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+            activeView === 'assistant'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+          }`}
+          onClick={() => {
+            setButlerView('assistant');
+            onNavigate?.();
+          }}
+          title="个人助理晨晚报与长期回顾库"
+        >
+          <span className="flex items-center gap-2.5">
+            <Sparkles size={15} className={activeView === 'assistant' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <span>简报与记忆</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          aria-current={activeView === 'acp-hub' ? 'page' : undefined}
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+            activeView === 'acp-hub'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+          }`}
+          onClick={() => {
+            setButlerView('acp-hub');
+            onNavigate?.();
+          }}
+          title="本地 ACP Agent 客户端控制中心"
+        >
+          <span className="flex items-center gap-2.5">
+            <Cpu size={15} className={activeView === 'acp-hub' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <span>执行器与会话</span>
+          </span>
+        </button>
+
+        <div className="my-1 h-px bg-line-soft" />
+
+        <button
+          type="button"
+          aria-current={activeView === 'routines' ? 'page' : undefined}
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+            activeView === 'routines'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+          }`}
+          onClick={() => { setButlerView('routines'); onNavigate?.(); }}
+          title="已安排任务"
+        >
+          <span className="flex items-center gap-2.5">
+            <CalendarClock size={15} className={activeView === 'routines' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <span>已安排</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          aria-current={activeView === 'plugins' ? 'page' : undefined}
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+            activeView === 'plugins'
+              ? 'bg-fill-active font-medium text-ink'
+              : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+          }`}
+          onClick={() => { setButlerView('plugins'); onNavigate?.(); }}
+          title="扩展插件"
+        >
+          <span className="flex items-center gap-2.5">
+            <Blocks size={15} className={activeView === 'plugins' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <span>插件</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className="flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
           onClick={() => {
             setWorkbenchTab('prs');
             setModule('workbench');
             onNavigate?.();
           }}
+          title="拉取请求"
         >
-          <GitPullRequest size={15} aria-hidden="true" />
-          拉取请求
+          <span className="flex items-center gap-2.5">
+            <GitPullRequest size={15} className="text-ink-3" aria-hidden="true" />
+            <span>拉取请求</span>
+          </span>
         </button>
         <button
           type="button"
-          aria-current={activeView === 'routines' ? 'page' : undefined}
-          onClick={() => { setButlerView('routines'); onNavigate?.(); }}
+          className="flex h-8.5 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
+          disabled={!desktopRuntime}
+          onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法添加项目目录'))}
         >
-          <CalendarClock size={15} aria-hidden="true" />
-          已安排
+          <FolderOpen size={15} className="text-ink-3" aria-hidden="true" />添加项目目录
         </button>
-        <button
-          type="button"
-          aria-current={activeView === 'plugins' ? 'page' : undefined}
-          onClick={() => { setButlerView('plugins'); onNavigate?.(); }}
-        >
-          <Blocks size={15} aria-hidden="true" />
-          插件
-        </button>
+          </div>
+        </details>
       </nav>
 
-      {hostedSessionsNavigation}
+      {hostedSessionCount > 0 ? hostedSessionsNavigation : null}
 
-      <div className="butler-codex-thread-heading">
-        <span>系统工作区</span>
+      {visibleProjectEntries.length > 0 ? <div className="butler-codex-thread-heading">
+        <span>最近对话与项目</span>
         <button
           type="button"
           aria-label="添加托管项目"
@@ -694,10 +916,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         >
           <Plus size={13} aria-hidden="true" />
         </button>
-      </div>
+      </div> : null}
 
       <div className="butler-codex-project-list !max-h-none !min-h-0 !flex-1" aria-label="项目目录">
-        {projectEntries.map((entry, index) => {
+        {visibleProjectEntries.map((entry, index) => {
           const active = entry.path === workspaceRoot;
           const expanded = active && collapsedWorkspace !== entry.path;
           return (
@@ -754,20 +976,38 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
             </Fragment>
           );
         })}
-        {hostingProjectPaths.length === 0 ? (
-          <>
-            <div className="butler-codex-project-kind" aria-label="工作项目">个人项目</div>
-            <button
-              type="button"
-              className="butler-codex-workspace-picker is-empty"
-              disabled={!desktopRuntime}
-              onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法添加项目目录'))}
-            >
-              <Plus size={13} aria-hidden="true" />
-              <span>添加托管项目</span>
-            </button>
-          </>
-        ) : null}
+      </div>
+
+      <div className="border-t border-line px-2.5 py-2">
+        <button
+          type="button"
+          onClick={() => {
+            setModule('settings');
+            onNavigate?.();
+          }}
+          className="flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-left text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
+          title="点击进入设置调整 AI 引擎与模型"
+          aria-label="管家设置"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${
+                status === 'ready' || status === 'running' || status === 'waiting-input'
+                  ? 'bg-success'
+                  : status === 'connecting'
+                    ? 'bg-warning animate-pulse'
+                    : 'bg-ink-4'
+              }`}
+            />
+            <span className="truncate font-medium text-ink">
+              管家设置
+              <span className="text-ink-3">
+                {' · '}{activeModel?.displayName || selectedModel || '配置模型'}
+              </span>
+            </span>
+          </div>
+          <Settings size={13} className="shrink-0 text-ink-3" />
+        </button>
       </div>
 
       {workspaceToRemove ? (

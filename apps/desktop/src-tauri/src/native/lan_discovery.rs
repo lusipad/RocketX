@@ -107,8 +107,11 @@ fn identity_account(server_url: &str, user_id: &str) -> Result<String, String> {
 }
 
 fn keychain_entry(server_url: &str, user_id: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, &identity_account(server_url, user_id)?)
-        .map_err(|error| format!("LAN identity keychain is unavailable: {error}"))
+    keyring::Entry::new(
+        &crate::credential_scope::service_name(KEYCHAIN_SERVICE)?,
+        &identity_account(server_url, user_id)?,
+    )
+    .map_err(|error| format!("LAN identity keychain is unavailable: {error}"))
 }
 
 fn random_bytes<const N: usize>() -> Result<[u8; N], String> {

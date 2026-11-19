@@ -81,7 +81,7 @@ export interface CodexProcessInfo {
 
 export interface CodexTransportHandlers {
   onLine: (line: string) => void;
-  onExit: (code: number | null) => void;
+  onExit: (code: number | null, reason?: string) => void;
 }
 
 export interface CodexTransport {
@@ -355,6 +355,7 @@ export class AppServerClient {
   private nextId = 1;
   private pending = new Map<number | string, PendingRequest>();
   private started = false;
+  private generation = 0;
   private currentProcess?: CodexProcessInfo;
 
   constructor(
@@ -368,11 +369,17 @@ export class AppServerClient {
 
   async start(): Promise<CodexProcessInfo> {
     if (this.started && this.currentProcess) return this.currentProcess;
+    const generation = ++this.generation;
     const process = await this.transport.start({
-      onLine: (line) => this.receiveLine(line),
-      onExit: (code) => this.interrupt(new Error(`Codex app-server 已退出${code === null ? '' : `（${code}）`}`)),
+      onLine: (line) => {
+        if (generation === this.generation) this.receiveLine(line);
+      },
+      onExit: (code, reason) => {
+        if (generation === this.generation) this.interrupt(new Error(reason || `Codex app-server 已退出${code === null ? '' : `（${code}）`}`));
+      },
     });
     try {
+      if (generation !== this.generation) throw new Error('Codex app-server 已停止');
       const initialized = await this.request('initialize', {
         clientInfo: { name: 'rocketx', title: 'RocketX', version: '0.23.0' },
         capabilities: {
@@ -384,12 +391,13 @@ export class AppServerClient {
       });
       assertCodexHandshake(initialized.userAgent, process.version);
       await this.transport.write({ method: 'initialized' });
+      if (generation !== this.generation) throw new Error('Codex app-server 已停止');
       this.currentProcess = process;
       this.started = true;
       return process;
     } catch (error) {
       this.currentProcess = undefined;
-      await this.transport.stop().catch(() => undefined);
+      void this.transport.stop().catch(() => undefined);
       throw error;
     }
   }
@@ -427,6 +435,7 @@ export class AppServerClient {
   }
 
   async stop(): Promise<void> {
+    this.generation += 1;
     this.started = false;
     this.currentProcess = undefined;
     this.rejectPending(new Error('Codex app-server 已停止'));
@@ -512,6 +521,7 @@ export class AppServerClient {
   }
 
   private interrupt(error: Error): void {
+    this.generation += 1;
     this.started = false;
     this.currentProcess = undefined;
     this.rejectPending(error);

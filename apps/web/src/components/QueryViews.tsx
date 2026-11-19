@@ -73,11 +73,11 @@ export function WorkItemBoard({
         <div
           key={column.state}
           {...dropHandlers(column.state)}
-          className={`flex max-h-full w-72 shrink-0 flex-col rounded-lg border bg-fill-1 transition ${
+          className={`flex max-h-full w-72 shrink-0 flex-col rounded-2xl border bg-surface-2/80 transition ${
             dragOverState === column.state ? 'border-primary bg-primary-light/40' : 'border-line'
           }`}
         >
-          <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
+          <div className="flex items-center gap-2 border-b border-line-soft px-3.5 py-2.5">
             <span className={`rounded px-1.5 py-0.5 text-xs ${stateBadgeClass(column.state)}`}>
               {column.state}
             </span>
@@ -90,7 +90,7 @@ export function WorkItemBoard({
               return (
                 <div
                   key={w.id}
-                  className={`group relative rounded-md border border-line bg-surface-4 px-3 py-2.5 transition hover:border-primary/50 hover:shadow-sm ${
+                  className={`group relative rounded-xl border border-line bg-surface-4 px-3.5 py-3 shadow-raise transition hover:border-primary/45 hover:shadow-card ${
                     onMove ? 'cursor-grab active:cursor-grabbing' : ''
                   }`}
                 >
@@ -201,7 +201,7 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
         <RiskChips overdue={summary.overdue} stale={summary.stale} unassigned={summary.unassigned} />
       </div>
 
-      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
+      <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {rows.map(({ item: w, depth, hasChildren }) => {
           const isCollapsed = collapsed.has(w.id);
           const nodeStats = stats.get(w.id);
@@ -210,7 +210,7 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
           return (
             <div
               key={w.id}
-              className="group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2"
+              className="group flex items-center border-b border-line-soft transition last:border-b-0 hover:bg-surface-hover"
             >
               <span
                 className="flex h-full shrink-0 items-center"

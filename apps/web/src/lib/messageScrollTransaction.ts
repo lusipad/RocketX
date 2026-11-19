@@ -1,3 +1,5 @@
+import type { RcMessage } from '@rcx/rc-client';
+
 export type MessageScrollEntry = 'latest' | 'locate';
 
 export interface MessageScrollTransaction {
@@ -5,6 +7,8 @@ export interface MessageScrollTransaction {
   rid: string;
   entry: MessageScrollEntry;
   messageId?: string;
+  /** 单独显示的历史片段，避免较早的定位目标改变正常会话的分页游标。 */
+  context?: RcMessage[];
 }
 
 export function nextMessageScrollTransaction(

@@ -176,10 +176,10 @@ function ConversationItem({
           ? shownName
           : '拖到左侧分组可归类；右键更多操作'
       }
-      className={`flex w-full cursor-pointer items-center rounded-lg ${
+      className={`flex w-full cursor-pointer items-center rounded-xl ${
         avatarOnly ? 'justify-center px-1' : 'gap-2.5 px-2.5'
       } ${padY} text-left transition ${
-        active ? 'bg-fill-active' : 'hover:bg-fill-hover'
+        active ? 'bg-surface-4 shadow-raise ring-1 ring-line/80' : 'hover:bg-fill-hover'
       } ${dragging ? 'opacity-40 ring-1 ring-primary ring-inset' : ''}`}
     >
       {showAvatar && (
@@ -407,18 +407,18 @@ export default function ConversationList({
   return (
     <aside
       style={{ width }}
-      className="flex shrink-0 flex-col border-r border-line-strong bg-surface-2"
+      className="flex shrink-0 flex-col border-r border-line bg-surface-2"
     >
       {!avatarOnly && (
-        <div className="flex items-center justify-between px-4 pt-4 pb-2">
+        <div className="flex h-14 shrink-0 items-center justify-between border-b border-line-soft px-4">
           <span className="text-base font-semibold text-ink">{title}</span>
           {newAction && (
             <button
               onClick={openNew}
               title={newAction.label}
-              className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 transition hover:bg-fill-hover hover:text-primary"
             >
-              <Plus size={14} />
+              <Plus size={15} />
             </button>
           )}
         </div>

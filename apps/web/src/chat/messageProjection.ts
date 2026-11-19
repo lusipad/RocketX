@@ -56,7 +56,7 @@ export function messagePreview(msg: RcMessage | undefined): string {
 export function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
   const image = quoted.attachments?.find((attachment) => !!attachment.image_url);
   return {
-    message_link: 'local-quote',
+    message_link: `?msg=${encodeURIComponent(quoted._id)}`,
     author_name: quoted.u.name || quoted.u.username,
     text:
       stripQuotePrefix(stripAgentSessionMarker(quoted.msg)) ||

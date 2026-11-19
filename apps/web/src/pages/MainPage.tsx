@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { buildConversations, useChat } from '../stores/chat';
+import { buildConversations, isViewingConversation, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useUI } from '../stores/ui';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
@@ -22,6 +22,7 @@ import ChatArea from '../components/ChatArea';
 import QuickSwitcher from '../components/QuickSwitcher';
 import FocusDigestCard from '../components/FocusDigestCard';
 import SettingsPage from './SettingsPage';
+import LoginPage from './LoginPage';
 import { StartDMDialog } from '../components/NewChatDialogs';
 import { useImLayout } from '../stores/imLayout';
 import {
@@ -70,6 +71,7 @@ export default function MainPage() {
   const switcherCommandCenter = useUI((s) => s.switcherCommandCenter);
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
   const userId = useAuth((s) => s.user?._id);
+  const localMode = useAuth((s) => s.localMode);
 
   const unreadAlert = usePrefs((s) => s.prefs.unreadAlert);
   const switcherTab = useRef<'messages' | undefined>(undefined);
@@ -100,6 +102,14 @@ export default function MainPage() {
 
   // 自动离开：无操作超时置 away，活动后恢复 online；监听器/计时器随卸载清理
   useEffect(() => startAutoAway(), []);
+
+  // 离开消息模块即结束此次定位，正常返回时不能再重放旧的搜索或通知跳转。
+  useEffect(() => {
+    const chat = useChat.getState();
+    if (module !== 'messages' && chat.messageScrollTransaction?.entry === 'locate') {
+      chat.scrollToLatest();
+    }
+  }, [module]);
 
   useEffect(() => {
     if (!userId) return;
@@ -133,20 +143,35 @@ export default function MainPage() {
     return () => window.clearInterval(timer);
   }, [userId]);
 
+  useEffect(() => {
+    if (localMode && typeof localStorage !== 'undefined') {
+      if (!localStorage.getItem('rcx-ui') && module === 'messages') {
+        useUI.getState().setModule('butler-view');
+      }
+    }
+  }, [localMode, module]);
+
   // 用户点回窗口 → 停止任务栏闪烁（Windows 点开会自动停，macOS Dock 弹跳要手动清）
   useEffect(() => {
     void restoreTrayAttention();
-    const onFocus = () => {
-      void clearTaskbarFlash();
+    const markViewedRoomRead = () => {
       const chat = useChat.getState();
       const activeRid = chat.activeRid;
       const subscription = activeRid ? chat.subscriptions[activeRid] : undefined;
-      if (activeRid && subscription && (subscription.unread > 0 || subscription.alert)) {
+      if (activeRid && subscription && (subscription.unread > 0 || subscription.alert) && isViewingConversation(activeRid)) {
         void chat.markConvRead(activeRid);
       }
     };
+    const onFocus = () => {
+      void clearTaskbarFlash();
+      markViewedRoomRead();
+    };
+    const unsubscribe = useUI.subscribe((next, prev) => {
+      if (next.module === 'messages' && prev.module !== 'messages') markViewedRoomRead();
+    });
     window.addEventListener('focus', onFocus);
     return () => {
+      unsubscribe();
       window.removeEventListener('focus', onFocus);
       void clearTrayAttention();
     };
@@ -158,6 +183,7 @@ export default function MainPage() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  const navRailCollapsed = useUI((s) => s.navRailCollapsed);
   const narrowLayout = windowWidth < NARROW_LAYOUT_WIDTH;
   const userGroupCollapsed = narrowLayout ? !narrowGroupExpanded : savedGroupCollapsed;
   const groupCollapsed = groupFilterPanelState.panelCollapsed || userGroupCollapsed;
@@ -166,7 +192,7 @@ export default function MainPage() {
     Math.max(
       MIN_CONVERSATION_WIDTH,
       windowWidth -
-        NAV_WIDTH -
+        (navRailCollapsed ? 60 : NAV_WIDTH) -
         (groupCollapsed ? COLLAPSED_GROUP_WIDTH : GROUP_WIDTH) -
         RESIZER_WIDTH -
         MIN_CHAT_WIDTH,
@@ -355,57 +381,60 @@ export default function MainPage() {
   }, []);
 
   return (
-    <div className={`flex h-full min-h-[640px] overflow-hidden bg-fill-2 ${
-      module === 'butler-view' ? 'main-page-butler min-w-0' : 'min-w-[940px]'
+    <div className={`flex h-full min-h-[640px] overflow-hidden bg-surface-1 ${
+      module === 'butler-view' ? 'main-page-butler min-w-0' :
+        localMode && module === 'messages' ? 'min-w-0' : 'min-w-[940px]'
     }`}>
       <NavRail onOpenShortcuts={() => setShortcutsOpen(true)} />
-      {module === 'messages' ? (
-        <>
-          <GroupFilter collapsed={groupCollapsed} onCollapse={toggleGroupFilter} />
-          <ConversationList width={conversationWidth} />
-          <div
-            role="separator"
-            aria-label="调整会话列表宽度"
-            aria-orientation="vertical"
-            aria-valuemin={MIN_CONVERSATION_WIDTH}
-            aria-valuemax={maxConversationWidth}
-            aria-valuenow={Math.round(conversationWidth)}
-            tabIndex={0}
-            title="拖动调整会话列表宽度，双击恢复默认"
-            onDoubleClick={() => {
-              clearConversationPanelNarrowing();
-              resetConversationWidth();
-            }}
-            onPointerDown={onResizePointerDown}
-            onPointerMove={onResizePointerMove}
-            onPointerUp={finishResize}
-            onPointerCancel={finishResize}
-            onKeyDown={(event) => {
-              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
-                event.preventDefault();
-                const delta = event.key === 'ArrowLeft' ? -10 : 10;
-                clearConversationPanelNarrowing();
-                setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
-              } else if (event.key === 'Home') {
-                event.preventDefault();
+      <div className="rcx-app-stage flex min-h-0 min-w-0 flex-1 overflow-hidden bg-surface-3">
+        {module === 'messages' ? (localMode ? <LoginPage embedded /> : (
+          <>
+            <GroupFilter collapsed={groupCollapsed} onCollapse={toggleGroupFilter} />
+            <ConversationList width={conversationWidth} />
+            <div
+              role="separator"
+              aria-label="调整会话列表宽度"
+              aria-orientation="vertical"
+              aria-valuemin={MIN_CONVERSATION_WIDTH}
+              aria-valuemax={maxConversationWidth}
+              aria-valuenow={Math.round(conversationWidth)}
+              tabIndex={0}
+              title="拖动调整会话列表宽度，双击恢复默认"
+              onDoubleClick={() => {
                 clearConversationPanelNarrowing();
                 resetConversationWidth();
-              }
-            }}
-            style={{ touchAction: 'none' }}
-            className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-2 outline-none focus:bg-primary-light"
-          >
-            <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
-          </div>
-          <ChatArea hasUnread={hasUnread} onNextUnread={openNextUnread} />
-        </>
-      ) : ActiveModule ? (
-        <ActiveModule />
-      ) : (
-        <SettingsPage />
-      )}
+              }}
+              onPointerDown={onResizePointerDown}
+              onPointerMove={onResizePointerMove}
+              onPointerUp={finishResize}
+              onPointerCancel={finishResize}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+                  event.preventDefault();
+                  const delta = event.key === 'ArrowLeft' ? -10 : 10;
+                  clearConversationPanelNarrowing();
+                  setConversationWidth(Math.min(maxConversationWidth, conversationWidth + delta));
+                } else if (event.key === 'Home') {
+                  event.preventDefault();
+                  clearConversationPanelNarrowing();
+                  resetConversationWidth();
+                }
+              }}
+              style={{ touchAction: 'none' }}
+              className="group relative flex w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-surface-2 outline-none focus:bg-primary-light"
+            >
+              <span className="h-full w-px bg-line transition-colors group-hover:bg-primary/50 group-focus:bg-primary" />
+              <span className="pointer-events-none absolute h-8 w-1 rounded-full bg-transparent transition-all group-hover:bg-primary group-focus:bg-primary" />
+            </div>
+            <ChatArea hasUnread={hasUnread} onNextUnread={openNextUnread} />
+          </>)) : module === 'settings' ? <SettingsPage /> : ActiveModule ? (
+          <ActiveModule />
+        ) : (
+          <div className="flex flex-1 items-center justify-center bg-surface-3 text-sm text-ink-3">正在准备本地工作区…</div>
+        )}
+      </div>
       {(connection === 'reconnecting' || connection === 'connecting') && (
-        <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-fill-active px-4 py-1.5 text-xs text-ink shadow-lg">
+        <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-surface-4/95 px-4 py-1.5 text-xs text-ink shadow-pop backdrop-blur-xs">
           连接中，消息推送可能延迟…
         </div>
       )}

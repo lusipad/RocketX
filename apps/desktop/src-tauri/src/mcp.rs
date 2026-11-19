@@ -31,8 +31,11 @@ pub struct McpConfigStatus {
 }
 
 fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(MCP_KEYCHAIN_SERVICE, MCP_KEYCHAIN_ACCOUNT)
-        .map_err(|error| format!("MCP keychain is unavailable: {error}"))
+    keyring::Entry::new(
+        &crate::credential_scope::service_name(MCP_KEYCHAIN_SERVICE)?,
+        MCP_KEYCHAIN_ACCOUNT,
+    )
+    .map_err(|error| format!("MCP keychain is unavailable: {error}"))
 }
 
 pub(crate) fn normalize_server_url(value: &str) -> Result<String, String> {

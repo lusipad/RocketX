@@ -29,7 +29,7 @@ pub struct AgentBotStatus {
 }
 
 fn entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, ACCOUNT)
+    keyring::Entry::new(&crate::credential_scope::service_name(SERVICE)?, ACCOUNT)
         .map_err(|error| format!("Agent bot keychain is unavailable: {error}"))
 }
 

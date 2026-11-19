@@ -656,16 +656,16 @@ export default function Composer() {
   };
 
   const toolBtn =
-    'flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink';
+    'flex h-7 w-7 items-center justify-center rounded-lg text-ink-2 transition hover:bg-fill-hover hover:text-ink';
 
   return (
     <>
-    <div className="relative shrink-0 border-t border-line px-4 pt-2 pb-3">
+    <div className="relative shrink-0 px-4 pt-1.5 pb-3">
       {/* 斜杠命令补全弹层：命令有 27 个，装不下就滚，别把数据砍掉 */}
       {slashQuery !== null && slashCandidates.length > 0 && (
         <div
           ref={slashListRef}
-          className="absolute bottom-full left-4 z-30 mb-1 max-h-72 w-80 overflow-y-auto overscroll-contain rounded-lg bg-surface-4 py-1 shadow-pop"
+          className="absolute bottom-full left-4 z-30 mb-2 max-h-72 w-80 overflow-y-auto overscroll-contain rounded-xl border border-line bg-surface-4 py-1.5 shadow-pop"
         >
           {slashCandidates.map((c, i) => {
             // 服务器给的是 i18n 键名（Slash_Shrug_Description），得翻成人话
@@ -701,7 +701,7 @@ export default function Composer() {
           id="composer-mention-list"
           role="listbox"
           aria-label="提及成员或共享 AI"
-          className="absolute bottom-full left-4 z-30 mb-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg bg-surface-4 py-1 shadow-pop"
+          className="absolute bottom-full left-4 z-30 mb-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-line bg-surface-4 py-1.5 shadow-pop"
         >
           {candidates.map((u, i) => (
             <button
@@ -785,21 +785,23 @@ export default function Composer() {
 
       {/* 引用回复条（飞书交互） */}
       {replyTo && (
-        <div className="mb-1.5 flex items-center gap-2 rounded-md bg-fill-1 px-2.5 py-1.5">
-          <Reply size={14} className="shrink-0 text-ink-3" />
+        <div className="mb-2 flex items-center gap-2 rounded-xl border border-line-soft border-l-2 border-l-primary bg-fill-1/85 px-3 py-1.5">
+          <Reply size={14} className="shrink-0 text-primary" />
           <span className="min-w-0 flex-1 truncate text-xs text-ink-2">
             回复 {replyTo.u.name || replyTo.u.username}：
             {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg)) || '[卡片消息]'}
           </span>
           <button
             onClick={() => setReplyTo(null)}
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-ink-3 hover:bg-fill-hover"
+            aria-label="取消引用回复"
+            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-ink"
           >
             <X size={12} />
           </button>
         </div>
       )}
-      <div className="flex items-center gap-1 pb-1.5">
+      <div className="rounded-2xl border border-line bg-surface-4 shadow-card transition focus-within:border-primary/70 focus-within:ring-2 focus-within:ring-primary/15">
+      <div className="flex items-center gap-1 border-b border-line-soft px-2.5 py-1.5">
         <button
           title="表情"
           className={toolBtn}
@@ -926,7 +928,7 @@ export default function Composer() {
       {paramHint && (
         <div
           data-command-hint
-          className="mb-1.5 flex items-baseline gap-2 rounded-md bg-fill-1 px-2.5 py-1.5"
+          className="mx-2.5 mt-2 flex items-baseline gap-2 rounded-xl border border-line-soft bg-fill-1/80 px-3 py-1.5"
         >
           <span className="shrink-0 text-xs text-ink-2">
             {paramHint.params || '无参数'}
@@ -937,7 +939,7 @@ export default function Composer() {
           )}
         </div>
       )}
-      <div className="flex items-end gap-2">
+      <div className="flex items-end gap-2 px-3 py-2">
         <textarea
           ref={textareaRef}
           data-composer-input
@@ -963,16 +965,18 @@ export default function Composer() {
               ? '输入消息，Ctrl + Enter 发送，Enter 换行'
               : '输入消息，Enter 发送，Alt + Enter 换行'
           }
-          className="max-h-40 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition [field-sizing:content] focus:border-primary"
+          className="max-h-40 min-h-8 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-relaxed text-ink outline-none [field-sizing:content]"
         />
         <button
           onClick={() => void doSend()}
           disabled={!text.trim()}
           title="发送"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-primary text-white transition hover:bg-primary-hover active:bg-primary-active disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover active:bg-primary-active disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <SendHorizontal size={16} />
+          <SendHorizontal size={15} />
+          <span>发送</span>
         </button>
+      </div>
       </div>
     </div>
     <UploadConfirm caption={text} onSent={clearInput} />

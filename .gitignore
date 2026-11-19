@@ -3,6 +3,7 @@ dist/
 build/
 target/
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/pi-runtime/generated/
 *.log
 .env
 .env.local

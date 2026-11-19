@@ -110,6 +110,7 @@ export function createStartupCoordinator({
   const limits = { ...DEFAULT_TIMEOUTS, ...timeouts };
   let state: StartupState = { stage: 'idle', operation: null, attempt: 0, error: null };
   let inFlight: Promise<void> | null = null;
+  let runAccount: string | null | undefined;
   let generation = 0;
 
   const publish = (
@@ -149,6 +150,7 @@ export function createStartupCoordinator({
       assertCurrent();
 
       const auth = steps.readAuth();
+      runAccount = auth.userId;
       if (auth.status !== 'authed' || !auth.userId) {
         publish(runGeneration, 'guest');
         return;
@@ -186,8 +188,16 @@ export function createStartupCoordinator({
   };
 
   const start = (): Promise<void> => {
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      // 同一账号共享启动。切换账号时停止旧轮次的后续阶段，等待正在执行的步骤退出。
+      if (runAccount !== undefined && runAccount !== steps.readAuth().userId) {
+        generation += 1;
+        return inFlight.then(start);
+      }
+      return inFlight;
+    }
     inFlight = run().finally(() => {
+      runAccount = undefined;
       inFlight = null;
     });
     return inFlight;

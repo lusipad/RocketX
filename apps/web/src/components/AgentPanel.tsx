@@ -1,7 +1,6 @@
 import { Bot, Check, ChevronLeft, Copy, Loader2, Play, Share2, Square, Users, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { agentSessionCardSupersedesLocal, type AgentSessionCard } from '../agent/card';
-import type { DshStartConfiguration } from '../agent/dsh/HostedDshController';
 import { agentBackend, type AgentBackend, type AgentSession } from '../agent/session';
 import { permissionRequestSummary } from '../agent/safety';
 import {
@@ -15,11 +14,7 @@ import { openDesktopDialog } from '../platform/desktopDialog';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { toast } from '../stores/toast';
 import { useChat } from '../stores/chat';
-import {
-  prepareSharedDshStartConfiguration,
-  releaseSharedDshStartConfiguration,
-  useSharedAgent,
-} from '../stores/sharedAgent';
+import { useSharedAgent } from '../stores/sharedAgent';
 import {
   environmentIsBusy,
   findEnvironmentByPath,
@@ -30,7 +25,6 @@ import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
 import PanelShell from './PanelShell';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
-import DshQuestionCard from './DshQuestionCard';
 
 function approvalSummary(method: string, params: unknown): string {
   const value = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
@@ -51,7 +45,7 @@ function projectName(path: string): string {
 }
 
 function backendLabel(backend: AgentBackend): string {
-  return backend === 'deepseek' ? 'DeepSeek' : 'Codex';
+  return backend === 'deepseek' ? 'DeepSeek (历史)' : 'Pi';
 }
 
 function backendDisplayName(backend: AgentBackend | null): string {
@@ -74,14 +68,6 @@ function effortLabel(effort: string): string {
   return ({ low: '低', medium: '中', high: '高', xhigh: '超高' } as Record<string, string>)[effort] ?? effort;
 }
 
-type DshModelSelection = NonNullable<DshStartConfiguration['models']['defaultSelection']>;
-
-function dshModelKey(selection: Pick<DshModelSelection, 'provider' | 'model'>): string {
-  return JSON.stringify([selection.provider, selection.model]);
-}
-
-const dshReleaseTimers = new Map<string, number>();
-
 function remoteBackend(card: AgentSessionCard): AgentBackend {
   return card.backend === 'deepseek' ? 'deepseek' : 'codex';
 }
@@ -97,12 +83,6 @@ export default function AgentPanel({
   const [runtimeModelOverride, setRuntimeModelOverride] = useState<string>();
   const [runtimeEffortOverride, setRuntimeEffortOverride] = useState<string | null>();
   const [runtimePermissionOverride, setRuntimePermissionOverride] = useState<AgentSession['runtimePermissionPreset']>();
-  const [dshConfiguration, setDshConfiguration] = useState<DshStartConfiguration | null>(null);
-  const [dshConfigurationStatus, setDshConfigurationStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
-  const [dshConfigurationError, setDshConfigurationError] = useState('');
-  const [dshModelOverride, setDshModelOverride] = useState<DshModelSelection>();
-  const [dshAgentOverride, setDshAgentOverride] = useState<string>();
-  const [dshPermissionOverride, setDshPermissionOverride] = useState<string>();
   const [autoHost, setAutoHost] = useState(false);
   const panel = useChat((state) => state.rightPanel);
   const tmid = sessionKey ?? (panel?.kind === 'agent' ? panel.tmid : null);
@@ -132,7 +112,6 @@ export default function AgentPanel({
   const sessionTraces = useSharedAgent((state) => (tmid ? state.traces[tmid] : undefined));
   const allApprovals = useSharedAgent((state) => state.approvals);
   const allInputs = useSharedAgent((state) => state.inputs);
-  const allDshQuestions = useSharedAgent((state) => state.dshQuestions);
   const allMemberRequests = useSharedAgent((state) => state.memberRequests);
   const traces = sessionTraces ?? [];
   const approvals = useMemo(
@@ -143,10 +122,6 @@ export default function AgentPanel({
     () => allInputs.filter((item) => item.tmid === tmid),
     [allInputs, tmid],
   );
-  const dshQuestions = useMemo(
-    () => allDshQuestions.filter((item) => item.tmid === tmid),
-    [allDshQuestions, tmid],
-  );
   const members = useMemo(
     () => allMemberRequests.filter((item) => item.tmid === tmid),
     [allMemberRequests, tmid],
@@ -156,7 +131,6 @@ export default function AgentPanel({
   const approveMember = useSharedAgent((state) => state.approveMemberRequest);
   const resolveApproval = useSharedAgent((state) => state.resolveApproval);
   const resolveInput = useSharedAgent((state) => state.resolveInput);
-  const resolveDshQuestion = useSharedAgent((state) => state.resolveDshQuestion);
   const setAccess = useSharedAgent((state) => state.setAccess);
   const resume = useSharedAgent((state) => state.resumeSession);
   const end = useSharedAgent((state) => state.endSession);
@@ -168,13 +142,7 @@ export default function AgentPanel({
   const refreshCatalog = useCodexWorkspace((state) => state.refreshCatalog);
   const openButlerConversation = useUI((state) => state.openButlerConversation);
   const configuredProvider = useUI((state) => state.aiRuntimeProvider);
-  const selectedBackend: AgentBackend | null = configuredProvider === 'deepseek'
-    ? 'deepseek'
-    : configuredProvider === 'codex'
-      ? 'codex'
-      : null;
-  const hostingAlreadyExists = !!(session && session.status !== 'ended')
-    || agentSessionCardSupersedesLocal(session, remoteCard);
+  const selectedBackend: AgentBackend | null = configuredProvider === 'pi' ? 'codex' : null;
   const [transferring, setTransferring] = useState(false);
   const [startFailure, setStartFailure] = useState('');
   const [startingTmid, setStartingTmid] = useState<string | null>(null);
@@ -193,12 +161,6 @@ export default function AgentPanel({
     setRuntimeModelOverride(undefined);
     setRuntimeEffortOverride(undefined);
     setRuntimePermissionOverride(undefined);
-    setDshConfiguration(null);
-    setDshConfigurationStatus('idle');
-    setDshConfigurationError('');
-    setDshModelOverride(undefined);
-    setDshAgentOverride(undefined);
-    setDshPermissionOverride(undefined);
     setStartFailure('');
   }, [rid, tmid]);
 
@@ -206,49 +168,6 @@ export default function AgentPanel({
     if (!desktopRuntime || selectedBackend !== 'codex' || !currentProject || models.length > 0) return;
     void refreshCatalog().catch((reason) => toast.error(reason, '读取 AI 托管模型失败'));
   }, [currentProject, desktopRuntime, models.length, refreshCatalog, selectedBackend]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setDshModelOverride(undefined);
-    setDshAgentOverride(undefined);
-    setDshPermissionOverride(undefined);
-    if (!desktopRuntime || selectedBackend !== 'deepseek' || !tmid || !selectedProject || hostingAlreadyExists) {
-      setDshConfiguration(null);
-      setDshConfigurationStatus('idle');
-      setDshConfigurationError('');
-      if (tmid) void releaseSharedDshStartConfiguration(tmid);
-      return () => { cancelled = true; };
-    }
-    setDshConfiguration(null);
-    setDshConfigurationStatus('loading');
-    setDshConfigurationError('');
-    void prepareSharedDshStartConfiguration(tmid, selectedProject)
-      .then((configuration) => {
-        if (cancelled) return;
-        setDshConfiguration(configuration);
-        setDshConfigurationStatus('ready');
-      })
-      .catch((reason) => {
-        if (cancelled) return;
-        setDshConfigurationError(reason instanceof Error ? reason.message : String(reason));
-        setDshConfigurationStatus('error');
-      });
-    return () => { cancelled = true; };
-  }, [desktopRuntime, hostingAlreadyExists, selectedBackend, selectedProject, tmid]);
-
-  useEffect(() => {
-    if (!tmid) return undefined;
-    const pending = dshReleaseTimers.get(tmid);
-    if (pending !== undefined) window.clearTimeout(pending);
-    dshReleaseTimers.delete(tmid);
-    return () => {
-      const timer = window.setTimeout(() => {
-        dshReleaseTimers.delete(tmid);
-        void releaseSharedDshStartConfiguration(tmid);
-      }, 0);
-      dshReleaseTimers.set(tmid, timer);
-    };
-  }, [tmid]);
 
   if (!tmid || !rid) return null;
   const roomSession = tmid.startsWith('room:');
@@ -274,7 +193,9 @@ export default function AgentPanel({
     : remoteSession
       ? remoteBackend(remoteSession)
       : selectedBackend;
-  const providerCompatible = !!visibleSession && configuredProvider === agentBackend(visibleSession);
+  const providerCompatible = !!visibleSession
+    && configuredProvider === 'pi'
+    && agentBackend(visibleSession) === 'codex';
   const hostingModel = runtimeModelOverride ?? selectedModel;
   const hostingModelDetails = models.find((model) => model.model === hostingModel || model.id === hostingModel);
   const requestedHostingEffort = runtimeEffortOverride !== undefined
@@ -293,46 +214,15 @@ export default function AgentPanel({
   const activeCodexRuntimeSummary = session
     ? codexRuntimeSummary(session.runtimeModel, session.runtimeEffort, session.runtimePermissionPreset)
     : '未加载当前托管会话快照';
-  const dshDefaultSelection = dshConfiguration?.models.defaultSelection;
-  const dshDefaultModel = dshConfiguration?.models.groups
-    .find((group) => group.id === dshDefaultSelection?.provider)
-    ?.models.find((model) => model.id === dshDefaultSelection?.model);
-  const dshEffectiveSelection = dshModelOverride ?? dshDefaultSelection;
-  const dshEffectiveModelGroup = dshConfiguration?.models.groups.find((group) => group.id === dshEffectiveSelection?.provider);
-  const dshEffectiveModel = dshEffectiveModelGroup?.models.find((model) => model.id === dshEffectiveSelection?.model);
-  const dshEffectiveEffort = dshEffectiveSelection?.reasoningEffort
-    ?? dshEffectiveModel?.reasoning?.defaultEffort;
-  const dshDefaultAgent = dshConfiguration?.agentPresets.find((preset) => preset.id === dshConfiguration.defaultAgentPreset);
-  const dshEffectiveAgent = dshConfiguration?.agentPresets.find((preset) => preset.id === dshAgentOverride)
-    ?? dshDefaultAgent;
-  const dshEffectivePermission = dshConfiguration?.permission?.options.find((option) => (
-    option.id === (dshPermissionOverride ?? dshConfiguration.permission?.defaultPreset)
-  ));
-  const nextDshRuntimeSummary = dshConfigurationStatus === 'ready'
-    ? `开启配置：${dshEffectiveModel?.name ?? dshEffectiveSelection?.model ?? 'DSH 默认模型'} · ${
-      dshEffectiveAgent?.name ?? dshEffectiveAgent?.id ?? '默认 Agent'
-    } · ${dshEffectivePermission?.name ?? dshConfiguration?.permission?.defaultPreset ?? '默认权限'}`
-    : dshConfigurationStatus === 'error'
-      ? '启动配置读取失败'
-      : '正在读取 DSH 启动配置';
   const startBlockReason = !selectedBackend
-    ? '当前未启用 AI，请在设置中选择 Codex 或 DSH 并重启应用。'
+    ? '当前未启用 AI，请在设置中启用 Pi。'
     : !selectedProject
       ? '这台设备尚未添加托管项目；项目目录是本机配置，不会随账号自动同步。'
-      : selectedBackend === 'codex' && !hostingModel
-        ? '尚未读取到可用 Codex 模型，请检查 Codex 配置或稍后重试。'
-        : selectedBackend === 'deepseek' && dshConfigurationStatus === 'error'
-          ? `DSH 启动配置尚未就绪：${dshConfigurationError || '读取模型、Agent 或权限失败'}`
-          : selectedBackend === 'deepseek' && dshConfigurationStatus !== 'ready'
-            ? 'DSH 启动配置尚未就绪，正在读取模型、Agent 和权限。'
-            : null;
-  const activeDshRuntimeSummary = session
-    ? `${session.dshModelSelection?.model ?? 'DSH 默认模型'} · ${
-      session.dshAgentPreset ?? '默认 Agent'
-    } · ${session.dshPermissionPreset ?? '默认权限'}`
-    : nextDshRuntimeSummary;
+      : !hostingModel
+        ? '尚未读取到可用 Pi 模型，请检查 Pi 配置或稍后重试。'
+        : null;
   const backendSummary = currentBackend === 'deepseek'
-    ? (session ? activeDshRuntimeSummary : nextDshRuntimeSummary)
+    ? '历史 DSH 托管会话（只读保留）'
     : currentBackend === 'codex'
       ? (session ? activeCodexRuntimeSummary : nextCodexRuntimeSummary)
       : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。';
@@ -455,11 +345,9 @@ export default function AgentPanel({
                 <div className="mb-3 text-left text-xs text-ink-3">
                   <span className="mb-1 block">运行时：{backendDisplayName(selectedBackend)}</span>
                   <div className="mt-1 text-ink-3">
-                    {selectedBackend === 'deepseek'
-                      ? nextDshRuntimeSummary
-                      : selectedBackend === 'codex'
-                        ? nextCodexRuntimeSummary
-                        : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。'}
+                    {selectedBackend === 'codex'
+                      ? nextCodexRuntimeSummary
+                      : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。'}
                   </div>
                 </div>
                 <label className="block text-left text-xs text-ink-3">
@@ -530,138 +418,12 @@ export default function AgentPanel({
                     </label>
                   </div>
                 ) : null}
-                {selectedBackend === 'deepseek' ? (
-                  <div className="mt-3">
-                    {dshConfigurationStatus === 'loading' || dshConfigurationStatus === 'idle' ? (
-                      <div className="flex h-20 items-center justify-center gap-2 rounded-md border border-line bg-fill-1 text-xs text-ink-3">
-                        <Loader2 size={14} className="animate-spin" /> 正在读取 DSH 模型、Agent 和权限…
-                      </div>
-                    ) : dshConfigurationStatus === 'error' ? (
-                      <div className="rounded-md border border-danger/30 bg-danger/10 p-3 text-left text-xs text-danger">
-                        <div>{dshConfigurationError || '读取 DSH 启动配置失败'}</div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!tmid || !selectedProject) return;
-                            setDshConfigurationStatus('loading');
-                            setDshConfigurationError('');
-                            void releaseSharedDshStartConfiguration(tmid)
-                              .then(() => prepareSharedDshStartConfiguration(tmid, selectedProject))
-                              .then((configuration) => {
-                                setDshConfiguration(configuration);
-                                setDshConfigurationStatus('ready');
-                              })
-                              .catch((reason) => {
-                                setDshConfigurationError(reason instanceof Error ? reason.message : String(reason));
-                                setDshConfigurationStatus('error');
-                              });
-                          }}
-                          className="mt-2 rounded border border-danger/40 px-2 py-1 hover:bg-danger/10"
-                        >
-                          重试
-                        </button>
-                      </div>
-                    ) : dshConfiguration ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        <label className="col-span-2 block text-left text-xs text-ink-3">
-                          <span className="mb-1 block">模型</span>
-                          <select
-                            aria-label="DSH AI 托管模型"
-                            value={dshModelOverride ? dshModelKey(dshModelOverride) : ''}
-                            onChange={(event) => {
-                              if (!event.target.value) {
-                                setDshModelOverride(undefined);
-                                return;
-                              }
-                              const [provider, modelId] = JSON.parse(event.target.value) as [string, string];
-                              const model = dshConfiguration.models.groups
-                                .find((group) => group.id === provider)
-                                ?.models.find((item) => item.id === modelId);
-                              setDshModelOverride({
-                                provider,
-                                model: modelId,
-                                ...(model?.reasoning?.defaultEffort ? { reasoningEffort: model.reasoning.defaultEffort } : {}),
-                              });
-                            }}
-                            className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
-                          >
-                            <option value="">
-                              沿用 DSH 默认（{dshDefaultModel?.name ?? dshDefaultSelection?.model ?? '当前模型'}）
-                            </option>
-                            {dshConfiguration.models.groups.flatMap((group) => group.models.map((model) => (
-                              <option key={`${group.id}:${model.id}`} value={dshModelKey({ provider: group.id, model: model.id })}>
-                                {group.name} · {model.name}
-                              </option>
-                            )))}
-                          </select>
-                        </label>
-                        <label className="block text-left text-xs text-ink-3">
-                          <span className="mb-1 block">推理强度</span>
-                          <select
-                            aria-label="DSH AI 托管推理强度"
-                            value={dshEffectiveEffort ?? ''}
-                            disabled={!dshModelOverride || !dshEffectiveModel?.reasoning?.efforts.length}
-                            onChange={(event) => setDshModelOverride((current) => (
-                              current ? { ...current, reasoningEffort: event.target.value || undefined } : current
-                            ))}
-                            className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary disabled:opacity-60"
-                          >
-                            {!dshEffectiveModel?.reasoning?.efforts.length ? <option value="">模型默认</option> : null}
-                            {dshEffectiveModel?.reasoning?.efforts.map((effort) => (
-                              <option key={effort.id} value={effort.id}>{effort.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="block text-left text-xs text-ink-3">
-                          <span className="mb-1 block">Agent</span>
-                          <select
-                            aria-label="DSH AI 托管 Agent"
-                            value={dshAgentOverride ?? ''}
-                            onChange={(event) => setDshAgentOverride(event.target.value || undefined)}
-                            className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
-                          >
-                            <option value="">
-                              沿用 DSH 默认（{dshDefaultAgent?.name ?? dshDefaultAgent?.id ?? '当前 Agent'}）
-                            </option>
-                            {dshConfiguration.agentPresets.map((preset) => (
-                              <option key={preset.id} value={preset.id} disabled={!!preset.broken}>
-                                {preset.name ?? preset.id}{preset.broken ? `（不可用：${preset.broken}）` : ''}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="col-span-2 block text-left text-xs text-ink-3">
-                          <span className="mb-1 block">权限</span>
-                          <select
-                            aria-label="DSH AI 托管权限"
-                            value={dshPermissionOverride ?? ''}
-                            onChange={(event) => setDshPermissionOverride(event.target.value || undefined)}
-                            className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
-                          >
-                            <option value="">
-                              沿用 DSH 默认（{dshEffectivePermission?.name ?? dshConfiguration.permission?.defaultPreset ?? '当前权限'}）
-                            </option>
-                            {dshConfiguration.permission?.options.map((option) => (
-                              <option key={option.id} value={option.id}>{option.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                        {dshModelOverride ? (
-                          <div className="col-span-2 text-left text-xs leading-4 text-warning">
-                            DSH 当前接口会把这次显式模型选择同步为后续会话的默认模型。
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
               </div>
               <button
                 disabled={
                   starting
                   || !selectedBackend
-                  || (!!selectedProject && selectedBackend === 'codex' && !hostingModel)
-                  || (!!selectedProject && selectedBackend === 'deepseek' && dshConfigurationStatus !== 'ready')
+                  || (!!selectedProject && !hostingModel)
                 }
                 onClick={() => {
                   if (!selectedProject) {
@@ -683,9 +445,6 @@ export default function AgentPanel({
                     runtimeModel: hostingModel || undefined,
                     runtimeEffort: hostingEffort,
                     runtimePermissionPreset: hostingPermissionPreset,
-                    dshModelSelection: dshModelOverride,
-                    dshAgentPreset: dshAgentOverride,
-                    dshPermissionPreset: dshPermissionOverride,
                   };
                   setStartFailure('');
                   setStartingTmid(tmid);
@@ -740,7 +499,7 @@ export default function AgentPanel({
               <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{backendLabel(agentBackend(session))}</span>
             </div>
             <div className="text-xs text-ink-3">
-              {currentBackend === 'deepseek' ? activeDshRuntimeSummary : activeCodexRuntimeSummary}
+              {currentBackend === 'deepseek' ? '历史 DSH 托管会话（只读保留）' : activeCodexRuntimeSummary}
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-ink-3">指挥范围</span>
@@ -859,7 +618,7 @@ export default function AgentPanel({
             </div>
           </div>
 
-          {(members.length > 0 || approvals.length > 0 || inputs.length > 0 || dshQuestions.length > 0) && (
+          {(members.length > 0 || approvals.length > 0 || inputs.length > 0) && (
             <div className="space-y-3 border-b border-line bg-warning-light/30 p-4">
               {members.map((request) => (
                 <div key={request.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
@@ -916,13 +675,6 @@ export default function AgentPanel({
                   key={input.id}
                   input={input}
                   onResolve={(response) => resolveInput(input.id, response)}
-                />
-              ))}
-              {dshQuestions.map((question) => (
-                <DshQuestionCard
-                  key={question.id}
-                  question={question}
-                  respondQuestion={(answers) => resolveDshQuestion(question.id, answers)}
                 />
               ))}
             </div>

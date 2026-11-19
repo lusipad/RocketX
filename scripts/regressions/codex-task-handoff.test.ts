@@ -4,13 +4,13 @@ import { handoffToCodexTask } from '../../apps/web/src/lib/codexTaskHandoff';
 import { useCodexWorkspace } from '../../apps/web/src/stores/codexWorkspace';
 import { useUI } from '../../apps/web/src/stores/ui';
 
-test('Codex-only handoff 不会在 DSH 进程中偷偷启动 Codex', async () => {
+test('Pi-only handoff 在未启用 AI 时不会启动任务或切页', async () => {
   const previous = useUI.getState().aiRuntimeProvider;
   try {
-    useUI.setState({ aiRuntimeProvider: 'deepseek', module: 'messages' });
+    useUI.setState({ aiRuntimeProvider: 'none', module: 'messages' });
     await assert.rejects(
       () => handoffToCodexTask('检查一下当前房间上下文', '房间任务'),
-      /当前 AI 运行时不是 Codex/,
+      /当前未启用 Pi 运行时/,
     );
     assert.equal(useUI.getState().module, 'messages');
   } finally {
@@ -18,11 +18,11 @@ test('Codex-only handoff 不会在 DSH 进程中偷偷启动 Codex', async () =>
   }
 });
 
-test('Codex 运行时下的 handoff 继续复用统一管家任务面', async () => {
+test('Pi 运行时下的 handoff 继续复用统一管家任务面', async () => {
   const previousUi = useUI.getState();
   const previousWorkspace = useCodexWorkspace.getState();
   try {
-    useUI.setState({ aiRuntimeProvider: 'codex', module: 'messages', butlerView: 'conversation' });
+    useUI.setState({ aiRuntimeProvider: 'pi', module: 'messages', butlerView: 'conversation' });
     useCodexWorkspace.setState({ workspaceRoot: '', composerDraft: '' });
 
     const result = await handoffToCodexTask('检查一下当前房间上下文', '房间任务');

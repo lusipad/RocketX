@@ -64,15 +64,19 @@ test('工作项状态筛选默认隐藏搁置，并兼容旧存储形态', () =>
   assert.equal(readPersistedWorkItemStateFilter(storage), '活动');
 });
 
-test('管家 provider 偏好只接受当前支持的执行视图', () => {
+test('管家 provider 偏好只接受当前支持的执行视图，并把历史 Codex/DeepSeek 迁移为 Pi', () => {
   const storage = new MemoryStorage();
-  assert.equal(readPersistedButlerTaskProvider(storage), 'deepseek');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'pi');
   storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'codex');
-  assert.equal(readPersistedButlerTaskProvider(storage), 'codex');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'pi');
+  storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'deepseek');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'pi');
+  storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'pi');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'pi');
   storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'none');
   assert.equal(readPersistedButlerTaskProvider(storage), 'none');
   storage.setItem(BUTLER_TASK_PROVIDER_STORAGE_KEY, 'unknown');
-  assert.equal(readPersistedButlerTaskProvider(storage), 'deepseek');
+  assert.equal(readPersistedButlerTaskProvider(storage), 'pi');
 });
 
 test('可编程入口只通过 butlerView 驱动任务、已安排、插件三个工作面', () => {

@@ -804,13 +804,15 @@ async function main(): Promise<void> {
   check('拒绝无协议链接', normalizeFavoriteUrl('example.com') === null);
 
   console.log('\n[文件预览支持类型]');
-  const { canPreview, extOf } = await import('../apps/web/src/components/FilePreview');
-  check('可预览：Markdown', canPreview('note.md'));
-  check('可预览：HTML', canPreview('demo.html'));
-  check('可预览：HTM', canPreview('demo.htm'));
-  check('可预览：MP4 视频', canPreview('clip.mp4'));
-  check('可预览：WEBM 视频', canPreview('clip.webm'));
-  check('不可预览：图片', !canPreview('photo.png'));
+  const { filePreviewKind, extOf } = await import('../apps/web/src/components/FilePreview');
+  check('可预览：Markdown', filePreviewKind('note.md', 'text/plain') === 'markdown');
+  check('可预览：HTML / HTM', ['demo.html', 'demo.htm'].every((name) => filePreviewKind(name) === 'html'));
+  check('可预览：MP4 / WEBM 视频', ['clip.mp4', 'clip.webm'].every((name) => filePreviewKind(name) === 'video'));
+  check('可预览：通用 MIME 的图片', filePreviewKind('photo.png', 'application/octet-stream') === 'image');
+  check('可预览：有 MIME 的无扩展名 PDF、JSON', filePreviewKind('报告', 'application/pdf') === 'pdf' &&
+    filePreviewKind('数据', 'application/vnd.api+json') === 'text');
+  check('可预览：OGG 的音频与视频', filePreviewKind('录音.ogg') === 'audio' && filePreviewKind('a.ogg', 'video/ogg') === 'video');
+  check('二进制 Office 附件保留下载入口', filePreviewKind('预算.xlsx') === null);
   check('扩展名统一小写：HTM', extOf('DASHBOARD.HTM') === 'htm');
 
   console.log('\n[ADO · 工作项模板兼容性]');

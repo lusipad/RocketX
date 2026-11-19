@@ -8,7 +8,7 @@ import { humanError, toast } from '../stores/toast';
 import { fmtConvTime, fmtSize } from '../lib/format';
 import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { saveFile } from '../lib/download';
-import FilePreview, { canPreview } from './FilePreview';
+import FilePreview, { filePreviewKind } from './FilePreview';
 import ImageLightbox from './ImageLightbox';
 import PanelShell from './PanelShell';
 import { SkeletonList } from './Skeleton';
@@ -17,8 +17,6 @@ import { SkeletonList } from './Skeleton';
 function pathOf(f: RcRoomFile): string {
   return f.url ?? f.path ?? `/file-upload/${f._id}/${encodeURIComponent(f.name)}`;
 }
-
-const isImage = (f: RcRoomFile) => (f.type ?? '').startsWith('image/');
 
 /**
  * 频道文件面板。
@@ -44,6 +42,7 @@ export default function FilesPanel() {
   const [keyword, setKeyword] = useState('');
   const [preview, setPreview] = useState<RcRoomFile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const previewKind = preview && filePreviewKind(preview.name, preview.type);
   const pinyinReady = usePinyinReady();
 
   useEffect(() => {
@@ -66,7 +65,7 @@ export default function FilesPanel() {
   useEffect(() => {
     if (!targetFileId || files.length === 0) return;
     const target = files.find((file) => file._id === targetFileId);
-    if (target && (canPreview(target.name) || isImage(target))) setPreview(target);
+    if (target && filePreviewKind(target.name, target.type)) setPreview(target);
     const timer = setTimeout(() =>
       document.querySelector<HTMLElement>('[data-target-file="true"]')?.scrollIntoView({ block: 'center' }),
     );
@@ -114,7 +113,7 @@ export default function FilesPanel() {
         {!loading &&
           !error &&
           filtered.map((f) => {
-            const previewable = canPreview(f.name) || isImage(f);
+            const previewable = filePreviewKind(f.name, f.type);
             const isTarget = f._id === targetFileId;
             return (
               <div
@@ -126,7 +125,7 @@ export default function FilesPanel() {
                 } ${isTarget ? 'bg-primary-light' : previewable ? 'hover:bg-fill-hover' : ''}`}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-fill-1 text-ink-2">
-                  {isImage(f) ? <ImageIcon size={14} /> : <FileText size={14} />}
+                  {previewable === 'image' ? <ImageIcon size={14} /> : <FileText size={14} />}
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-ink">{f.name}</div>
@@ -134,6 +133,7 @@ export default function FilesPanel() {
                     {[
                       f.user?.name || f.user?.username,
                       fmtSize(f.size),
+                      !previewable && '仅支持下载',
                       f.uploadedAt ? fmtConvTime(tsMs(f.uploadedAt)) : '',
                     ]
                       .filter(Boolean)
@@ -161,9 +161,8 @@ export default function FilesPanel() {
         )}
       </div>
 
-      {/* 图片走灯箱；文本/Markdown/PDF/HTML/常见视频走 FilePreview */}
-      {preview &&
-        (isImage(preview) ? (
+      {preview && previewKind &&
+        (previewKind === 'image' ? (
           <ImageLightbox
             path={pathOf(preview)}
             fileName={preview.name}
@@ -174,6 +173,8 @@ export default function FilesPanel() {
             path={pathOf(preview)}
             fileName={preview.name}
             size={preview.size}
+            kind={previewKind}
+            contentType={preview.type}
             onClose={() => setPreview(null)}
           />
         ))}

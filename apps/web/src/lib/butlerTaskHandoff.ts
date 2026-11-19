@@ -1,10 +1,9 @@
 import { useChat } from '../stores/chat';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
-import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import type { AiRuntimeProvider } from './runtimeMode';
 
-export type ButlerTaskHandoffStatus = 'started' | 'drafted' | 'copied';
+export type ButlerTaskHandoffStatus = 'started' | 'drafted';
 
 export interface ButlerTaskHandoffResult {
   provider: Exclude<AiRuntimeProvider, 'none'>;
@@ -30,8 +29,6 @@ export interface ButlerTaskHandoffDependencies {
   openRoomPanel: (rid: string) => void;
   getCodexWorkspace: () => CodexWorkspaceHandoff;
   draftHostedRoomPrompt: (rid: string, prompt: string) => void;
-  copyDeepSeekPrompt: (prompt: string) => Promise<void>;
-  notifyDeepSeekPaste: () => void;
 }
 
 export function defaultButlerTaskHandoffDependencies(): ButlerTaskHandoffDependencies {
@@ -46,11 +43,6 @@ export function defaultButlerTaskHandoffDependencies(): ButlerTaskHandoffDepende
       const current = chat.drafts[rid]?.trim();
       chat.setDraft(rid, current ? `${current}\n${command}` : command);
     },
-    copyDeepSeekPrompt: async (prompt) => {
-      if (!navigator.clipboard?.writeText) throw new Error('系统剪贴板不可用，无法把任务交给 DSH');
-      await navigator.clipboard.writeText(prompt);
-    },
-    notifyDeepSeekPaste: () => toast.success('任务已复制，请在 DSH 中粘贴发送'),
   };
 }
 
@@ -64,19 +56,12 @@ export async function handoffToButlerTaskWith(
   if (!prompt) throw new Error('任务内容不能为空');
   const trimmedTitle = title.trim().slice(0, 80);
   const provider = deps.getProvider();
-  if (provider === 'none') throw new Error('当前未启用 AI，请先在设置中选择 Codex 或 DSH 并重启 RocketX');
+  if (provider === 'none') throw new Error('当前未启用 AI，请先在设置中启用 Pi');
 
   if (options.preferRoomPanel && options.rid) {
     deps.draftHostedRoomPrompt(options.rid, prompt);
     deps.openRoomPanel(options.rid);
     return { provider, status: 'drafted' };
-  }
-
-  if (provider === 'deepseek') {
-    await deps.copyDeepSeekPrompt(prompt);
-    deps.openConversation();
-    deps.notifyDeepSeekPaste();
-    return { provider, status: 'copied' };
   }
 
   deps.openConversation();

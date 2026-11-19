@@ -42,7 +42,7 @@ import {
   X,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
-import FilePreview, { canPreview } from './FilePreview';
+import FilePreview, { filePreviewKind } from './FilePreview';
 import { isAbortError, saveFile } from '../lib/download';
 import {
   findMessageDownload,
@@ -59,7 +59,7 @@ import Emoji from './Emoji';
 import { fmtSize, fmtTime } from '../lib/format';
 import type { EmojiEntry } from '../lib/emoji';
 import { renderMarkdown, renderMarkdownDoc, LinkifiedText } from '../lib/markdown';
-import { assetUrl, isTauri, openLocalPath, openUncPath, rest } from '../lib/client';
+import { assetUrl, isTauri, normalizeAssetPath, openLocalPath, openUncPath, rest } from '../lib/client';
 import { copyMessageImage } from '../lib/imageClipboard';
 import { permalinkOf, stripQuotePrefix, useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
@@ -183,14 +183,18 @@ function ImageAttachment({
  * 提示一句后退回正常下载，不能只报个错就算了。
  */
 function FileAttachment({
-  att,
-  name: fileName,
+  path,
+  name,
+  contentType,
+  kind,
   size,
   localPath,
   source,
 }: {
-  att: RcMessageAttachment;
-  name?: string;
+  path: string;
+  name: string;
+  contentType?: string;
+  kind: ReturnType<typeof filePreviewKind>;
   size?: number;
   localPath?: string;
   source: DownloadSourceV1;
@@ -201,10 +205,7 @@ function FileAttachment({
   // 下载进度（issue #385）：桌面流式分支回调；网页端由浏览器接管，保持 null
   const [progress, setProgress] = useState<{ loaded: number; total: number | null } | null>(null);
   const downloadAbortRef = useRef<AbortController | null>(null);
-  // 优先用 file.name（原始文件名），attachment.title 在旧数据里可能是编码过的
-  const name = fileName ?? att.title ?? '文件';
-  const path = att.title_link ?? '';
-  const previewable = !localPath && canPreview(name);
+  const previewable = !localPath && kind;
   // 下载记录只在桌面端有本地路径；局域网直传的文件已经有 localPath，不需要再查
   const downloaded = useDownloadHistory((s) =>
     isTauri && !localPath ? findMessageDownload(s.history.records, source) : undefined,
@@ -334,15 +335,19 @@ function FileAttachment({
           </button>
         )}
       </div>
-      {preview && (
+      {preview && previewable && (previewable === 'image' ? (
+        <ImageLightbox path={path} fileName={name} source={source} onClose={() => setPreview(false)} />
+      ) : (
         <FilePreview
           path={path}
           fileName={name}
+          kind={previewable}
+          contentType={contentType}
           size={size}
           source={source}
           onClose={() => setPreview(false)}
         />
-      )}
+      ))}
     </>
   );
 }
@@ -353,7 +358,8 @@ function QuoteCard({ att }: { att: RcMessageAttachment }) {
   const image = findQuoteImage(att);
   const text = quoteAttachmentText(att);
   // message_link 形如 .../channel/xx?msg=<id>
-  const mid = att.message_link?.match(/[?&]msg=([^&]+)/)?.[1];
+  const query = att.message_link?.split('?')[1]?.split('#')[0];
+  const mid = new URLSearchParams(query).get('msg');
 
   return (
     <button
@@ -455,15 +461,27 @@ export function AttachmentCard({
   if (att.message_link) {
     return <QuoteCard att={att} />;
   }
-  // 图片附件（上传的图片）：缩略图给列表，原图给灯箱
-  if (att.image_url) {
-    const name = message.file?.name ?? att.title ?? '图片';
+  const files = message.files?.length ? message.files : message.file ? [message.file] : [];
+  // 有些历史记录只有 title_link。只把与本消息文件元数据匹配的上传地址认作附件。
+  const upload = normalizeAssetPath(att.title_link ?? '').match(/^\/file-upload\/([^/?#]+)\/([^/?#]+)/);
+  const linkedFile = upload && (files.find((f) => encodeURIComponent(f._id) === upload[1]) ??
+    files.find((f) => f.name === upload[2] || encodeURIComponent(f.name) === upload[2]));
+  const file = att.file ?? files.find((f) => f._id === att.fileId) ?? linkedFile ??
+    files.find((f) => f.name === att.title) ?? (!att.fileId ? message.file : undefined);
+  const name = file?.name ?? att.title;
+  const mediaPath = att.video_url || att.audio_url;
+  const contentType = att.video_type || att.audio_type || file?.type;
+  const kind = att.video_url ? 'video' : att.audio_url ? 'audio' : filePreviewKind(name ?? '', contentType);
+  const isFile = att.title_link_download || att.type === 'file' || att.fileId || att.file || linkedFile;
+  const filePath = mediaPath || (isFile && att.title_link);
+  // 视频的 image_url 可能只是封面；点击必须使用视频原件。
+  if (att.image_url && !(filePath && (kind === 'video' || kind === 'audio'))) {
     return (
       <>
         <ImageAttachment
           thumbPath={att.image_url}
           fullPath={att.title_link || att.image_url}
-          name={name}
+          name={name || '图片'}
           dims={att.image_dimensions}
           source={source}
         />
@@ -472,13 +490,15 @@ export function AttachmentCard({
     );
   }
   // 文件附件（上传的文件）
-  if (att.title_link_download && att.title_link) {
+  if (filePath && (message.rocketxLocalPath || safeTitleHref(filePath))) {
     return (
       <>
         <FileAttachment
-          att={att}
-          name={message.file?.name}
-          size={message.file?.size}
+          path={filePath}
+          name={name || (att.video_url ? '视频' : att.audio_url ? '音频' : '文件')}
+          contentType={contentType}
+          kind={kind}
+          size={file?.size}
           localPath={message.rocketxLocalPath}
           source={source}
         />
@@ -742,12 +762,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const highlighted = useChat((s) => s.highlightMid === message._id);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // 被跳转定位时滚动到视野中央
+  // 主会话由 MessageList 定位；话题面板有独立的滚动容器。
   useEffect(() => {
-    if (highlighted) {
+    if (inThread && highlighted) {
       rootRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
-  }, [highlighted]);
+  }, [inThread, highlighted]);
 
   const [editing, setEditing] = useState(false);
   // 超长消息默认折叠成预览（设置 → 消息 可关）；展开状态只影响本机本次展示
@@ -913,11 +933,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const visuallyGrouped = grouped && !hostedAgentAnswer;
   const replyThreadId = message.tmid;
   const agentSessionCard = parseAgentSessionCard(message.msg ?? '', message);
+  // 旧记录或导入的记录有时只有文件元数据。服务端缩略图也是 files 条目，不能再画成独立附件。
+  const attachments: RcMessageAttachment[] = message.attachments?.length ? message.attachments :
+    (message.files?.length ? message.files : message.file ? [message.file] : [])
+      .filter((file) => file.typeGroup !== 'thumb' && file._id && file.name)
+      .map((file) => ({
+        file,
+        title_link: `/file-upload/${encodeURIComponent(file._id)}/${encodeURIComponent(file.name)}`,
+        title_link_download: true,
+      }));
   const bareMedia =
     !visibleText &&
     !message.pinned &&
-    !!message.attachments?.length &&
-    message.attachments.every(
+    !!attachments.length &&
+    attachments.every(
       (a) => (!!a.image_url || !!a.title_link_download) && !a.description?.trim(),
     );
 
@@ -1033,15 +1062,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       onClick: () => void toggleStar(message),
     },
     { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
-    ...(features.ai && getAiRuntimeProvider() === 'codex'
+    ...(features.ai && getAiRuntimeProvider() === 'pi'
       ? [
           {
-            label: aiExtracting ? 'Codex 提取中…' : 'Codex 提取为待办',
+            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为待办',
             icon: aiExtracting ? Loader2 : Sparkles,
             onClick: () => void extractWithAi('todo'),
           },
           {
-            label: aiExtracting ? 'Codex 提取中…' : 'Codex 提取为工作项',
+            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为工作项',
             icon: aiExtracting ? Loader2 : Sparkles,
             onClick: () => void extractWithAi('workitem'),
           },
@@ -1291,10 +1320,10 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   : visibleText
                     ? renderMarkdown(visibleText, myUsername)
                     : null}
-                {!message.msg && !message.attachments?.length ? (
+                {!message.msg && !attachments.length ? (
                   <span className="text-ink-3">[暂不支持的消息类型]</span>
                 ) : null}
-                {message.attachments?.map((att, i) =>
+                {attachments.map((att, i) =>
                   pollInfo && i === pollInfo.attIndex ? null : (
                     <AttachmentCard
                       key={i}

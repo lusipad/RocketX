@@ -19,6 +19,35 @@ const ALICE = {
 const NOW = '2026-07-17T08:00:00.000Z';
 const SERVER = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4173';
 const RELEASE_DESKTOP_E2E = process.env.PLAYWRIGHT_RELEASE_MODE === '1';
+// 一秒、32×24、纯红色的 H.264 Baseline 视频，专门验证下载后的容器和画面都可解码。
+const PREVIEW_VIDEO = readFileSync('tests/ui/fixtures/preview-red.mp4');
+
+async function expectPreviewVideoToPlay(page: Page) {
+  const video = page.locator('video[controls]');
+  await expect(video).toBeVisible();
+  const mediaType = await video.evaluate(async (el: HTMLVideoElement) =>
+    (await fetch(el.currentSrc || el.src)).headers.get('content-type'));
+  expect(mediaType).toBe('video/mp4');
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) =>
+    [el.videoWidth, el.videoHeight, el.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA],
+  )).toEqual([32, 24, true]);
+  const pixel = await video.evaluate((el: HTMLVideoElement) => {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    context.drawImage(el, 0, 0);
+    return Array.from(context.getImageData(4, 4, 1, 1).data);
+  });
+  expect(pixel[0]).toBeGreaterThan(220);
+  expect(pixel[1]).toBeLessThan(32);
+  expect(pixel[2]).toBeLessThan(32);
+  await video.evaluate(async (el: HTMLVideoElement) => {
+    el.muted = true;
+    await el.play();
+  });
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeGreaterThan(0.1);
+  await expect.poll(() => video.evaluate((el: HTMLVideoElement) =>
+    el.getVideoPlaybackQuality().totalVideoFrames)).toBeGreaterThan(1);
+}
 
 async function readStoredTodos(page: Page): Promise<Array<Record<string, unknown>>> {
   return page.evaluate(() => {
@@ -36,6 +65,7 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
   await page.addInitScript(({ config }) => {
     let responseUrl = '';
     let responseBodySent = false;
+    let accountGeneration = 0;
     let autostartEnabled = false;
     let notificationPermission: NotificationPermission = 'default';
     Object.defineProperty(window.Notification, 'permission', {
@@ -57,6 +87,10 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
           currentWebview: { label: 'main' },
         },
         invoke: async (command: string, args?: Record<string, any>) => {
+          if (command === 'butler_db_select_account') {
+            return { accountScope: args?.accountScope, generation: ++accountGeneration };
+          }
+          if (command === 'butler_todo_list') return [];
           if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
           if (command === 'plugin:http|fetch') {
             responseUrl = String(args?.clientConfig?.url ?? '');
@@ -120,6 +154,11 @@ async function installTauriMock(page: Page, workspaceConfig?: Record<string, unk
 async function installFullTauriMock(page: Page) {
   await page.addInitScript(() => {
     let nextRid = 1;
+    let accountGeneration = 0;
+    let piConfig = {
+      provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', defaultModel: 'deepseek-chat',
+      extraModels: ['deepseek-reasoner'], hasApiKey: true, apiKeyHint: '••42',
+    };
     const requests = new Map<number, { method: string; url: string; headers: string[][]; data?: number[] }>();
     const responses = new Map<number, { bytes: number[]; read: boolean }>();
     const normalizeFsPath = (value: string) => value.replace(/\//g, '\\').replace(/\\+/g, '\\').replace(/\\$/, '');
@@ -197,6 +236,9 @@ async function installFullTauriMock(page: Page) {
             (window as unknown as { __failUiScale?: boolean }).__failUiScale
           ) {
             throw new Error('mock zoom failed');
+          }
+          if (command === 'butler_db_select_account') {
+            return { accountScope: invokeArgs?.accountScope, generation: ++accountGeneration };
           }
           if (command === 'allow_http_origin') return new URL(String(invokeArgs?.origin)).origin;
           if (command === 'codex_default_workspace') return 'C:\\Users\\tester\\AppData\\Local\\com.lusipad.rocketx\\codex-projectless';
@@ -332,6 +374,18 @@ async function installFullTauriMock(page: Page) {
                 { text: 'OCR', x: 0.3, y: 0.55, width: 0.2, height: 0.18, spaceAfter: false },
               ],
             };
+          }
+          if (command === 'pi_runtime_probe') {
+            return { ready: true, source: 'bundled', version: '1.5.0', nodeVersion: '22.19.0',
+              packagePath: 'resources/pi-runtime', configuredProvider: piConfig.provider,
+              defaultModel: piConfig.defaultModel, hasCredentials: piConfig.hasApiKey };
+          }
+          if (['acp_agent_list', 'acp_agent_discover', 'acp_process_list', 'acp_local_sessions_discover'].includes(command)) return [];
+          if (command === 'pi_config_read') return piConfig;
+          if (command === 'pi_config_write') {
+            const { apiKey, ...input } = args?.input ?? {};
+            piConfig = { ...piConfig, ...input, hasApiKey: apiKey === undefined ? piConfig.hasApiKey : !!apiKey };
+            return piConfig;
           }
           if (command === 'codex_runtime_probe') {
             const probeWindow = window as Window & { __codexProbeCount?: number };
@@ -825,6 +879,197 @@ test('聊天记录中的 HTML 附件使用严格沙箱预览（issue #383）', a
   await expect(htmlFrame.contentFrame().getByRole('heading', { name: 'Sandboxed HTML preview' })).toBeVisible();
 });
 
+for (const shape of ['带静态封面', '仅含 files 元数据', '仅含旧版 file 元数据']) {
+  test(`聊天记录中的 MP4 视频可解码播放 · ${shape}`, async ({ page }) => {
+    const file = { _id: 'preview', name: 'demo.mp4', type: 'application/octet-stream' };
+    const thumbnail = { _id: 'thumbnail', name: 'cover-thumb.jpg', type: 'image/jpeg', typeGroup: 'thumb' };
+    const upload = shape === '仅含 files 元数据' ? { files: [file, thumbnail] } : { file };
+    if (shape === '仅含旧版 file 元数据') await installFullTauriMock(page);
+    await bootAuthenticated(page, {
+      historyOverrides: {
+        'room-general': [{
+          _id: 'video-message', rid: 'room-general', msg: '', u: ALICE, ts: NOW, ...upload,
+          attachments: shape === '带静态封面' ? [{
+            title: file.name, title_link: '/file-upload/preview/demo.mp4', title_link_download: true,
+            image_url: '/file-upload/thumbnail/cover.jpg',
+          }, { title: '视频使用说明', title_link: 'https://example.org/manual' }] : undefined,
+        }],
+      },
+    });
+    await conversation(page, 'General').click();
+    if (shape === '带静态封面') {
+      await expect(page.getByRole('link', { name: '视频使用说明' })).toHaveAttribute('href', 'https://example.org/manual');
+    }
+    await expect(page.getByRole('button', { name: /cover-thumb/ })).toHaveCount(0);
+    await page.getByRole('button', { name: /demo\.mp4/ }).click({ timeout: 5_000 });
+    await expectPreviewVideoToPlay(page);
+  });
+}
+
+test('聊天中的旧式 HTML 文件链接可预览 GBK 网页', async ({ page }) => {
+  await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': [{
+      _id: 'old-report', rid: 'room-general', msg: '', ts: NOW, u: ALICE,
+      file: { _id: 'html-gbk', name: '报表.htm', type: 'text/html' },
+      attachments: [{ title: '报表.htm', title_link: '/file-upload/html-gbk/report.htm' }],
+    }] },
+  });
+  await page.route('**/file-upload/html-gbk/report.htm', (route) => route.fulfill({
+    contentType: 'application/octet-stream',
+    body: Buffer.concat([
+      Buffer.from('<!doctype html><meta charset=gbk><h1>'),
+      Buffer.from('b2e2cad4b1a8b8e6', 'hex'), // GBK 的“测试报告”
+      Buffer.from('</h1>'),
+    ]),
+  }));
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: /报表\.htm/ }).click({ timeout: 5000 });
+  const frame = page.locator('iframe[title="网页预览"]');
+  await expect(frame).toHaveAttribute('sandbox', '');
+  await expect(frame.contentFrame().getByRole('heading', { name: '测试报告' })).toBeVisible();
+});
+
+test('文件面板可预览超过 2 MiB 的中文 HTML 报告并保留响应字符集', async ({ page }) => {
+  await bootAuthenticated(page);
+  const bytes = Buffer.concat([
+    Buffer.from('<!doctype html><h1>'),
+    Buffer.from('b2e2cad4b1a8b8e6', 'hex'),
+    Buffer.from('</h1><!--'), Buffer.alloc(2 * 1024 * 1024, 0x20), Buffer.from('-->'),
+  ]);
+  await page.route('**/api/v1/channels.files?**', (route) => fulfillJson(route, {
+    files: [{ _id: 'large-report', name: '导出报告', type: 'text/html', size: bytes.length, url: '/file-upload/large/report' }],
+  }));
+  await page.route('**/file-upload/large/report', (route) => route.fulfill({
+    contentType: 'text/html; charset=gb18030', body: bytes,
+  }));
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByText('文件', { exact: true }).click();
+  await page.getByText('导出报告', { exact: true }).click();
+  const frame = page.locator('iframe[title="网页预览"]');
+  await expect(frame).toHaveAttribute('sandbox', '');
+  await expect(frame.contentFrame().getByRole('heading', { name: '测试报告' })).toBeVisible();
+});
+
+test('聊天中的语音附件可从受保护的媒体地址播放', async ({ page }) => {
+  await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [{
+        _id: 'audio-message', rid: 'room-general', msg: '', u: ALICE, ts: '2026-07-17T08:00:30Z',
+        attachments: [{ title: '语音留言', audio_url: '/file-upload/audio-id/voice', audio_type: 'audio/wav' }],
+      }],
+    },
+  });
+  const samples = 800;
+  const wav = Buffer.alloc(44 + samples, 128);
+  wav.write('RIFF'); wav.writeUInt32LE(36 + samples, 4); wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32);
+  wav.writeUInt16LE(8, 34); wav.write('data', 36); wav.writeUInt32LE(samples, 40);
+  await page.route('**/file-upload/audio-id/voice', async (route) => {
+    const authenticated = (await route.request().allHeaders()).cookie?.includes('rc_token=test-token');
+    await route.fulfill({ status: authenticated ? 200 : 401, contentType: 'application/octet-stream', body: wav });
+  });
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: /语音留言/ }).click({ timeout: 5_000 });
+  const player = page.locator('audio[controls]');
+  await expect(player).toBeVisible();
+  await expect.poll(() => player.evaluate((el: HTMLAudioElement) => el.duration)).toBeCloseTo(0.1);
+});
+
+test('房间文件面板根据服务端类型预览没有扩展名的文档', async ({ page }) => {
+  await bootAuthenticated(page);
+  await page.route('**/api/v1/channels.files?**', (route) => fulfillJson(route, {
+    files: [{ _id: 'manual', name: '操作手册', type: 'text/markdown; charset=utf-8', url: '/file-upload/manual/readme' }],
+  }));
+  await page.route('**/file-upload/manual/readme', (route) => route.fulfill({
+    contentType: 'application/octet-stream', body: '# 发布流程',
+  }));
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByText('文件', { exact: true }).click();
+  await page.getByText('操作手册', { exact: true }).click();
+  await expect(page.getByRole('heading', { name: '发布流程' })).toBeVisible();
+});
+
+test('预览期间显示视频读取进度，关闭或发现 HTML 超限会中止传输', async ({ page }) => {
+  await bootAuthenticated(page);
+  await page.route('**/api/v1/channels.files?**', (route) => fulfillJson(route, { files: [
+    { _id: 'partial', name: '录屏.mp4', type: 'video/mp4', url: '/file-upload/partial/video' },
+    { _id: 'oversize', name: '大型报告.html', type: 'text/html', url: '/file-upload/partial/html' },
+  ] }));
+  await page.evaluate(() => {
+    const fetchOriginal = window.fetch;
+    window.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (!url.includes('/file-upload/partial/')) return fetchOriginal(input, init);
+      const isVideo = url.endsWith('/video');
+      const stream = new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(new Uint8Array(4));
+        init?.signal?.addEventListener('abort', () => {
+          sessionStorage.setItem(isVideo ? 'video-aborted' : 'html-aborted', 'yes');
+          controller.error(new DOMException('Aborted', 'AbortError'));
+        }, { once: true });
+      } });
+      return Promise.resolve(new Response(stream, { headers: {
+        'Content-Length': isVideo ? '16' : String(13 * 1024 * 1024),
+      } }));
+    };
+  });
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByText('文件', { exact: true }).click();
+  await page.getByText('录屏.mp4', { exact: true }).click();
+  await expect(page.getByText('正在读取视频 25%')).toBeVisible();
+  await page.getByTitle('关闭（Esc）').click();
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('video-aborted'))).toBe('yes');
+  await page.getByText('大型报告.html', { exact: true }).click();
+  await expect(page.getByText('文件超过 12 MiB，请下载后查看')).toBeVisible();
+  await expect(page.getByRole('button', { name: '直接下载' })).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem('html-aborted'))).toBe('yes');
+});
+
+test('多附件消息按 fileId 选择对应 PDF 并渲染第一页', async ({ page }) => {
+  await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': [{
+        _id: 'multi-doc', rid: 'room-general', msg: '', u: ALICE, ts: '2026-07-17T08:00:30Z',
+        files: [{ _id: 'text', name: '附注.txt', type: 'text/plain' }, { _id: 'pdf', name: '原图说明', type: 'application/pdf' }],
+        attachments: [
+          { type: 'file', fileId: 'text', title_link: '/file-upload/text/note' },
+          { type: 'file', fileId: 'pdf', title_link: '/file-upload/pdf/manual' },
+        ],
+      }],
+    },
+  });
+  // 一页 100×100 的黑色矩形。xref 偏移按当前字节数生成，使测试可区分页面加载与实际绘制。
+  let pdf = '%PDF-1.4\n';
+  const offsets = [0];
+  const stream = '0 0 100 100 re f\n';
+  for (const body of [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}endstream`,
+  ]) {
+    offsets.push(pdf.length);
+    pdf += `${offsets.length - 1} 0 obj\n${body}\nendobj\n`;
+  }
+  const xref = pdf.length;
+  pdf += 'xref\n0 5\n0000000000 65535 f \n';
+  for (const offset of offsets.slice(1)) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  pdf += `trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  await page.route('**/file-upload/pdf/manual', (route) => route.fulfill({
+    contentType: 'application/octet-stream', body: pdf,
+  }));
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: /原图说明/ }).click();
+  const canvas = page.locator('canvas[data-pdf-page="1"]');
+  await expect(canvas).toBeVisible();
+  await expect.poll(() => canvas.evaluate((el: HTMLCanvasElement) =>
+    Array.from(el.getContext('2d')!.getImageData(1, 1, 1, 1).data))).toEqual([0, 0, 0, 255]);
+});
+
 test('桌面已下载过的附件点击直接打开本地文件，文件没了才重新下载', async ({ page }) => {
   const localFile = 'C:\\Users\\tester\\Downloads\\发布包.zip';
   await installFullTauriMock(page);
@@ -1148,7 +1393,7 @@ test('头像卡片可编辑本人资料，切换离开后立即显示状态（is
   const { pageErrors } = await bootAuthenticated(page);
   const navigation = page.getByRole('navigation');
 
-  await navigation.getByTitle('个人信息').click();
+  await navigation.getByRole('button', { name: /Test User/ }).click();
   const card = page.getByRole('dialog', { name: 'Test User的个人信息' });
   await card.getByRole('button', { name: '编辑资料与状态' }).click();
 
@@ -1156,7 +1401,7 @@ test('头像卡片可编辑本人资料，切换离开后立即显示状态（is
   await page.getByRole('button', { name: '离开', exact: true }).click();
   await expect(navigation.getByTitle('离开')).toBeVisible();
 
-  await navigation.getByTitle('个人信息').click();
+  await navigation.getByRole('button', { name: /Test User/ }).click();
   await expect(page.getByRole('dialog', { name: 'Test User的个人信息' })).toContainText('离开');
   expect(pageErrors).toEqual([]);
 });
@@ -1295,11 +1540,11 @@ async function installRocketChatMock(
     contentType: 'text/markdown',
     body: '# RocketX 文档\n\n> 统一 Markdown 预览。\n\n| 入口 | 状态 |\n| --- | --- |\n| 文件 | 正常 |\n\n```sh\npnpm test\n```',
   }));
-  await page.route('**/file-upload/preview/demo.mp4', (route) => route.fulfill({
-    status: 200,
-    contentType: 'video/mp4',
-    body: Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]),
-  }));
+  await page.route('**/file-upload/preview/demo.mp4', async (route) => {
+    const headers = await route.request().allHeaders();
+    const authenticated = headers.cookie?.includes('rc_token=test-token') || headers['x-auth-token'] === 'test-token';
+    await route.fulfill({ status: authenticated ? 200 : 401, contentType: 'application/octet-stream', body: PREVIEW_VIDEO });
+  });
   await page.route('**/api/info', (route) => fulfillJson(route, { version: '8.6.1' }));
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request();
@@ -1343,7 +1588,7 @@ async function installRocketChatMock(
         files: [
           { _id: 'preview-html', name: 'demo.html', type: 'text/html', url: '/file-upload/preview/demo.html', size: 82 },
           { _id: 'preview-markdown', name: 'readme.md', type: 'text/markdown', url: '/file-upload/preview/readme.md', size: 128 },
-          { _id: 'preview-video', name: 'demo.mp4', type: 'video/mp4', url: '/file-upload/preview/demo.mp4', size: 8 },
+          { _id: 'preview-video', name: 'demo.mp4', type: 'video/mp4', url: '/file-upload/preview/demo.mp4', size: PREVIEW_VIDEO.length },
         ],
       });
     }
@@ -1424,9 +1669,19 @@ async function installRocketChatMock(
 
   await page.routeWebSocket('**/websocket', (socket) => {
     socket.onMessage((raw) => {
-      const message = JSON.parse(String(raw)) as { msg?: string; id?: string };
+      const message = JSON.parse(String(raw)) as {
+        msg?: string; id?: string; method?: string; params?: [{ rid: string; _id: string }];
+      };
       if (message.msg === 'connect') socket.send(JSON.stringify({ msg: 'connected', session: 'ui-smoke' }));
       if (message.msg === 'method' && message.id) {
+        if (message.method === 'loadSurroundingMessages') {
+          const target = message.params![0];
+          const history = mockedHistories[target.rid] ?? [];
+          const index = history.findIndex((entry) => entry._id === target._id);
+          const result = index < 0 ? false : { messages: history.slice(Math.max(0, index - 24), index + 26) };
+          socket.send(JSON.stringify({ msg: 'result', id: message.id, result }));
+          return;
+        }
         socket.send(JSON.stringify({ msg: 'result', id: message.id, result: {} }));
       }
     });
@@ -1474,8 +1729,12 @@ async function bootAuthenticated(
 
 async function activateAiRuntimeForTest(
   page: Page,
-  provider: 'codex' | 'deepseek' | 'none',
+  provider: 'pi' | 'none',
 ): Promise<void> {
+  await page.waitForFunction(async () => {
+    const { useUI } = await import('/src/stores/ui.ts');
+    return useUI.getState().startupStage === 'background-ready';
+  });
   await page.evaluate(async (nextProvider) => {
     const [{ activateAiRuntimeProvider }, { useUI }] = await Promise.all([
       import('/src/lib/runtimeMode.ts'),
@@ -1493,11 +1752,12 @@ function conversation(page: Page, name: string) {
 test('登录后进入主界面', async ({ page }) => {
   const { pageErrors } = await installRocketChatMock(page);
   await page.goto('/');
+  await page.getByRole('button', { name: '连接 Rocket.Chat', exact: true }).click();
   await expect(page.getByText('RocketChat X', { exact: true })).toBeVisible();
   await page.getByPlaceholder('留空使用当前站点').fill(SERVER);
   await page.getByPlaceholder('请输入用户名或邮箱').fill('tester');
   await page.getByPlaceholder('请输入密码').fill('password');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: '连接并登录 Rocket.Chat', exact: true }).click();
   await expect(page.getByRole('heading', { name: '连接 Azure DevOps' })).toHaveCount(0);
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
@@ -1509,10 +1769,11 @@ test('登录页同时显示友好结论和脱敏后的详细连接原因', async
   await page.route('**/api/info', (route) => fulfillJson(route, { error: 'gateway unavailable' }, 502));
 
   await page.goto('/');
+  await page.getByRole('button', { name: '连接 Rocket.Chat', exact: true }).click();
   await page.getByPlaceholder('留空使用当前站点').fill(SERVER);
   await page.getByPlaceholder('请输入用户名或邮箱').fill('tester');
   await page.getByPlaceholder('请输入密码').fill('password');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: '连接并登录 Rocket.Chat', exact: true }).click();
 
   await expect(page.getByText('服务器检查失败，请稍后重试')).toBeVisible();
   await expect(page.getByText('服务器返回 HTTP 502：HTTP 502')).toBeVisible();
@@ -1526,10 +1787,11 @@ test('登录接口返回 unreadable 时改为可操作的中文原因', async ({
   await page.route('**/api/v1/login', (route) => fulfillJson(route, { error: 'unreadable' }, 500));
 
   await page.goto('/');
+  await page.getByRole('button', { name: '连接 Rocket.Chat', exact: true }).click();
   await page.getByPlaceholder('留空使用当前站点').fill(SERVER);
   await page.getByPlaceholder('请输入用户名或邮箱').fill('tester');
   await page.getByPlaceholder('请输入密码').fill('password');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await page.getByRole('button', { name: '连接并登录 Rocket.Chat', exact: true }).click();
 
   await expect(page.getByText('登录请求没有成功发出，请检查地址、网络、VPN 或桌面端访问权限')).toBeVisible();
   await expect(page.getByText(/桌面网络通道没有读取到可用响应/)).toBeVisible();
@@ -1550,7 +1812,7 @@ test('文件面板在严格沙箱中预览 HTML，并为常见视频显示原生
   await page.getByTitle('关闭（Esc）').click();
 
   await page.getByText('demo.mp4', { exact: true }).click();
-  await expect(page.locator('video[controls]')).toBeVisible();
+  await expectPreviewVideoToPlay(page);
 });
 
 test('Markdown 文件预览使用完整文档排版（issue #319）', async ({ page }, testInfo) => {
@@ -1588,6 +1850,18 @@ test('Markdown 文件预览使用完整文档排版（issue #319）', async ({ p
   await page.getByTitle('关闭（Esc）').click();
   expect(pageErrors).toEqual([]);
 });
+
+async function openLocalDesktopSetup(page: Page, narrow = false) {
+  await page.goto('/');
+  await expect(page.locator('.butler-workspace')).toBeVisible();
+  await expect(page.getByPlaceholder('请输入用户名或邮箱')).toHaveCount(0);
+  if (narrow) {
+    await page.getByRole('button', { name: '打开任务列表' }).click();
+    await page.getByRole('dialog', { name: '任务列表' }).getByRole('button', { name: '返回 RocketX' }).click();
+  } else {
+    await page.getByRole('navigation', { name: 'RocketX 主导航' }).getByRole('button', { name: '连接 Rocket.Chat' }).click();
+  }
+}
 
 test('深色主题首次引导的说明面板保持高对比度（issue #305）', { tag: '@release-desktop' }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -1650,7 +1924,7 @@ test('深色主题首次引导的说明面板保持高对比度（issue #305）'
     });
   };
 
-  await page.goto('/');
+  await openLocalDesktopSetup(page);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   expect(await contrastOf(page.getByRole('heading', { name: 'GTD 是运行方式，注意力是检验标准。' }))).toBeGreaterThanOrEqual(7);
   expect(await contrastOf(page.getByText('你直接掌握的确定性界面。', { exact: true }))).toBeGreaterThanOrEqual(4.5);
@@ -1668,13 +1942,13 @@ test('深色主题首次引导的说明面板保持高对比度（issue #305）'
   expect(await contrastOf(page.getByText('团队讨论、上下文和原始事实留在这里。', { exact: true }))).toBeGreaterThanOrEqual(4.5);
 });
 
-test('桌面新安装先解释 GTD 与注意力理念，再进入团队设置', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
+test('桌面新安装可直接使用本地管家，连接消息时提供理念与团队设置', { tag: '@release-desktop' }, async ({ page }, testInfo) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.setViewportSize({ width: 1440, height: 900 });
   await installTauriMock(page);
 
-  await page.goto('/');
+  await openLocalDesktopSetup(page);
   await expect(page.getByRole('heading', { name: /把大脑从“记住所有事”里解放出来，\s*把注意力留给正在做的事。/ })).toBeVisible();
   await expect(page.getByText('先可靠地收住', { exact: true })).toBeVisible();
   await expect(page.getByText('让下一步清楚', { exact: true })).toBeVisible();
@@ -1753,7 +2027,7 @@ test('首次引导在 390px 下保持单列且关键操作可达', { tag: '@rele
   await page.setViewportSize({ width: 390, height: 844 });
   await installTauriMock(page);
 
-  await page.goto('/');
+  await openLocalDesktopSetup(page, true);
   await expect(page.getByRole('heading', { name: /把大脑从“记住所有事”里解放出来/ })).toBeVisible();
   const expectedContinue = RELEASE_DESKTOP_E2E ? '继续：设置桌面体验' : '继续：选择如何加入';
   await expect(page.getByRole('button', { name: expectedContinue })).toBeVisible();
@@ -1823,6 +2097,66 @@ test('桌面重启后会重新授权并检查团队配置 URL', { tag: '@release
     expect(desktopDefaults).toBeNull();
   }
   expect(pageErrors).toEqual([]);
+});
+
+test('桌面已有有效账号直接恢复消息并保留桌面权限', { tag: '@release-desktop' }, async ({ page }) => {
+  await installFullTauriMock(page);
+  const { pageErrors } = await bootAuthenticated(page);
+  await expect(conversation(page, 'General')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '加入团队工作区' })).toHaveCount(0);
+  const saved = await page.evaluate(() => ({
+    firstRun: localStorage.getItem('rcx-first-run-v1'),
+    defaults: JSON.parse(localStorage.getItem('rcx-desktop-defaults-v1') ?? 'null'),
+  }));
+  expect(saved.firstRun).toBeNull();
+  expect(saved.defaults).toEqual(RELEASE_DESKTOP_E2E ? {
+    version: 1, status: 'legacy-migrated', notifications: 'preserved', autostart: 'preserved',
+  } : null);
+  expect(pageErrors).toEqual([]);
+});
+
+test('桌面跳过连接后可以重启回到本地管家', { tag: '@release-desktop' }, async ({ page }) => {
+  await installTauriMock(page);
+  await openLocalDesktopSetup(page);
+  await page.getByRole('button', { name: '暂不连接，直接本地使用' }).click();
+  if (RELEASE_DESKTOP_E2E) {
+    await page.getByRole('checkbox', { name: /允许系统通知/ }).uncheck();
+    await page.getByRole('checkbox', { name: /登录系统后启动 RocketX/ }).uncheck();
+    await page.getByRole('button', { name: '应用并继续' }).click();
+    await page.getByRole('button', { name: '进入本地工作区' }).click();
+  }
+  await expect(page.locator('.butler-workspace')).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.butler-workspace')).toBeVisible();
+  await page.getByRole('navigation', { name: 'RocketX 主导航' }).getByRole('button', { name: '连接 Rocket.Chat' }).click();
+  await expect(page.getByPlaceholder('请输入用户名或邮箱')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('rcx-first-run-v1'))).toBe('complete');
+});
+
+test('已登录账号从设置重跑引导时打开连接流程并保留系统偏好', { tag: '@release-desktop' }, async ({ page }) => {
+  await installFullTauriMock(page);
+  await installRocketChatMock(page);
+  await page.addInitScript(({ server, userId }) => {
+    if (sessionStorage.getItem('seeded-test-account')) return;
+    sessionStorage.setItem('seeded-test-account', '1');
+    localStorage.setItem('rcx-server', server);
+    localStorage.setItem('rcx-owner', `${userId}@${server}`);
+    localStorage.setItem('rcx-auth', JSON.stringify({ authToken: 'test-token', userId }));
+    localStorage.setItem('rcx-first-run-v1', 'complete');
+  }, { server: SERVER, userId: ME._id });
+  await page.goto('/');
+  await expect(conversation(page, 'General')).toBeVisible();
+  await page.getByRole('navigation', { name: 'RocketX 主导航' }).getByRole('button', { name: '设置' }).click();
+  await page.getByRole('button', { name: '重新运行首次设置' }).click();
+  await page.getByRole('button', { name: '重新开始' }).click();
+  await expect(page.getByRole('heading', { name: /把大脑从“记住所有事”里解放出来/ })).toBeVisible();
+  await page.getByRole('button', { name: '继续：选择如何加入' }).click();
+  await expect(page.getByRole('heading', { name: '加入团队工作区' })).toBeVisible();
+  if (RELEASE_DESKTOP_E2E) {
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('rcx-desktop-defaults-v1')!))).toEqual({
+      version: 1, status: 'legacy-migrated', notifications: 'preserved', autostart: 'preserved',
+    });
+  }
 });
 
 test('团队配置可从当前 ADO 仓库读取、预览并应用', async ({ page }, testInfo) => {
@@ -2011,6 +2345,7 @@ test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', a
   });
   await page.getByRole('button', { name: '应用 1 项' }).click();
 
+  await page.getByRole('button', { name: '连接 Rocket.Chat', exact: true }).click();
   await expect(page.getByText('新团队', { exact: true })).toBeVisible();
   await expect(page.getByText('https://chat-new.example.com', { exact: true })).toBeVisible();
   await expect(page.getByPlaceholder('请输入用户名或邮箱')).toBeVisible();
@@ -2020,7 +2355,7 @@ test('团队 Rocket.Chat 地址变化会清理旧会话并要求重新登录', a
 
 test('打开管家页后可返回消息', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'deepseek');
+  await activateAiRuntimeForTest(page, 'pi');
   const navigation = page.getByRole('navigation');
   await expect(navigation.getByRole('button', { name: '今日', exact: true })).toHaveCount(0);
   await expect(navigation.getByRole('button', { name: 'AI', exact: true })).toHaveCount(0);
@@ -2032,31 +2367,32 @@ test('打开管家页后可返回消息', async ({ page }) => {
     .getByRole('button', { name: '工作台', exact: true })).toBeVisible();
   await expect(butlerSection.getByRole('button', { name: /^管家/ })).toBeVisible();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toBeVisible();
   await expect(butlerSection.getByRole('group', { name: '管家执行引擎' })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('rocketx.butler.task-provider'))).toBeNull();
   await page.getByRole('navigation').getByRole('button', { name: /^消息/ }).click();
   await butlerSection.getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
-test('DeepSeek 视图在 Web 端提示使用桌面端 DSH Web', async ({ page }) => {
+test('管家在 Web 端提供桌面执行引导并保持只读', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 700 });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'deepseek');
+  await activateAiRuntimeForTest(page, 'pi');
   const navigation = page.getByRole('navigation');
   await navigation.getByRole('region', { name: '管家' }).getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByText('DSH 原生会话仅支持 RocketX 桌面端')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '在桌面端向管家交代事情' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '给管家的要求' })).toBeDisabled();
   await expect(page.getByRole('button', { name: '配置', exact: true })).toHaveCount(0);
   await expect(page.locator('iframe[title="DSH 原生会话"]')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
-test('AI 运行时三选一只在重启后生效，无 AI 只禁用执行能力', async ({ page }) => {
+test('Pi 与无 AI 的运行时选择在重启后生效，无 AI 只禁用执行能力', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'deepseek');
+  await activateAiRuntimeForTest(page, 'pi');
   const navigation = page.getByRole('navigation', { name: 'RocketX 主导航' });
   await navigation.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
@@ -2072,7 +2408,7 @@ test('AI 运行时三选一只在重启后生效，无 AI 只禁用执行能力'
   await restartedNavigation.getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByText('当前未启用 AI 执行引擎', { exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'AI 管家导航' })
-    .getByText('AI 托管', { exact: true })).toBeVisible();
+    .getByRole('button', { name: '我的工作', exact: true })).toBeVisible();
   await restartedNavigation.getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   await conversation(page, 'General').click();
@@ -2184,6 +2520,44 @@ test('普通打开的有界帧复核会覆盖第二帧布局增长（issue #299�
   expect(pageErrors).toEqual([]);
 });
 
+test('历史响应到达之前，已缓存的实时消息首帧就显示在底部', async ({ page }) => {
+  const messages = scrollHistory('Cached while inactive').slice(-40);
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Cached while inactive') },
+  });
+  await page.evaluate(async (messages) => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    useChat.setState((state) => ({ messages: { ...state.messages, 'room-general': messages } }));
+  }, messages);
+  let resumeHistory!: () => void;
+  const held = new Promise<void>((resolve) => { resumeHistory = resolve; });
+  await page.route('**/api/v1/channels.history?**', async (route) => {
+    await held;
+    await route.fallback();
+  });
+  const firstLayout = page.evaluate(() => new Promise<number>((resolve) => {
+    const observer = new MutationObserver(() => {
+      const el = document.querySelector<HTMLElement>('[data-testid="message-scroll"]');
+      if (!el?.querySelector('[data-message-id]')) return;
+      observer.disconnect();
+      resolve(el.scrollHeight - el.clientHeight - el.scrollTop);
+    });
+    observer.observe(document.getElementById('root')!, { childList: true, subtree: true });
+  }));
+  try {
+    await conversation(page, 'General').click();
+    expect(await firstLayout).toBeLessThan(2);
+  } finally {
+    resumeHistory();
+  }
+  const viewport = page.getByTestId('message-scroll');
+  await expect(viewport.locator('[data-message-id]')).toHaveCount(80);
+  await expect.poll(() => viewport.evaluate(
+    (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
 test('底部无效滚轮不会取消普通打开后的贴底（issue #143）', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page, {
     historyOverrides: { 'room-general': scrollHistory('Bottom wheel message') },
@@ -2273,6 +2647,143 @@ test('显式消息定位优先于普通打开贴底（issue #143）', async ({ p
   await expect.poll(() => page.getByTestId('message-scroll').evaluate(
     (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
   )).toBeGreaterThan(120);
+  // 旧消息上方的附件在定位后才撑开，目标应继续留在可视区。
+  await target.evaluate((element) => {
+    const firstMessage = element.closest('[data-testid="message-scroll"]')!.querySelector<HTMLElement>('[data-message-id]')!;
+    firstMessage.style.minHeight = '1200px';
+  });
+  await expect(target).toBeInViewport();
+  await page.getByTestId('message-scroll').hover();
+  await page.mouse.wheel(0, 800);
+  await expect(target).not.toBeInViewport();
+  await target.evaluate(async (element) => {
+    const firstMessage = element.closest('[data-testid="message-scroll"]')!.querySelector<HTMLElement>('[data-message-id]')!;
+    firstMessage.style.minHeight = '1500px';
+    await new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+  });
+  await expect(target).not.toBeInViewport();
+  expect(pageErrors).toEqual([]);
+});
+
+test('看过历史消息后从其他模块重新打开消息会回到最新', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Module return') },
+  });
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().jumpToMessage('Module return-18', 'room-general');
+  });
+  await expect(page.locator('[data-message-id="Module return-18"]')).toBeInViewport();
+  await page.getByTitle('设置', { exact: true }).click();
+  await expect(page.getByTestId('message-scroll')).toHaveCount(0);
+  await page.getByTitle('消息', { exact: true }).click();
+  await expect.poll(() => page.getByTestId('message-scroll').evaluate(
+    (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+  )).toBeLessThan(2);
+  expect(pageErrors).toEqual([]);
+});
+
+test('系统消息也能在长会话中定位并高亮', async ({ page }) => {
+  const messages = scrollHistory('System row');
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': messages.map((message, i) => i === 18 ? { ...message, t: 'r' } : message),
+    },
+  });
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().jumpToMessage('System row-18', 'room-general');
+  });
+  const target = page.locator('[data-message-id="System row-18"]');
+  await expect(target).toBeInViewport();
+  await expect(target).toHaveClass(/bg-primary-light/);
+  expect(pageErrors).toEqual([]);
+});
+
+test('发送到其他房间时保留当前会话的历史阅读位置', async ({ page }) => {
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': scrollHistory('Background send') },
+  });
+  await conversation(page, 'General').click();
+  await page.evaluate(async () => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().jumpToMessage('Background send-18', 'room-general');
+  });
+  const target = page.locator('[data-message-id="Background send-18"]');
+  await expect(target).toBeInViewport();
+  await page.evaluate(async () => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().send('给项目组同步', { rid: 'room-project' });
+  });
+  await expect(target).toBeInViewport();
+  expect(pageErrors).toEqual([]);
+});
+
+async function checkDistantQuote(page: Page, realtimeContext: boolean) {
+  const history = Array.from({ length: 420 }, (_, index) => ({
+    _id: `long-${index}`, rid: 'room-general', msg: `历史记录 ${index}`,
+    ts: new Date(Date.parse(NOW) + index * 1000).toISOString(), u: ALICE,
+  }));
+  const target = history[45]!;
+  const latest = { ...history.at(-1)!, attachments: [{
+    message_link: `/channel/general?msg=${target._id}`, author_name: 'Alice', text: '查看原记录',
+  }] };
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: { 'room-general': realtimeContext ? [...history.slice(0, -1), latest] : [latest] },
+  });
+  const pageEnds: string[] = [];
+  await page.route('**/api/v1/channels.history*', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    if (params.get('roomId') !== target.rid) return route.fallback();
+    const end = params.get('latest');
+    if (end) pageEnds.push(end);
+    const rows = [...history.slice(0, -1), latest].filter((item) => !end || item.ts < end);
+    return fulfillJson(route, { messages: rows.reverse().slice(0, Number(params.get('count') ?? 50)) });
+  });
+  await page.route('**/api/v1/chat.getMessage*', (route) => fulfillJson(route, { message: target }));
+  await conversation(page, 'General').click();
+  await page.getByRole('button', { name: /查看原记录/ }).click();
+  await expect(page.locator(`[data-message-id="${target._id}"]`)).toBeInViewport();
+  await expect(page.locator('[data-message-id="long-44"]')).toBeAttached();
+  expect(pageEnds.length).toBe(realtimeContext ? 0 : 1);
+  if (realtimeContext) await expect(page.locator('[data-message-id="long-46"]')).toBeAttached();
+  await page.evaluate(async ({ rid, mid }) => {
+    const { useChat } = await import('/src/stores/chat.ts');
+    await useChat.getState().deleteMessage({ _id: mid, rid });
+  }, { rid: target.rid, mid: 'long-44' });
+  await expect(page.locator('[data-message-id="long-44"]')).toHaveCount(0);
+  await page.getByRole('button', { name: '返回最新消息' }).click();
+  await expect(page.locator('[data-message-id="long-419"]')).toBeInViewport();
+  const scroll = page.getByTestId('message-scroll');
+  await scroll.hover();
+  await page.mouse.wheel(0, -10000);
+  await expect(page.locator('[data-message-id="long-369"]')).toBeAttached();
+  expect(pageErrors).toEqual([]);
+}
+
+test('引用可以定位五页以前的消息，返回最新后分页仍连续', async ({ page }) => {
+  await checkDistantQuote(page, true);
+});
+
+test('实时上下文不可用时仍能打开五页以前的引用', async ({ page }) => {
+  await checkDistantQuote(page, false);
+});
+
+test('点击聊天正文里的本站永久链接会在客户端定位另一房间的消息', async ({ page, context }) => {
+  const target = scrollHistory('Permalink target')[18]!;
+  const link = `${SERVER}/channel/general?msg=${encodeURIComponent(target._id)}`;
+  const { pageErrors } = await bootAuthenticated(page, {
+    historyOverrides: {
+      'room-general': scrollHistory('Permalink target'),
+      'room-project': [{ _id: 'link-source', rid: 'room-project', ts: NOW, u: ALICE, msg: `[查看结论](${link})` }],
+    },
+  });
+  await conversation(page, 'Project Alpha').click();
+  await page.getByRole('link', { name: '查看结论' }).click();
+  await expect(page.locator(`[data-message-id="${target._id}"]`)).toBeInViewport();
+  expect(context.pages()).toHaveLength(1);
   expect(pageErrors).toEqual([]);
 });
 
@@ -2305,6 +2816,10 @@ test('通知点击话题回复时按消息真实房间打开话题并定位回�
   });
 
   await conversation(page, 'Project Alpha').click();
+  // 真实话题接口只返回回复，主消息也可能早已不在房间最近一页内。
+  await page.route('**/api/v1/channels.history*', (route) => fulfillJson(route, { messages: [] }));
+  await page.route('**/api/v1/chat.getThreadMessages*', (route) =>
+    fulfillJson(route, { messages: [threadReply], total: 1 }));
   await page.evaluate(async ({ mid, rid }) => {
     const { useChat } = await import('/src/stores/chat.ts');
     await useChat.getState().jumpToMessage(mid, rid);
@@ -2918,10 +3433,10 @@ test('消息待办可记录承诺对象，并保留在确定性的待办界面',
   const [saved] = await readStoredTodos(page);
   expect(saved).toMatchObject({ committedTo: '张三' });
   await page.getByRole('navigation').getByRole('button', { name: /^待办/ }).click();
-  await expect(page.getByText('待办 · 1 项', { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByText('1 项', { exact: true })).toBeVisible();
   await expect(page.getByText('Welcome to General', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '标记为完成' }).click();
-  await expect(page.getByText('待办 · 0 项', { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByText('0 项', { exact: true })).toBeVisible();
   const [completed] = await readStoredTodos(page);
   expect(completed).toMatchObject({ done: true, committedTo: '张三' });
   expect(pageErrors).toEqual([]);
@@ -3082,7 +3597,7 @@ test('ADO 我的代码默认显示一年，并保留热力图、键盘日期明�
     }));
   });
   const { pageErrors } = await bootAuthenticated(page, { expectMessages: false });
-  await expect(page.getByRole('button', { name: '我的代码', exact: true })).toHaveClass(/bg-primary-light/);
+  await expect(page.getByRole('button', { name: '我的代码', exact: true })).toHaveAttribute('aria-current', 'page');
   const [rangeFrom, rangeTo] = await Promise.all([
     page.getByLabel('开始日期').inputValue(),
     page.getByLabel('结束日期').inputValue(),
@@ -3197,7 +3712,7 @@ test('全局搜索能命中已加载消息', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('DSH 全局搜索任务复制提示词并打开官方 DSH Web', async ({ page }) => {
+test('旧 DeepSeek 偏好下全局搜索把任务保存在 Pi 管家草稿中', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rocketx.butler.task-provider', 'deepseek');
     Object.defineProperty(navigator, 'clipboard', {
@@ -3210,17 +3725,15 @@ test('DSH 全局搜索任务复制提示词并打开官方 DSH Web', async ({ pa
     });
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'deepseek');
+  await activateAiRuntimeForTest(page, 'pi');
   await page.keyboard.press('Control+Shift+F');
   const search = page.getByRole('dialog', { name: '全局搜索' });
   await search.getByPlaceholder(/搜索会话、消息/).fill('检查发布风险');
   await search.getByRole('button', { name: '创建任务' }).click();
 
-  await expect(page.getByRole('heading', { name: 'DSH 原生会话仅支持 RocketX 桌面端' })).toBeVisible();
-  await expect(page.getByText('任务已复制，请在 DSH 中粘贴发送', { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => (
-    window as Window & { __copiedText?: string }
-  ).__copiedText)).toBe('检查发布风险');
+  await expect(page.getByRole('heading', { name: '在桌面端向管家交代事情' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '给管家的要求' })).toHaveValue('检查发布风险');
+  expect(await page.evaluate(() => (window as Window & { __copiedText?: string }).__copiedText)).toBeUndefined();
   expect(pageErrors).toEqual([]);
 });
 
@@ -3233,20 +3746,23 @@ test('会话右键菜单提供常用管理操作', async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test('纸上没有执行间按钮，对话层保留在 Codex App 打开，Codex 不显示为侧栏一级入口', async ({ page }) => {
+test('Pi 管家的本地目录操作与已安排任务归在管家，不占用一级导航', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('rocketx.butler.task-provider', 'codex');
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'codex');
+  await activateAiRuntimeForTest(page, 'pi');
   await expect(page.getByRole('button', { name: 'Codex', exact: true })).toHaveCount(0);
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '网页版没有本地 Codex 执行面' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '在桌面端向管家交代事情' })).toBeVisible();
   await expect(page.getByRole('button', { name: '执行间', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '切换到 Codex App', exact: true })).toBeDisabled();
-  await page.getByRole('navigation', { name: 'Codex 工作区' })
+  await page.getByLabel('更多对话操作').click();
+  await expect(page.getByRole('button', { name: '打开目录', exact: true })).toBeDisabled();
+  const navigation = page.getByRole('navigation', { name: 'AI 协作' });
+  await navigation.getByText('更多功能', { exact: true }).click();
+  await navigation
     .getByRole('button', { name: '已安排', exact: true })
     .click();
   await expect(page.getByRole('region', { name: '已安排', exact: true })).toBeVisible();
@@ -3375,7 +3891,7 @@ test('工作项 Discussion 从会话头部进入共享 AI 托管控制面', asyn
     localStorage.setItem('rocketx.butler.task-provider', 'deepseek');
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'deepseek');
+  await activateAiRuntimeForTest(page, 'pi');
   await conversation(page, '#128 Login failure').click();
   const badge = page.getByLabel('打开 AI 托管控制面');
   await expect(badge).toBeVisible();
@@ -3389,10 +3905,10 @@ test('工作项 Discussion 从会话头部进入共享 AI 托管控制面', asyn
   await expect(panel.getByText('@alice 正在另一台设备托管')).toBeVisible();
   await expect(panel.getByRole('button', { name: '开启 AI 托管' })).toHaveCount(0);
   await panel.getByRole('button', { name: '在 AI 管家中查看' }).click();
-  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toHaveCount(0);
-  await expect(page.getByRole('region', { name: 'DSH 原生会话' })).toBeVisible();
-  await expect(page.getByText('DSH 原生会话仅支持 RocketX 桌面端')).toBeVisible();
-  await expect(page.locator('[data-session-key="room:discussion-agent"]')).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'AI 管家导航' })).toBeVisible();
+  await expect(page.getByRole('region', { name: '任务', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '在桌面端向管家交代事情' })).toBeVisible();
+  await expect(page.locator('[data-session-key="room:discussion-agent"]')).toHaveAttribute('aria-current', 'page');
   expect(pageErrors).toEqual([]);
 });
 
@@ -3417,7 +3933,7 @@ test('普通会话同时提供私人房间 AI 和共享托管配置', async ({ p
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'codex');
+  await activateAiRuntimeForTest(page, 'pi');
   await page.evaluate(async () => {
     const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
     const { useAgentEnvironments } = await import('/src/stores/agentEnvironments.ts');
@@ -3459,7 +3975,7 @@ test('首次配置 AI 托管立即打开后端和项目面板（issue #310）', 
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'codex');
+  await activateAiRuntimeForTest(page, 'pi');
   await conversation(page, 'General').click();
 
   await page.getByRole('button', { name: '选择 AI 托管项目' }).click();
@@ -3475,7 +3991,7 @@ test('新设备没有托管项目时可在托管面板直接添加', async ({ pa
       .__dialogOpenResponses = ['D:\\Repos\\rocketchatx'];
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'codex');
+  await activateAiRuntimeForTest(page, 'pi');
   await conversation(page, 'General').click();
 
   await page.getByRole('button', { name: '配置 AI 托管' }).click();
@@ -3511,7 +4027,7 @@ test('AI 托管开启失败时在面板内保留明确原因', async ({ page }) 
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'codex');
+  await activateAiRuntimeForTest(page, 'pi');
   await page.evaluate(async () => {
     const [{ useCodexWorkspace }, { useSharedAgent }] = await Promise.all([
       import('/src/stores/codexWorkspace.ts'),
@@ -3548,7 +4064,7 @@ test('AI 托管开启失败时在面板内保留明确原因', async ({ page }) 
   expect(pageErrors).toEqual([]);
 });
 
-test('开启 Codex 群托管时选择本次模型、推理和权限，不改管家默认值', async ({ page }, testInfo) => {
+test('开启 Pi 群托管时选择本次模型、推理和权限，不改管家默认值', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
     localStorage.setItem('rocketx.butler.task-provider', 'codex');
@@ -3570,7 +4086,7 @@ test('开启 Codex 群托管时选择本次模型、推理和权限，不改管�
     }));
   });
   const { pageErrors } = await bootAuthenticated(page);
-  await activateAiRuntimeForTest(page, 'codex');
+  await activateAiRuntimeForTest(page, 'pi');
   await page.evaluate(async () => {
     const { useCodexWorkspace } = await import('/src/stores/codexWorkspace.ts');
     useCodexWorkspace.setState({
@@ -3625,118 +4141,48 @@ test('开启 Codex 群托管时选择本次模型、推理和权限，不改管�
   expect(pageErrors).toEqual([]);
 });
 
-test('开启 DeepSeek 群托管时从 DSH 原生目录选择模型、Agent 和权限', async ({ page }, testInfo) => {
+test('旧 DeepSeek 偏好迁移后可指定 Pi 群托管模型、权限和项目并启动', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
+  await page.addInitScript(() => localStorage.setItem('rocketx.butler.task-provider', 'deepseek'));
   const { pageErrors } = await bootAuthenticated(page);
   await page.evaluate(async () => {
-    const [{ useUI }, runtimeMode, environments, sharedAgent] = await Promise.all([
-      import('/src/stores/ui.ts'),
-      import('/src/lib/runtimeMode.ts'),
-      import('/src/stores/agentEnvironments.ts'),
-      import('/src/stores/sharedAgent.ts'),
+    const [{ useAgentEnvironments }, { useCodexWorkspace }, { useSharedAgent }] = await Promise.all([
+      import('/src/stores/agentEnvironments.ts'), import('/src/stores/codexWorkspace.ts'), import('/src/stores/sharedAgent.ts'),
     ]);
-    runtimeMode.resetAiRuntimeProviderForTests('deepseek');
-    useUI.setState({ aiRuntimeProvider: 'deepseek' });
-    environments.useAgentEnvironments.setState({
-      environments: [{
-        id: 'environment-dsh-hosting',
-        name: 'RocketX DSH 项目',
-        path: 'D:\\Repos\\rocketchatx',
-        adoProjects: [],
-        defaultBaseBranch: 'main',
-        branchPrefix: 'ai/',
-        enabled: true,
-        createdAt: 1,
-        updatedAt: 1,
-      }],
-      bindings: [],
-      lastEnvironmentByProject: {},
+    const root = 'D:\\Repos\\rocketchatx';
+    useAgentEnvironments.getState().ensureEnvironment({ path: root, name: 'RocketX 托管项目' });
+    useCodexWorkspace.setState({
+      workspaceRoot: root, selectedModel: 'deepseek-flash', selectedEffort: 'medium', permissionPreset: 'ask',
+      models: ['deepseek-flash', 'deepseek-pro'].map((model) => ({
+        id: model, model, displayName: model, description: '', hidden: false,
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: '标准' }, { reasoningEffort: 'high', description: '深入' }],
+        defaultReasoningEffort: 'medium', isDefault: model === 'deepseek-flash',
+      })),
     });
-    sharedAgent.setSharedAgentDshControllerFactory(() => ({
-      connect: async () => undefined,
-      getStartConfiguration: async () => ({
-        models: {
-          groups: [{
-            id: 'deepseek-official',
-            name: 'DeepSeek',
-            models: [{
-              id: 'deepseek-v4-flash',
-              name: 'DeepSeek V4 Flash',
-              reasoning: {
-                efforts: [{ id: 'medium', name: '中' }, { id: 'high', name: '高' }],
-                defaultEffort: 'high',
-              },
-            }, {
-              id: 'deepseek-v4-pro',
-              name: 'DeepSeek V4 Pro',
-              reasoning: {
-                efforts: [{ id: 'high', name: '高' }],
-                defaultEffort: 'high',
-              },
-            }],
-          }],
-          defaultSelection: {
-            provider: 'deepseek-official',
-            model: 'deepseek-v4-flash',
-            reasoningEffort: 'high',
-          },
-        },
-        agentPresets: [
-          { id: 'standard', name: '标准', isDefault: true },
-          { id: 'code', name: '代码', isDefault: false },
-          { id: 'broken', name: '不可用', isDefault: false, broken: '缺少依赖' },
-        ],
-        defaultAgentPreset: 'standard',
-        permission: {
-          options: [
-            { id: 'workspace-write', name: '工作区写入' },
-            { id: 'danger-full-access', name: '完全访问' },
-          ],
-          defaultPreset: 'workspace-write',
-        },
-      }),
-      createSession: async (options) => {
-        (window as Window & { __dshStartOptions?: unknown }).__dshStartOptions = options;
-        return 'dsh-ui-session';
+    useSharedAgent.setState({
+      startSession: async (rid, key, options) => {
+        (window as Window & { __roomStart?: unknown }).__roomStart = { rid, key, ...options };
+        return { sessionId: 'mock-room-pi' };
       },
-      resumeSession: async () => undefined,
-      getTranscript: async () => ({ messages: [], activities: [] }),
-      attachmentLeaseId: () => 'dsh-ui-lease',
-      prompt: async () => ({ turnId: 'unused', text: '' }),
-      cancel: async () => undefined,
-      respondApproval: async () => undefined,
-      respondQuestion: async () => undefined,
-      stop: async () => undefined,
-    }));
+    });
   });
   await conversation(page, 'General').click();
   await page.getByRole('button', { name: '配置 AI 托管' }).click();
-
   const panel = page.locator('aside').filter({ hasText: '在当前房间开启 AI 托管' });
-  await expect(panel.getByLabel('DSH AI 托管模型')).toBeVisible();
-  await expect(panel.getByLabel('DSH AI 托管 Agent').locator('option:disabled')).toHaveText('不可用（不可用：缺少依赖）');
-  await panel.getByLabel('DSH AI 托管模型').selectOption({ label: 'DeepSeek · DeepSeek V4 Pro' });
-  await panel.getByLabel('DSH AI 托管 Agent').selectOption('code');
-  await panel.getByLabel('DSH AI 托管权限').selectOption('danger-full-access');
-  await expect(panel.getByText('DSH 当前接口会把这次显式模型选择同步为后续会话的默认模型。')).toBeVisible();
-  const startHosting = panel.getByRole('button', { name: '开启 AI 托管' });
-  await expect(startHosting).toBeInViewport();
-  await panel.screenshot({ path: testInfo.outputPath('agent-hosting-dsh-start-config.png') });
+  await expect(panel.getByText('运行时：Pi')).toBeVisible();
+  await panel.getByLabel('AI 托管模型').selectOption('deepseek-pro');
+  await panel.getByLabel('AI 托管推理强度').selectOption('high');
+  await panel.getByLabel('AI 托管权限').selectOption('ask');
+  const start = panel.getByRole('button', { name: '开启 AI 托管' });
+  await expect(start).toBeInViewport();
+  await panel.screenshot({ path: testInfo.outputPath('agent-hosting-pi-start-config.png') });
   await page.setViewportSize({ width: 1280, height: 520 });
-  await startHosting.scrollIntoViewIfNeeded();
-  await expect(startHosting).toBeInViewport();
-  await startHosting.click();
-
-  await expect.poll(() => page.evaluate(() => (
-    window as Window & { __dshStartOptions?: unknown }
-  ).__dshStartOptions)).toEqual({
-    model: {
-      provider: 'deepseek-official',
-      model: 'deepseek-v4-pro',
-      reasoningEffort: 'high',
-    },
-    agentPreset: 'code',
-    permissionPreset: 'danger-full-access',
+  await start.scrollIntoViewIfNeeded();
+  await expect(start).toBeInViewport();
+  await start.click();
+  await expect.poll(() => page.evaluate(() => (window as Window & { __roomStart?: unknown }).__roomStart)).toMatchObject({
+    rid: 'room-general', key: 'room:room-general', workspaceRoot: 'D:\\Repos\\rocketchatx',
+    runtimeModel: 'deepseek-pro', runtimeEffort: 'high', runtimePermissionPreset: 'ask',
   });
   expect(pageErrors).toEqual([]);
 });
@@ -3747,7 +4193,7 @@ test('本机托管时点击状态入口只打开同一会话，结束需要显�
     localStorage.setItem('rocketx.butler.task-provider', 'codex');
   });
   await page.goto('/');
-  await expect(page.getByText('RocketChat X', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '连接 Rocket.Chat', exact: true })).toBeVisible();
   await page.evaluate(async ({ server, me }) => {
     const now = Date.now();
     const deviceId = 'device-ui-local';
@@ -3802,6 +4248,7 @@ test('本机托管时点击状态入口只打开同一会话，结束需要显�
     database.close();
   }, { server: SERVER, me: ME });
   await page.reload();
+  await page.getByRole('navigation', { name: 'RocketX 主导航' }).getByRole('button', { name: /^消息/ }).click();
   await expect(page.getByText('General', { exact: true }).first()).toBeVisible();
   await conversation(page, 'General').click();
 
@@ -3822,23 +4269,15 @@ test('本机托管时点击状态入口只打开同一会话，结束需要显�
 test('未连接 ADO 时工作台回到确定性的连接设置，不冒充全局今天', async ({ page }) => {
   const { pageErrors } = await bootAuthenticated(page);
   await page.getByRole('button', { name: '工作台', exact: true }).click();
-  await expect(page.getByRole('button', { name: '工作台', exact: true }).last()).toHaveClass(/bg-primary-light/);
+  await expect(page.getByRole('complementary').getByRole('button', { name: '工作台', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByText('ADO 地址', { exact: true })).toBeVisible();
   await expect(page.getByText('今天确认候选版', { exact: true })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 
-test('托管项目归入管家，AI 设置按启动运行时展示 Codex 配置', async ({ page }, testInfo) => {
+test('托管项目归入管家，旧 Codex 偏好迁移至 Pi 配置与运行状态', async ({ page }, testInfo) => {
   await installFullTauriMock(page);
   await page.addInitScript(() => {
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        writeText: async (value: string) => {
-          (window as Window & { __copiedText?: string }).__copiedText = value;
-        },
-      },
-    });
     localStorage.setItem('rocketx.butler.task-provider', 'codex');
     localStorage.setItem('rcx-agent-environments', JSON.stringify({
       version: 1,
@@ -3861,36 +4300,21 @@ test('托管项目归入管家，AI 设置按启动运行时展示 Codex 配置'
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('complementary').getByRole('button', { name: 'AI', exact: true }).click();
 
-  await expect(page.getByRole('heading', { name: 'Codex' })).toBeVisible();
-  await expect(page.getByLabel('AI 托管 Codex 模型')).toHaveCount(0);
-  await expect(page.getByLabel('AI 托管 Codex 推理强度')).toHaveCount(0);
-  await expect(page.getByLabel('AI 托管 Codex 权限')).toHaveCount(0);
-  await expect(page.getByText('系统 Codex · 0.145.0 · 新版待验证', { exact: true })).toBeVisible();
-  await expect(page.getByText('C:\\Users\\tester\\AppData\\Roaming\\npm\\codex.cmd', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('手动 Codex 路径')).toBeVisible();
-  await expect(page.getByText('查看 1 个被跳过的候选')).toBeVisible();
-  await page.locator('main').screenshot({ path: testInfo.outputPath('simplified-ai-settings-default.png') });
-  await page.getByText('查看 1 个被跳过的候选').click();
-  await expect(page.getByText('标准安装 · 版本过旧')).toBeVisible();
-  await expect(page.getByText('C:\\Users\\tester\\AppData\\Roaming\\npm\\codex-old.cmd', { exact: true })).toBeVisible();
-
-  await page.getByRole('button', { name: '复制诊断摘要' }).click();
-  const copiedSummary = await page.evaluate(() => (
-    window as Window & { __copiedText?: string }
-  ).__copiedText ?? '');
-  expect(copiedSummary).toContain('protocolBaseline: 0.144.4');
-  expect(copiedSummary).toContain('candidate[0]: source=standard outcome=rejected');
-  expect(copiedSummary).toContain('reasonCode=outdated');
-  expect(copiedSummary).not.toContain('tester');
-  expect(copiedSummary).not.toContain('0.140.0');
-
-  const probeCountBeforeRetry = await page.evaluate(() => (
-    window as Window & { __codexProbeCount?: number }
-  ).__codexProbeCount ?? 0);
-  await page.getByRole('button', { name: '重新检测' }).click();
-  await expect.poll(() => page.evaluate(() => (
-    window as Window & { __codexProbeCount?: number }
-  ).__codexProbeCount ?? 0)).toBeGreaterThan(probeCountBeforeRetry);
+  await expect(page.getByRole('heading', { name: 'Pi 内建通用引擎' })).toBeVisible();
+  await expect(page.getByLabel('AI 托管模型', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('已就绪 · Pi v1.5.0 · Node 22.19.0')).toBeVisible();
+  await expect(page.getByText('resources/pi-runtime', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Pi API Key')).toHaveValue('');
+  await expect(page.getByLabel('Pi 默认模型')).toHaveValue('deepseek-chat');
+  await page.getByRole('button', { name: '企业 / 兼容网关' }).click();
+  await page.getByLabel('Pi Base URL').fill('http://gateway.example.test/v1');
+  await page.getByLabel('Pi 默认模型').fill('workbench-model');
+  await page.getByRole('button', { name: '仅保存配置' }).click();
+  await expect(page.getByText('Pi 模型与凭据配置已保存', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '重新检测', exact: true }).click();
+  await expect(page.getByLabel('Pi 默认模型')).toHaveValue('workbench-model');
+  await expect(page.getByLabel('Pi Base URL')).toHaveValue('http://gateway.example.test/v1');
+  await page.locator('main').screenshot({ path: testInfo.outputPath('pi-runtime-settings.png') });
   await expect(page.getByText('Windows.Media.Ocr', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '本地工作区' })).not.toBeVisible();
   await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).not.toBeVisible();
@@ -3915,9 +4339,10 @@ test('管家通过系统目录选择器添加并持久化托管项目', async ({
   const { pageErrors } = await bootAuthenticated(page);
 
   await page.getByRole('navigation').getByRole('button', { name: /^管家/ }).click();
-  await expect(page.getByLabel('项目目录').getByText('添加托管项目', { exact: true })).toBeVisible();
-  await page.getByLabel('项目目录').getByRole('button', { name: '添加托管项目' }).first().click();
-  await expect(page.getByText('D:\\Repos\\rocketchatx', { exact: true })).toBeVisible();
+  const navigation = page.getByRole('navigation', { name: 'AI 协作' });
+  await navigation.getByText('更多功能', { exact: true }).click();
+  await navigation.getByRole('button', { name: '添加项目目录' }).click();
+  await expect(page.getByLabel('项目目录').getByRole('region', { name: '项目：rocketchatx' })).toBeVisible();
 
   expect(await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem('rcx-agent-environments') ?? '{}');

@@ -1,4 +1,5 @@
 import { RcRestClient, RcRealtimeClient, type RcPreferences } from '@rcx/rc-client';
+import { localPermalinkMessageId } from './messageText';
 
 const STORAGE_KEY = 'rcx-auth';
 
@@ -334,17 +335,24 @@ export async function openUncPath(path: string): Promise<void> {
 }
 
 /**
- * 全局拦截 <a> 点击：桌面端一律走系统浏览器。
- * 挂一次即可覆盖所有链接（消息正文、卡片、预览…）。
+ * 聊天中的本站消息链接在客户端定位；桌面端的外链交给系统浏览器。
  */
-export function installLinkInterceptor(onError: (error: unknown) => void = console.error): void {
-  if (!isTauri) return;
+export function installLinkInterceptor(onMessage: (mid: string) => void, onError: (error: unknown) => void): void {
   document.addEventListener(
     'click',
     (e) => {
       const anchor = (e.target as HTMLElement | null)?.closest?.('a');
       const href = anchor?.getAttribute('href');
       if (!href || !/^https?:\/\//i.test(href)) return;
+      if (anchor?.closest('[data-message-id]') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        const mid = localPermalinkMessageId(href, [siteUrlSync(), getServerBase()]);
+        if (mid) {
+          e.preventDefault();
+          onMessage(mid);
+          return;
+        }
+      }
+      if (!isTauri) return;
       e.preventDefault();
       void openExternal(href).catch(onError);
     },

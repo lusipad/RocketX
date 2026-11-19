@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "RocketX",
-  "version": "0.44.18",
+  "version": "0.50.0",
   "identifier": "com.lusipad.rocketx",
   "build": {
     "beforeDevCommand": "pnpm -w prepare:sidecars && pnpm --filter @rcx/web dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "pnpm -w prepare:sidecars && pnpm --filter @rcx/web build",
+    "beforeBuildCommand": "pnpm -w prepare:sidecars && pnpm -w prepare:pi-runtime && pnpm --filter @rcx/web build",
     "frontendDist": "../../web/dist"
   },
   "app": {
@@ -35,7 +35,9 @@
       "resources/codex-skills/": "codex-skills/",
       "../../web/src/butler/skills/core/": "rocketx-core-skills/",
       "resources/plugins/": "plugins/",
-      "src/dsh_bridge.mjs": "dsh_bridge.mjs"
+      "resources/pi-runtime/": "pi-runtime/",
+      "src/dsh_bridge.mjs": "dsh_bridge.mjs",
+      "src/pi_app_server.mjs": "pi_app_server.mjs"
     },
     "windows": {
       "nsis": {

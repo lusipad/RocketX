@@ -1,21 +1,21 @@
 import { useState, type FormEvent } from 'react';
-import { Building2, Rocket } from 'lucide-react';
+import { Bot, Building2, Rocket, SquareKanban } from 'lucide-react';
 import { useAuth } from '../stores/auth';
-import { autostartAvailable } from '../lib/autostart';
+import { useUI } from '../stores/ui';
 import { getServerBase, isTauri, setServerBase } from '../lib/client';
 import type { LoginFailureDisplay } from '../lib/loginDiagnostic';
 import { probeRocketChat, writeLoginDiagnostic } from '../lib/loginDiagnostic';
 import {
-  hasExistingRocketXUserState,
   loadFirstRunState,
-  prepareDesktopDefaultsRecord,
   shouldShowFirstRun,
 } from '../lib/firstRun';
 import { loadWorkspaceSource } from '../lib/workspaceConfig';
 import FirstRunPage from './FirstRunPage';
 
-export default function LoginPage() {
-  const { status, error, login } = useAuth();
+export default function LoginPage({ embedded = false }: { embedded?: boolean } = {}) {
+  const { status, error, login, enterLocalMode } = useAuth();
+  const setModule = useUI((s) => s.setModule);
+  const setButlerView = useUI((s) => s.setButlerView);
   const [server, setServer] = useState(
     () =>
       getServerBase() ||
@@ -30,11 +30,9 @@ export default function LoginPage() {
     const storage = typeof localStorage === 'undefined' ? undefined : localStorage;
     const firstRunState = loadFirstRunState(storage);
     const workspaceSource = loadWorkspaceSource();
-    prepareDesktopDefaultsRecord({
-      storage,
-      releaseDesktop: autostartAvailable,
-      hasExistingUserState: hasExistingRocketXUserState(storage),
-    });
+    if (embedded) {
+      return firstRunState === 'pending';
+    }
     return shouldShowFirstRun({
       desktop: isTauri,
       serverUrl: getServerBase(),
@@ -47,12 +45,22 @@ export default function LoginPage() {
 
   if (firstRun) {
     return (
-      <FirstRunPage
-        onContinue={() => {
-          setServer(getServerBase() || (isTauri ? 'http://localhost:3300' : ''));
-          setFirstRun(false);
-        }}
-      />
+      <div className={embedded ? 'flex min-w-0 flex-1 flex-col overflow-hidden' : 'h-full'}>
+        <FirstRunPage
+          onContinue={() => {
+            setServer(getServerBase() || (isTauri ? 'http://localhost:3300' : ''));
+            setFirstRun(false);
+          }}
+          onEnterLocal={() => {
+            setFirstRun(false);
+            if (embedded) {
+              setModule('butler-view');
+              return;
+            }
+            void enterLocalMode();
+          }}
+        />
+      </div>
     );
   }
 
@@ -104,19 +112,36 @@ export default function LoginPage() {
 
   return (
     <div
-      className="flex h-full items-center justify-center"
+      className={
+        embedded
+          ? 'flex min-w-0 flex-1 items-center justify-center overflow-y-auto px-6 py-8'
+          : 'flex h-full items-center justify-center'
+      }
       style={{ background: 'linear-gradient(160deg,#e8f3ff 0%,#f5f8ff 45%,#ffffff 100%)' }}
     >
-      <div className="w-[400px] rounded-2xl bg-surface-4 p-10 shadow-[0_8px_36px_rgba(31,35,41,0.1)]">
-        <div className="mb-8 flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary text-white">
-            <Rocket size={24} />
+      <div className="w-full max-w-[420px] rounded-2xl bg-surface-4 p-9 shadow-[0_8px_36px_rgba(31,35,41,0.1)]">
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-white">
+              <Rocket size={24} />
+            </div>
+            <div>
+              <div className="mb-0.5 text-xs text-primary">
+                {embedded ? '连接团队聊天服务器（可选）' : '连接 Rocket.Chat'}
+              </div>
+              <div className="text-xl font-semibold">RocketChat X</div>
+              <div className="text-xs text-ink-3">本地 AI 管家就绪 · 连接后开启团队消息</div>
+            </div>
           </div>
-          <div>
-            <div className="mb-0.5 text-xs text-primary">连接 Rocket.Chat</div>
-            <div className="text-xl font-semibold">RocketChat X</div>
-            <div className="text-xs text-ink-3">飞书体验 · Rocket.Chat 内核</div>
-          </div>
+          {isTauri ? (
+            <button
+              type="button"
+              onClick={() => setFirstRun(true)}
+              className="shrink-0 rounded-md border border-line px-2.5 py-1 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
+            >
+              团队配置
+            </button>
+          ) : null}
         </div>
 
         <form onSubmit={onSubmit} className="space-y-4">
@@ -166,7 +191,7 @@ export default function LoginPage() {
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              autoFocus
+              autoFocus={!embedded}
               autoComplete="username"
               className="h-10 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary-light"
               placeholder="请输入用户名或邮箱"
@@ -194,12 +219,52 @@ export default function LoginPage() {
             disabled={busy || !username || !password}
             className="h-10 w-full rounded-md bg-primary text-sm font-medium text-white transition hover:bg-primary-hover active:bg-primary-active disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {checking ? '正在检查服务器…' : status === 'authing' ? '登录中…' : '登录'}
+            {checking ? '正在检查服务器…' : status === 'authing' ? '登录中…' : '连接并登录 Rocket.Chat'}
           </button>
         </form>
 
-        <div className="mt-6 text-center text-xs text-ink-3">
-          使用你的 Rocket.Chat 账号登录，数据完全兼容
+        <div className="mt-5 border-t border-line pt-4">
+          {embedded ? (
+            <>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setModule('butler-view')}
+                  className="flex h-9 items-center justify-center gap-1.5 rounded-md border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 transition hover:border-primary/40 hover:bg-fill-hover hover:text-ink"
+                >
+                  <Bot size={14} className="text-primary" />
+                  使用 AI 管家
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setButlerView('kanban')}
+                  className="flex h-9 items-center justify-center gap-1.5 rounded-md border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 transition hover:border-primary/40 hover:bg-fill-hover hover:text-ink"
+                >
+                  <SquareKanban size={14} className="text-primary" />
+                  打开统一看板
+                </button>
+              </div>
+              <div className="mt-2.5 text-center text-xs leading-5 text-ink-3">
+                未登录 Rocket.Chat 时，左侧 AI 管家、统一看板、待办、日历与工作台均可本地直接使用
+              </div>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void enterLocalMode()}
+                className="h-10 w-full rounded-md border border-line bg-surface-2 text-sm font-medium text-ink-2 transition hover:border-primary/40 hover:bg-fill-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                暂不连接 Rocket.Chat，本地使用
+              </button>
+              <div className="mt-2 text-center text-xs text-ink-3">
+                无需聊天服务器即可使用 AI 管家、统一看板、待办与日历；随时可再连接团队服务器
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

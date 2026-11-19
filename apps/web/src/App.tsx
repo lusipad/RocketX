@@ -17,6 +17,7 @@ import { useUI } from './stores/ui';
 
 export default function App() {
   const status = useAuth((s) => s.status);
+  const localMode = useAuth((s) => s.localMode);
   const userId = useAuth((s) => s.user?._id);
   const onboardingOwnerId = useOnboarding((s) => s.ownerId);
   const onboarding = useOnboarding((s) => s.state);
@@ -33,7 +34,7 @@ export default function App() {
         正在加载…
       </div>
     );
-  } else if (status !== 'authed') {
+  } else if (status !== 'authed' && !localMode) {
     content = <LoginPage />;
   } else if (startupStage === 'error') {
     content = (

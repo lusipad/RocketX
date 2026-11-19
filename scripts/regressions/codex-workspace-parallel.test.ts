@@ -183,6 +183,64 @@ test('Promise.all 并发 startTask 时分别在各自线程启动 turn，且不�
   }
 });
 
+test('后台派工使用冻结工作目录，不切换当前任务或清除当前草稿', async () => {
+  const calls: Array<{ root: string | undefined; threadId?: string }> = [];
+  let root = 'D:/foreground';
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    currentWorkspaceRoot: root, connect: async () => CATALOG,
+    switchWorkspaceRoot: (next: string) => { root = next; return true; },
+    listThreads: async () => [],
+    startThread: async (_selection: unknown, _name: string, targetRoot?: string) => {
+      calls.push({ root: targetRoot }); return thread('background', targetRoot!);
+    },
+    startTurn: async (threadId: string, _input: unknown, _selection: unknown, options: { workspaceRoot?: string }) => {
+      calls.push({ threadId, root: options.workspaceRoot }); return 'background-turn';
+    },
+    stop: async () => undefined,
+  } as never));
+  try {
+    await resetCodexWorkspaceForTests();
+    const foreground = makeThreadState('D:/foreground');
+    useCodexWorkspace.setState({ workspaceRoot: 'D:/foreground', workspaceRoots: ['D:/foreground'],
+      threadStates: { foreground }, ...setProjectedActiveThread('foreground', foreground), composerDraft: '正在写的指令' });
+    await useCodexWorkspace.getState().connect({ refreshThreads: false });
+    await useCodexWorkspace.getState().startTask('后台修复', '修复', { workspaceRoot: 'D:/background', background: true });
+    assert.deepEqual(calls, [{ root: 'D:/background' }, { threadId: 'background', root: 'D:/background' }]);
+    const state = useCodexWorkspace.getState();
+    assert.equal(state.activeThreadId, 'foreground');
+    assert.equal(state.workspaceRoot, 'D:/foreground');
+    assert.equal(state.composerDraft, '正在写的指令');
+    assert.equal(state.threadStates.background.status, 'running');
+  } finally { restoreFactory(); await resetCodexWorkspaceForTests(); }
+});
+
+test('接管按原thread中断，失败保留运行状态，成功不抢其他任务焦点', async () => {
+  let fail = true;
+  const calls: Array<[string, string]> = [];
+  const restoreFactory = setCodexWorkspaceControllerFactory(() => ({
+    currentWorkspaceRoot: 'D:/foreground', connect: async () => CATALOG, listThreads: async () => [],
+    interruptTurn: async (threadId: string, turnId: string) => {
+      calls.push([threadId, turnId]); if (fail) throw new Error('原服务失联');
+    }, stop: async () => undefined,
+  } as never));
+  try {
+    await resetCodexWorkspaceForTests();
+    const foreground = makeThreadState('D:/foreground');
+    const background = makeThreadState('D:/background', { status: 'running', activeTurnId: 'background-turn', streamingText: '执行中' });
+    useCodexWorkspace.setState({ workspaceRoot: 'D:/foreground', threadStates: { foreground, background },
+      ...setProjectedActiveThread('foreground', foreground) });
+    await useCodexWorkspace.getState().connect({ refreshThreads: false });
+    await assert.rejects(useCodexWorkspace.getState().interruptThread('background'), /原服务失联/);
+    assert.equal(useCodexWorkspace.getState().threadStates.background.status, 'running');
+    assert.equal(useCodexWorkspace.getState().threadStates.background.activeTurnId, 'background-turn');
+    fail = false;
+    await useCodexWorkspace.getState().interruptThread('background');
+    assert.deepEqual(calls, [['background', 'background-turn'], ['background', 'background-turn']]);
+    assert.equal(useCodexWorkspace.getState().threadStates.background.activeTurnId, undefined);
+    assert.equal(useCodexWorkspace.getState().activeThreadId, 'foreground');
+  } finally { restoreFactory(); await resetCodexWorkspaceForTests(); }
+});
+
 test('后台线程的通知只更新自己的桶，切回后恢复该线程投影', async () => {
   let callbacks: AppServerControllerOptions | undefined;
   const readTurns = {

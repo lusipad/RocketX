@@ -25,12 +25,19 @@ use crate::native::codex_contract::{CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERS
 #[cfg(not(windows))]
 use crate::native::codex_discovery::find_program;
 use crate::native::codex_discovery::{
-    bundled_codex_paths, resolved_codex_path, standard_codex_paths, system_codex_paths,
+    bundled_codex_paths, resolved_codex_path, resolved_native_codex_path, standard_codex_paths,
+    system_codex_paths,
 };
 pub use crate::native::codex_process::CodexAppServerState;
-use crate::native::codex_process::{CodexExitEvent, CodexOutputEvent, ManagedCodex, ResolvedCodex};
+use crate::native::codex_process::{
+    CodexExitEvent, CodexOutputEvent, ManagedCodex, NativeCodexHandle, ResolvedCodex,
+};
+use crate::native::codex_rpc::{InboundMessage, NativeCodexRpc, MAX_CODEX_RPC_LINE_BYTES};
 use crate::native::codex_runtime as codex_runtime_policy;
-use crate::native::process::{hidden_command, host_path, kill_and_wait};
+use crate::native::process::{
+    hidden_command, host_path, kill_and_wait, kill_owned_tree_and_wait, run_bounded_output,
+    OWNED_TREE_STOP_TIMEOUT,
+};
 use crate::native::supervisor::{now_ms as supervisor_now_ms, observe_exit, RuntimeSupervisor};
 use crate::native::update_policy::{
     installer_exit_code_is_success, normalize_update_version, normalize_update_version_text,
@@ -52,6 +59,8 @@ const MAX_MESSAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_WORKSPACE_CONFIG_BYTES: u64 = 1024 * 1024;
+const NATIVE_CODEX_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const NATIVE_CODEX_PROBE_OUTPUT_LIMIT: usize = 64 * 1024;
 const UPDATER_PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE5MzhFNzU5Q0ZDRDQ3MTIKUldRU1I4M1BXZWM0R1owekdDWWwyV3ZwTlFuRnNwNlZOK0QwMVRUNUNFSmhSdkJBYzZsMDBaSjYK";
 const BUTLER_BUNDLED_SKILLS_DIR: &str = "codex-skills";
 const AZURE_DEVOPS_SERVER_HOST_ADAPTER: &str = "azure-devops-server-host-adapter.ps1";
@@ -732,6 +741,246 @@ fn app_server_launch_args(resolved: &ResolvedCodex) -> Result<Vec<&'static str>,
         resolved,
         "app-server",
     )?))
+}
+
+fn native_codex_root_args(args: &[String]) -> Result<Vec<String>, String> {
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        let flag = arg.split_once('=').map_or(arg.as_str(), |(flag, _)| flag);
+        if !matches!(
+            flag,
+            "-p" | "--profile" | "-c" | "--config" | "--enable" | "--disable"
+        ) {
+            let label = if flag.starts_with('-') {
+                flag
+            } else {
+                "位置参数"
+            };
+            return Err(format!(
+                "原生 Codex 控制暂不支持原执行配置参数 {label}，请明确调整配置后重新交接"
+            ));
+        }
+        result.push(arg.clone());
+        if let Some((_, value)) = arg.split_once('=') {
+            if value.is_empty() {
+                return Err(format!("Codex 配置参数 {flag} 缺少值"));
+            }
+        } else {
+            index += 1;
+            let value = args
+                .get(index)
+                .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                .ok_or_else(|| format!("Codex 配置参数 {flag} 缺少值"))?;
+            result.push(value.clone());
+        }
+        index += 1;
+    }
+    Ok(result)
+}
+
+fn native_profile_command(
+    resolved: &ResolvedCodex,
+    profile: &crate::acp::NativeCodexProfile,
+    root_args: &[String],
+    workspace_root: &str,
+) -> Command {
+    let mut command = resolved.command();
+    command
+        .args(root_args)
+        .envs(&profile.env)
+        .env("CODEX_HOME", &profile.codex_home)
+        .current_dir(workspace_root);
+    command
+}
+
+fn probe_native_profile(
+    profile: &crate::acp::NativeCodexProfile,
+    root_args: &[String],
+    workspace_root: &str,
+) -> Result<(ResolvedCodex, Vec<&'static str>), String> {
+    let mut resolved = resolved_native_codex_path(&profile.program, CodexRuntimeSource::Manual)?;
+    let mut command = native_profile_command(&resolved, profile, root_args, workspace_root);
+    command.arg("--version");
+    let output = run_bounded_output(
+        command,
+        NATIVE_CODEX_PROBE_TIMEOUT,
+        NATIVE_CODEX_PROBE_OUTPUT_LIMIT,
+    )
+    .map_err(|error| native_probe_error("版本", error.kind()))?;
+    let strict = !output.status.success();
+    resolved.version = parse_codex_cli_version(&String::from_utf8_lossy(&output.stdout), strict)
+        .or_else(|| parse_codex_cli_version(&String::from_utf8_lossy(&output.stderr), true))
+        .ok_or("原 Codex 配置未返回有效版本，请核对其程序和参数")?;
+    if classify_codex_version(&resolved.version)? == CodexCompatibilityStatus::Blocked {
+        return Err(unsupported_codex_version_message(&resolved.version));
+    }
+    let mut command = native_profile_command(&resolved, profile, root_args, workspace_root);
+    command.args(["app-server", "--help"]);
+    let help = run_bounded_output(
+        command,
+        NATIVE_CODEX_PROBE_TIMEOUT,
+        NATIVE_CODEX_PROBE_OUTPUT_LIMIT,
+    )
+    .map_err(|error| native_probe_error("app-server", error.kind()))?;
+    if !help.status.success() {
+        return Err(
+            "原 Codex 配置不支持 app-server 或原参数不适用于该入口，禁止丢弃参数继续".into(),
+        );
+    }
+    let help_text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    Ok((resolved, app_server_args_for_help(&help_text)))
+}
+
+fn native_probe_error(label: &str, kind: std::io::ErrorKind) -> String {
+    let reason = match kind {
+        std::io::ErrorKind::TimedOut => "超时，已停止本次探测",
+        std::io::ErrorKind::InvalidData => "输出超过限制",
+        _ => "失败，请核对原执行配置",
+    };
+    format!("Codex {label}探测{reason}")
+}
+
+fn native_executable_fingerprint(resolved: &ResolvedCodex) -> Result<String, String> {
+    // This covers the launch program and explicit prefix files, not programs a script later spawns.
+    let mut hashes = vec![(
+        host_path(&resolved.program),
+        sha256_file(&resolved.program)?,
+    )];
+    for arg in &resolved.prefix_args {
+        let path = Path::new(arg);
+        if !path.is_file() {
+            return Err("无法验证 Codex 启动前缀文件".into());
+        }
+        hashes.push((host_path(path), sha256_file(path)?));
+    }
+    let bytes = serde_json::to_vec(&hashes).map_err(|_| "无法记录 Codex 启动文件指纹")?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+pub(crate) fn assert_no_live_native_writer(
+    app: &tauri::AppHandle,
+    key: &(String, String),
+) -> Result<(), String> {
+    let state = app.state::<CodexAppServerState>();
+    let processes = state
+        .processes
+        .lock()
+        .map_err(|_| "Codex 进程注册表不可用")?;
+    assert_no_native_writer_except(&processes, key, None)
+}
+
+fn assert_no_native_writer_except(
+    processes: &HashMap<String, ManagedCodex>,
+    key: &(String, String),
+    except_process_id: Option<&str>,
+) -> Result<(), String> {
+    for process in processes.values().filter(|process| {
+        process.native_session_key.as_ref() == Some(key)
+            && Some(process.process_id.as_str()) != except_process_id
+    }) {
+        let status = process
+            .child
+            .lock()
+            .map_err(|_| "Codex 进程状态不可用")?
+            .try_wait()
+            .map_err(|_| "无法确认 Codex 原生写入进程状态")?;
+        if status.is_none() {
+            return Err("该原生会话已由原生 Host 接管，请使用现有连接".into());
+        }
+        if !process.native_tree_stopped.load(Ordering::Acquire) {
+            return Err("原 Codex 父进程已退出，尚未确认工具后代进程结束；请核对后再交接".into());
+        }
+    }
+    Ok(())
+}
+
+fn fresh_native_session_key(
+    fresh_source_scope: Option<&str>,
+    current: Option<&(String, String)>,
+    source_scope: &str,
+    actual_thread_id: &str,
+) -> Result<(String, String), String> {
+    if fresh_source_scope != Some(source_scope) || source_scope.trim().is_empty() {
+        return Err("新会话来源与本次原生启动配置不一致".into());
+    }
+    if actual_thread_id.is_empty()
+        || actual_thread_id.len() > 512
+        || actual_thread_id.trim_matches(|value: char| value.is_whitespace() || value == '\u{feff}')
+            != actual_thread_id
+        || actual_thread_id.chars().any(char::is_control)
+    {
+        return Err("原生会话 ID 无效，禁止替换本次会话身份".into());
+    }
+    let key = (source_scope.to_string(), actual_thread_id.to_string());
+    if current.is_some_and(|current| current != &key) {
+        return Err("该原生进程已绑定另一条会话，禁止替换会话身份".into());
+    }
+    Ok(key)
+}
+
+/// The thread ID must come from this process's verified thread/start response, never UI input.
+pub(crate) fn bind_fresh_native_codex(
+    app: &tauri::AppHandle,
+    process_id: &str,
+    source_scope: &str,
+    actual_thread_id: &str,
+) -> Result<(), String> {
+    let _gate = crate::local_sessions::NATIVE_CODEX_START_LOCK
+        .lock()
+        .map_err(|_| "原生 Codex 启动锁不可用")?;
+    let key = (source_scope.to_string(), actual_thread_id.to_string());
+    crate::acp::assert_no_live_native_writer(app, &key)?;
+    let state = app.state::<CodexAppServerState>();
+    let mut processes = state
+        .processes
+        .lock()
+        .map_err(|_| "Codex 进程注册表不可用")?;
+    bind_fresh_native_in_registry(&mut processes, process_id, source_scope, actual_thread_id)
+}
+
+fn bind_fresh_native_in_registry(
+    processes: &mut HashMap<String, ManagedCodex>,
+    process_id: &str,
+    source_scope: &str,
+    actual_thread_id: &str,
+) -> Result<(), String> {
+    let process = processes
+        .get(process_id)
+        .ok_or("本次原生 Codex 进程已不存在")?;
+    if process.native_rpc.is_none()
+        || process.stopping.load(Ordering::Acquire)
+        || process.native_tree_stopped.load(Ordering::Acquire)
+    {
+        return Err("该进程不是可登记的新建原生会话".into());
+    }
+    let key = fresh_native_session_key(
+        process.fresh_source_scope.as_deref(),
+        process.native_session_key.as_ref(),
+        source_scope,
+        actual_thread_id,
+    )?;
+    if process
+        .child
+        .lock()
+        .map_err(|_| "Codex 原生进程状态不可用")?
+        .try_wait()
+        .map_err(|_| "无法确认本次原生进程仍然存活")?
+        .is_some()
+    {
+        return Err("本次原生进程已退出，禁止登记新的写入身份".into());
+    }
+    assert_no_native_writer_except(&processes, &key, Some(process_id))?;
+    processes
+        .get_mut(process_id)
+        .expect("process registry stays locked")
+        .native_session_key = Some(key);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1720,6 +1969,34 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     });
 }
 
+fn spawn_native_codex_reader(reader: ChildStdout, rpc: Arc<NativeCodexRpc>) {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(reader);
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            let read = Read::take(&mut reader, (MAX_CODEX_RPC_LINE_BYTES + 1) as u64)
+                .read_until(b'\n', &mut line);
+            let reason = match read {
+                Ok(0) => "Codex stdout closed".to_string(),
+                Ok(_) if line.len() > MAX_CODEX_RPC_LINE_BYTES => {
+                    "Codex stdout message exceeds 2 MiB".to_string()
+                }
+                Ok(_) => match std::str::from_utf8(&line) {
+                    Ok(line) => match rpc.on_line(line) {
+                        Ok(()) => continue,
+                        Err(error) => error.to_string(),
+                    },
+                    Err(_) => "Codex stdout contains invalid UTF-8".to_string(),
+                },
+                Err(error) => format!("Codex stdout read failed: {error}"),
+            };
+            rpc.disconnect(&reason);
+            return;
+        }
+    });
+}
+
 fn monitor_child(
     app: tauri::AppHandle,
     state: Arc<Mutex<HashMap<String, ManagedCodex>>>,
@@ -1727,40 +2004,79 @@ fn monitor_child(
     child: Arc<Mutex<Child>>,
     supervisor: Arc<Mutex<RuntimeSupervisor>>,
     stopping: Arc<AtomicBool>,
+    native_rpc: Option<Arc<NativeCodexRpc>>,
 ) {
     thread::spawn(move || loop {
         let status = match child.lock() {
             Ok(mut child) => child.try_wait(),
-            Err(_) => return,
+            Err(_) => {
+                if let Some(rpc) = &native_rpc {
+                    rpc.disconnect("Codex child state is unavailable");
+                }
+                return;
+            }
         };
         match status {
             Ok(Some(status)) => {
+                let tree_unknown = native_rpc.is_some()
+                    && state
+                        .lock()
+                        .ok()
+                        .and_then(|processes| {
+                            processes
+                                .get(&process_id)
+                                .map(|process| !process.native_tree_stopped.load(Ordering::Acquire))
+                        })
+                        .unwrap_or(false);
+                if tree_unknown && stopping.load(Ordering::Acquire) {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                if let Some(rpc) = &native_rpc {
+                    let reason = if tree_unknown {
+                        "Codex parent exited; descendant state requires verification".to_string()
+                    } else {
+                        format!("Codex exited with code {:?}", status.code())
+                    };
+                    rpc.disconnect(&reason);
+                }
                 let now_ms = supervisor_now_ms();
                 let intentional = stopping.load(Ordering::Acquire);
                 let snapshot = observe_exit(&supervisor, now_ms, intentional);
-                let process = state
-                    .lock()
-                    .ok()
-                    .and_then(|mut processes| processes.remove(&process_id));
+                let process = if tree_unknown {
+                    None
+                } else {
+                    state
+                        .lock()
+                        .ok()
+                        .and_then(|mut processes| processes.remove(&process_id))
+                };
                 if let Some(process) = process {
                     let _ = std::fs::remove_dir_all(process.attachments_dir);
                 }
-                let _ = app.emit(
-                    "codex-app-server-exit",
-                    CodexExitEvent {
-                        process_id,
-                        code: status.code(),
-                        status: snapshot.status,
-                        failures: snapshot.failures,
-                        restart_after_ms: snapshot
-                            .restart_after
-                            .map(|duration| duration.as_millis() as u64),
-                    },
-                );
+                if native_rpc.is_none() {
+                    let _ = app.emit(
+                        "codex-app-server-exit",
+                        CodexExitEvent {
+                            process_id,
+                            code: status.code(),
+                            status: snapshot.status,
+                            failures: snapshot.failures,
+                            restart_after_ms: snapshot
+                                .restart_after
+                                .map(|duration| duration.as_millis() as u64),
+                        },
+                    );
+                }
                 return;
             }
             Ok(None) => thread::sleep(Duration::from_millis(100)),
-            Err(_) => return,
+            Err(error) => {
+                if let Some(rpc) = &native_rpc {
+                    rpc.disconnect(&format!("Codex child wait failed: {error}"));
+                }
+                return;
+            }
         }
     });
 }
@@ -1786,11 +2102,40 @@ struct StartedCodexProcess {
     stderr: ChildStderr,
     supervisor: Arc<Mutex<RuntimeSupervisor>>,
     stopping: Arc<AtomicBool>,
+    native_rpc: Option<Arc<NativeCodexRpc>>,
+    executable_fingerprint: String,
+    resolved_executable_path: String,
 }
 
 enum CodexAppServerStartResult {
     Existing(CodexProcessInfo),
     Started(StartedCodexProcess),
+}
+
+fn codex_process_id(pid: u32, next_id: &AtomicU64, fresh: bool) -> String {
+    if fresh {
+        format!("codex-fresh-{}", uuid::Uuid::new_v4())
+    } else {
+        format!("codex-{pid}-{}", next_id.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+enum NativeCodexLaunch {
+    Resume {
+        profile: crate::acp::NativeCodexProfile,
+        authorization: crate::local_sessions::NativeResumeAuthorization,
+    },
+    Fresh {
+        profile: crate::acp::NativeCodexProfile,
+    },
+}
+
+impl NativeCodexLaunch {
+    fn profile(&self) -> &crate::acp::NativeCodexProfile {
+        match self {
+            Self::Resume { profile, .. } | Self::Fresh { profile } => profile,
+        }
+    }
 }
 
 fn start_codex_app_server_blocking(
@@ -1800,14 +2145,68 @@ fn start_codex_app_server_blocking(
     next_id: Arc<AtomicU64>,
     session_id: String,
     workspace_root: String,
+    native_launch: Option<NativeCodexLaunch>,
+    native_sink: Option<Box<dyn Fn(InboundMessage) + Send + Sync>>,
 ) -> Result<CodexAppServerStartResult, String> {
     validate_session_id(&session_id)?;
-    let workspace_root = host_path(&codex_workspace_directory(&app, &workspace_root)?);
+    let _native_start_gate = native_launch
+        .as_ref()
+        .map(|_| {
+            crate::local_sessions::NATIVE_CODEX_START_LOCK
+                .lock()
+                .map_err(|_| "原生 Codex 启动锁不可用")
+        })
+        .transpose()?;
+    let workspace_root = host_path(&if native_launch.is_some() {
+        canonical_directory(&workspace_root)?
+    } else {
+        codex_workspace_directory(&app, &workspace_root)?
+    });
     let managed_skill_roots = bundled_codex_skill_roots(&app)?
         .into_iter()
         .map(|path| host_path(&path))
         .collect::<Vec<_>>();
-    let resolved = resolve_codex(&app)?;
+    let native_session_key = native_launch.as_ref().and_then(|launch| match launch {
+        NativeCodexLaunch::Resume { authorization, .. } => Some((
+            authorization.source_scope.clone(),
+            authorization.session_id.clone(),
+        )),
+        NativeCodexLaunch::Fresh { .. } => None,
+    });
+    let fresh_source_scope = native_launch.as_ref().and_then(|launch| match launch {
+        NativeCodexLaunch::Fresh { profile } => Some(profile.source_scope.clone()),
+        NativeCodexLaunch::Resume { .. } => None,
+    });
+    let mut profile_root_args = Vec::new();
+    let (resolved, native_launch_args) = if let Some(launch) = &native_launch {
+        let profile = launch.profile();
+        crate::acp::verify_native_codex_profile(&app, profile)?;
+        if let Some(key) = &native_session_key {
+            crate::acp::assert_no_live_native_writer(&app, key)?;
+            assert_no_live_native_writer(&app, key)?;
+        }
+        profile_root_args = native_codex_root_args(&profile.args)?;
+        let (resolved, args) = probe_native_profile(profile, &profile_root_args, &workspace_root)?;
+        crate::acp::verify_native_codex_profile(&app, profile)?;
+        if let NativeCodexLaunch::Resume { authorization, .. } = launch {
+            crate::local_sessions::consume_native_handoff(
+                authorization,
+                &profile.profile_id,
+                profile.fingerprint(),
+                &profile.source_scope,
+                Path::new(&workspace_root),
+            )?;
+        }
+        (resolved, Some(args))
+    } else {
+        (resolve_codex(&app)?, None)
+    };
+    let executable_fingerprint = if native_launch.is_some() {
+        native_executable_fingerprint(&resolved)?
+    } else {
+        String::new()
+    };
+    let resolved_executable_path = host_path(&resolved.program);
     let version = resolved.version.clone();
     let attachments_dir = prepare_attachments_dir(&app, &session_id)?;
 
@@ -1818,6 +2217,9 @@ fn start_codex_app_server_blocking(
         .values()
         .find(|process| process.session_id == session_id)
     {
+        if process.native_rpc.is_some() || native_sink.is_some() {
+            return Err("Codex session is already owned by another runtime".to_string());
+        }
         return Ok(CodexAppServerStartResult::Existing(CodexProcessInfo {
             process_id: process.process_id.clone(),
             version: process.version.clone(),
@@ -1862,7 +2264,10 @@ fn start_codex_app_server_blocking(
         supervisor
     };
 
-    let launch_args = match app_server_launch_args(&resolved) {
+    let launch_args = match native_launch_args
+        .map(Ok)
+        .unwrap_or_else(|| app_server_launch_args(&resolved))
+    {
         Ok(args) => args,
         Err(error) => {
             if let Ok(mut value) = supervisor.lock() {
@@ -1872,7 +2277,16 @@ fn start_codex_app_server_blocking(
             return Err(error);
         }
     };
-    let mut command = resolved.command();
+    let mut command = if let Some(launch) = &native_launch {
+        native_profile_command(
+            &resolved,
+            launch.profile(),
+            &profile_root_args,
+            &workspace_root,
+        )
+    } else {
+        resolved.command()
+    };
     command
         .args(&launch_args)
         .current_dir(&workspace_root)
@@ -1925,27 +2339,57 @@ fn start_codex_app_server_blocking(
             return Err("Codex app-server stderr is unavailable".to_string());
         }
     };
-    let process_id = format!(
-        "codex-{}-{}",
+    let process_id = codex_process_id(
         child.id(),
-        next_id.fetch_add(1, Ordering::Relaxed)
+        &next_id,
+        matches!(&native_launch, Some(NativeCodexLaunch::Fresh { .. })),
     );
     let child = Arc::new(Mutex::new(child));
+    let stdin = Arc::new(Mutex::new(stdin));
+    let native_tree_stopped = Arc::new(AtomicBool::new(false));
+    let native_rpc = native_sink.map(|sink| {
+        let stdin = Arc::clone(&stdin);
+        let owned_child = Arc::clone(&child);
+        let tree_stopped = Arc::clone(&native_tree_stopped);
+        Arc::new(NativeCodexRpc::new(
+            move |frame| {
+                let mut stdin = stdin
+                    .lock()
+                    .map_err(|_| std::io::Error::other("Codex app-server stdin is unavailable"))?;
+                stdin.write_all(frame).and_then(|_| stdin.flush())
+            },
+            move |event| {
+                if matches!(&event, InboundMessage::Disconnected { .. }) {
+                    // A broken RPC must not leave this process's tool children writing.
+                    if let Ok(mut child) = owned_child.lock() {
+                        if kill_owned_tree_and_wait(&mut child, OWNED_TREE_STOP_TIMEOUT).is_ok() {
+                            tree_stopped.store(true, Ordering::Release);
+                        }
+                    }
+                }
+                sink(event);
+            },
+        ))
+    });
     let stopping = Arc::new(AtomicBool::new(false));
     if let Ok(mut value) = supervisor.lock() {
         value.mark_running(supervisor_now_ms());
     }
     let managed = ManagedCodex {
+        native_session_key,
+        fresh_source_scope,
+        native_tree_stopped,
         process_id: process_id.clone(),
         session_id,
         child: Arc::clone(&child),
-        stdin: Arc::new(Mutex::new(stdin)),
+        stdin,
         attachments_dir,
         workspace_root: workspace_root.clone(),
         version: version.clone(),
         runtime_source: resolved.source,
         supervisor: Arc::clone(&supervisor),
         stopping: Arc::clone(&stopping),
+        native_rpc: native_rpc.clone(),
     };
     processes.insert(process_id.clone(), managed);
     Ok(CodexAppServerStartResult::Started(StartedCodexProcess {
@@ -1962,6 +2406,9 @@ fn start_codex_app_server_blocking(
         stderr,
         supervisor,
         stopping,
+        native_rpc,
+        executable_fingerprint,
+        resolved_executable_path,
     }))
 }
 
@@ -1984,6 +2431,8 @@ pub async fn codex_app_server_start(
             next_id,
             session_id,
             workspace_root,
+            None,
+            None,
         )
     })
     .await
@@ -2010,10 +2459,106 @@ pub async fn codex_app_server_start(
                 started.child,
                 started.supervisor,
                 started.stopping,
+                None,
             );
             Ok(started.info)
         }
     }
+}
+
+/// Starts an owned native connection. No stdout reaches the legacy WebView IPC.
+pub(crate) async fn open_native_codex(
+    app: tauri::AppHandle,
+    session_id: String,
+    workspace_root: String,
+    profile: crate::acp::NativeCodexProfile,
+    authorization: crate::local_sessions::NativeResumeAuthorization,
+    sink: impl Fn(InboundMessage) + Send + Sync + 'static,
+) -> Result<NativeCodexHandle, String> {
+    open_native_codex_launch(
+        app,
+        session_id,
+        workspace_root,
+        NativeCodexLaunch::Resume {
+            profile,
+            authorization,
+        },
+        sink,
+    )
+    .await
+}
+
+pub(crate) async fn open_fresh_native_codex(
+    app: tauri::AppHandle,
+    session_id: String,
+    workspace_root: String,
+    profile: crate::acp::NativeCodexProfile,
+    sink: impl Fn(InboundMessage) + Send + Sync + 'static,
+) -> Result<NativeCodexHandle, String> {
+    open_native_codex_launch(
+        app,
+        session_id,
+        workspace_root,
+        NativeCodexLaunch::Fresh { profile },
+        sink,
+    )
+    .await
+}
+
+async fn open_native_codex_launch(
+    app: tauri::AppHandle,
+    session_id: String,
+    workspace_root: String,
+    launch: NativeCodexLaunch,
+    sink: impl Fn(InboundMessage) + Send + Sync + 'static,
+) -> Result<NativeCodexHandle, String> {
+    let state = app.state::<CodexAppServerState>();
+    let processes = Arc::clone(&state.processes);
+    let supervisors = Arc::clone(&state.supervisors);
+    let next_id = Arc::clone(&state.next_id);
+    let blocking_app = app.clone();
+    let start_result = tauri::async_runtime::spawn_blocking(move || {
+        start_codex_app_server_blocking(
+            blocking_app,
+            processes,
+            supervisors,
+            next_id,
+            session_id,
+            workspace_root,
+            Some(launch),
+            Some(Box::new(sink)),
+        )
+    })
+    .await
+    .map_err(|error| format!("Codex native startup failed: {error}"))??;
+    let CodexAppServerStartResult::Started(started) = start_result else {
+        return Err("Codex native startup did not create an owned connection".into());
+    };
+    let rpc = started
+        .native_rpc
+        .expect("native startup installs RPC before readers");
+    spawn_native_codex_reader(started.stdout, Arc::clone(&rpc));
+    // Drain diagnostics without forwarding raw process output into the UI.
+    let mut stderr = started.stderr;
+    thread::spawn(move || {
+        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+    });
+    monitor_child(
+        app.clone(),
+        Arc::clone(&state.processes),
+        started.process_id,
+        started.child,
+        started.supervisor,
+        started.stopping,
+        Some(Arc::clone(&rpc)),
+    );
+    Ok(NativeCodexHandle {
+        info: started.info,
+        rpc,
+        executable_fingerprint: started.executable_fingerprint,
+        executable_fingerprint_scope: "launch-program-and-prefix-files-v1".into(),
+        resolved_executable_path: started.resolved_executable_path,
+    })
 }
 
 #[tauri::command]
@@ -2192,6 +2737,9 @@ pub fn codex_app_server_write(
         let process = processes
             .get(&process_id)
             .ok_or_else(|| "Codex app-server process is not active".to_string())?;
+        if process.native_rpc.is_some() {
+            return Err("Codex process is owned by the native work runtime".to_string());
+        }
         Arc::clone(&process.stdin)
     };
     let mut stdin = stdin
@@ -2208,13 +2756,71 @@ pub fn codex_app_server_stop(
     state: tauri::State<'_, CodexAppServerState>,
     process_id: String,
 ) -> Result<(), String> {
+    stop_codex_process(&state, &process_id, false)
+}
+
+pub(crate) fn stop_native_codex(app: &tauri::AppHandle, process_id: &str) -> Result<(), String> {
+    stop_codex_process(&app.state::<CodexAppServerState>(), process_id, true)
+}
+
+pub(crate) fn stop_native_codex_if_registered(
+    app: &tauri::AppHandle,
+    process_id: &str,
+) -> Result<bool, String> {
+    stop_fresh_native_if_registered(&app.state::<CodexAppServerState>(), process_id)
+}
+
+fn stop_fresh_native_if_registered(
+    state: &CodexAppServerState,
+    process_id: &str,
+) -> Result<bool, String> {
+    {
+        let processes = state
+            .processes
+            .lock()
+            .map_err(|_| "Codex process registry is unavailable")?;
+        let Some(process) = processes.get(process_id) else {
+            return Ok(false);
+        };
+        if !process_id.starts_with("codex-fresh-")
+            || process.fresh_source_scope.is_none()
+            || process.native_rpc.is_none()
+        {
+            return Err("新开工清理只能停止其唯一 fresh 原生进程，禁止停止旧原生工作".into());
+        }
+    }
+    stop_codex_process_if_registered(state, process_id, true)
+}
+
+fn stop_codex_process(
+    state: &CodexAppServerState,
+    process_id: &str,
+    native_owned: bool,
+) -> Result<(), String> {
+    if stop_codex_process_if_registered(state, process_id, native_owned)? {
+        Ok(())
+    } else {
+        Err("Codex app-server process is not active".into())
+    }
+}
+
+fn stop_codex_process_if_registered(
+    state: &CodexAppServerState,
+    process_id: &str,
+    native_owned: bool,
+) -> Result<bool, String> {
     let process = state
         .processes
         .lock()
         .map_err(|_| "Codex process registry is unavailable".to_string())?
-        .get(&process_id)
-        .cloned()
-        .ok_or_else(|| "Codex app-server process is not active".to_string())?;
+        .get(process_id)
+        .cloned();
+    let Some(process) = process else {
+        return Ok(false);
+    };
+    if process.native_rpc.is_some() != native_owned {
+        return Err("Codex process is owned by another runtime".to_string());
+    }
     let session_id = process.session_id.clone();
     process.stopping.store(true, Ordering::Release);
     if let Ok(mut supervisor) = process.supervisor.lock() {
@@ -2225,25 +2831,41 @@ pub fn codex_app_server_stop(
             .child
             .lock()
             .map_err(|_| "Codex app-server process is unavailable".to_string())?;
-        kill_and_wait(&mut child)
-            .map_err(|error| format!("failed to wait for Codex app-server: {error}"))?;
+        if native_owned {
+            if !process.native_tree_stopped.load(Ordering::Acquire) {
+                kill_owned_tree_and_wait(&mut child, OWNED_TREE_STOP_TIMEOUT).map_err(|_| {
+                    "未能确认原 Codex 进程树已结束，保留写入身份；请核对原执行进程".to_string()
+                })?;
+                process.native_tree_stopped.store(true, Ordering::Release);
+            }
+        } else {
+            kill_and_wait(&mut child)
+                .map_err(|error| format!("failed to wait for Codex app-server: {error}"))?;
+        }
         Ok(())
     })();
     if let Err(error) = stop_result {
         process.stopping.store(false, Ordering::Release);
         if let Ok(mut supervisor) = process.supervisor.lock() {
-            supervisor.mark_running(supervisor_now_ms());
+            if native_owned {
+                supervisor.mark_exit(supervisor_now_ms(), false);
+            } else {
+                supervisor.mark_running(supervisor_now_ms());
+            }
         }
         return Err(error);
     }
     if let Ok(mut processes) = state.processes.lock() {
-        processes.remove(&process_id);
+        processes.remove(process_id);
+    }
+    if let Some(rpc) = &process.native_rpc {
+        rpc.disconnect("Codex native connection stopped");
     }
     let _ = std::fs::remove_dir_all(&process.attachments_dir);
     if let Ok(mut supervisors) = state.supervisors.lock() {
         supervisors.remove(&session_id);
     }
-    Ok(())
+    Ok(true)
 }
 
 #[tauri::command]
@@ -3389,15 +4011,13 @@ pub fn maybe_print_version(args: &[String]) -> bool {
 
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
+    let Ok(_start_gate) = crate::local_sessions::NATIVE_CODEX_START_LOCK.lock() else {
+        return;
+    };
     let processes = state
         .processes
         .lock()
-        .map(|mut processes| {
-            processes
-                .drain()
-                .map(|(_, process)| process)
-                .collect::<Vec<_>>()
-        })
+        .map(|processes| processes.values().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     for process in processes {
         process.stopping.store(true, Ordering::Release);
@@ -3405,8 +4025,23 @@ pub fn shutdown(app: &tauri::AppHandle) {
             supervisor.request_stop();
         }
         if let Ok(mut child) = process.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            let stopped = if process.native_rpc.is_some() {
+                kill_owned_tree_and_wait(&mut child, OWNED_TREE_STOP_TIMEOUT)
+            } else {
+                kill_and_wait(&mut child)
+            };
+            if stopped.is_ok() {
+                process.native_tree_stopped.store(true, Ordering::Release);
+                drop(child);
+                if let Ok(mut processes) = state.processes.lock() {
+                    processes.remove(&process.process_id);
+                }
+            } else {
+                process.stopping.store(false, Ordering::Release);
+            }
+        }
+        if let Some(rpc) = &process.native_rpc {
+            rpc.disconnect("RocketX is shutting down");
         }
     }
     if let Ok(mut supervisors) = state.supervisors.lock() {
@@ -3455,6 +4090,299 @@ mod tests {
         process::Command,
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn native_profile_arguments_preserve_supported_options_and_reject_exec_flags() {
+        let supported = [
+            "--profile",
+            "fixture",
+            "-c",
+            "model_provider=fixture",
+            "--enable=fixture",
+            "--disable",
+            "other",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        assert_eq!(
+            super::native_codex_root_args(&supported).unwrap(),
+            supported
+        );
+        for args in [
+            vec!["--last"],
+            vec!["--json"],
+            vec!["--skip-git-repo-check"],
+            vec!["--cd", "D:/other"],
+            vec!["--ephemeral"],
+            vec!["--profile"],
+            vec!["--profile="],
+            vec!["--profile", "--json"],
+            vec!["synthetic-positional-secret"],
+        ] {
+            let error = super::native_codex_root_args(
+                &args.into_iter().map(str::to_string).collect::<Vec<_>>(),
+            )
+            .unwrap_err();
+            assert!(!error.contains("synthetic-positional-secret"));
+        }
+    }
+
+    #[test]
+    fn native_executable_fingerprint_covers_program_and_prefix_file_bytes_only() {
+        let root = unique_temp_dir("native-launch-fingerprint");
+        fs::create_dir_all(&root).unwrap();
+        let program = root.join("node.exe");
+        let entry = root.join("codex.js");
+        fs::write(&program, b"synthetic program").unwrap();
+        fs::write(&entry, b"synthetic entry").unwrap();
+        let resolved = super::ResolvedCodex {
+            program: program.clone(),
+            prefix_args: vec![entry.clone().into_os_string()],
+            display_path: "fixture".into(),
+            source: CodexRuntimeSource::Manual,
+            version: "fixture".into(),
+        };
+        let initial = super::native_executable_fingerprint(&resolved).unwrap();
+        fs::write(&entry, b"changed synthetic entry").unwrap();
+        let changed_entry = super::native_executable_fingerprint(&resolved).unwrap();
+        assert_ne!(initial, changed_entry);
+        fs::write(&program, b"changed synthetic program").unwrap();
+        assert_ne!(
+            changed_entry,
+            super::native_executable_fingerprint(&resolved).unwrap()
+        );
+        fs::remove_file(&entry).unwrap();
+        assert!(super::native_executable_fingerprint(&resolved).is_err());
+        fs::remove_file(program).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn fresh_native_process_ids_cannot_collide_after_pid_and_counter_reuse() {
+        let first_counter = super::AtomicU64::new(0);
+        let restarted_counter = super::AtomicU64::new(0);
+        let first = super::codex_process_id(4242, &first_counter, true);
+        let restarted = super::codex_process_id(4242, &restarted_counter, true);
+        assert_ne!(first, restarted);
+        assert!(uuid::Uuid::parse_str(first.strip_prefix("codex-fresh-").unwrap()).is_ok());
+        assert!(uuid::Uuid::parse_str(restarted.strip_prefix("codex-fresh-").unwrap()).is_ok());
+        assert_eq!(
+            super::codex_process_id(4242, &first_counter, false),
+            "codex-4242-0"
+        );
+        assert_eq!(
+            super::codex_process_id(4242, &first_counter, false),
+            "codex-4242-1"
+        );
+    }
+
+    #[test]
+    fn fresh_native_identity_binds_once_and_matches_native_id_contract() {
+        let key = super::fresh_native_session_key(
+            Some("codex:fixture"),
+            None,
+            "codex:fixture",
+            "thread_with-prefix",
+        )
+        .unwrap();
+        assert_eq!(
+            super::fresh_native_session_key(
+                Some("codex:fixture"),
+                Some(&key),
+                "codex:fixture",
+                "thread_with-prefix"
+            )
+            .unwrap(),
+            key
+        );
+        assert!(super::fresh_native_session_key(None, None, "codex:fixture", "thread").is_err());
+        assert!(super::fresh_native_session_key(
+            Some("codex:fixture"),
+            None,
+            "codex:other",
+            "thread"
+        )
+        .is_err());
+        assert!(super::fresh_native_session_key(
+            Some("codex:fixture"),
+            Some(&key),
+            "codex:fixture",
+            "other-thread"
+        )
+        .is_err());
+        for thread in [
+            "".to_string(),
+            " padded".into(),
+            "thread\n".into(),
+            "\u{feff}thread".into(),
+            "x".repeat(513),
+        ] {
+            assert!(super::fresh_native_session_key(
+                Some("codex:fixture"),
+                None,
+                "codex:fixture",
+                &thread
+            )
+            .is_err());
+        }
+    }
+
+    fn fresh_native_registry_fixture(id: &str) -> super::ManagedCodex {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = super::hidden_command("cmd.exe");
+            command.args(["/C", "set /P RCX_FIXTURE_VALUE="]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = super::hidden_command("sh");
+            command.args(["-c", "read fixture"]);
+            command
+        };
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        super::ManagedCodex {
+            native_session_key: None,
+            fresh_source_scope: Some("codex:fixture".into()),
+            native_tree_stopped: super::Arc::new(super::AtomicBool::new(false)),
+            process_id: id.into(),
+            session_id: id.into(),
+            child: super::Arc::new(super::Mutex::new(child)),
+            stdin: super::Arc::new(super::Mutex::new(stdin)),
+            attachments_dir: PathBuf::new(),
+            workspace_root: "fixture".into(),
+            version: "fixture".into(),
+            runtime_source: CodexRuntimeSource::Manual,
+            supervisor: super::Arc::new(super::Mutex::new(super::RuntimeSupervisor::default())),
+            stopping: super::Arc::new(super::AtomicBool::new(false)),
+            native_rpc: Some(super::Arc::new(super::NativeCodexRpc::new(
+                |_| Ok(()),
+                |_| {},
+            ))),
+        }
+    }
+
+    #[test]
+    fn fresh_native_registry_requires_owned_live_fresh_process_and_rejects_another_writer() {
+        let first = fresh_native_registry_fixture("fixture-first");
+        let second = fresh_native_registry_fixture("fixture-second");
+        let mut processes = super::HashMap::from([
+            ("fixture-first".into(), first.clone()),
+            ("fixture-second".into(), second.clone()),
+        ]);
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "missing",
+            "codex:fixture",
+            "native-thread"
+        )
+        .is_err());
+        super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-first",
+            "codex:fixture",
+            "native-thread",
+        )
+        .unwrap();
+        super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-first",
+            "codex:fixture",
+            "native-thread",
+        )
+        .unwrap();
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-first",
+            "codex:fixture",
+            "replacement"
+        )
+        .is_err());
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-second",
+            "codex:fixture",
+            "native-thread"
+        )
+        .is_err());
+        assert!(processes["fixture-second"].native_session_key.is_none());
+        first.stopping.store(true, super::Ordering::Release);
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-first",
+            "codex:fixture",
+            "native-thread"
+        )
+        .is_err());
+        first.stopping.store(false, super::Ordering::Release);
+        let rpc = processes
+            .get_mut("fixture-first")
+            .unwrap()
+            .native_rpc
+            .take();
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-first",
+            "codex:fixture",
+            "native-thread"
+        )
+        .is_err());
+        processes.get_mut("fixture-first").unwrap().native_rpc = rpc;
+        processes
+            .get_mut("fixture-first")
+            .unwrap()
+            .fresh_source_scope = None;
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-first",
+            "codex:fixture",
+            "native-thread"
+        )
+        .is_err());
+        super::kill_and_wait(&mut first.child.lock().unwrap()).unwrap();
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-second",
+            "codex:fixture",
+            "native-thread"
+        )
+        .is_err());
+        super::kill_and_wait(&mut second.child.lock().unwrap()).unwrap();
+        assert!(super::bind_fresh_native_in_registry(
+            &mut processes,
+            "fixture-second",
+            "codex:fixture",
+            "unclaimed-thread"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn optional_native_stop_is_absent_safe_but_preserves_uncertain_writer() {
+        let state = super::CodexAppServerState::default();
+        assert!(!super::stop_codex_process_if_registered(&state, "missing", true).unwrap());
+        assert!(!super::stop_fresh_native_if_registered(&state, "missing").unwrap());
+        assert!(super::stop_codex_process(&state, "missing", true).is_err());
+        let process_id = "codex-4242-0";
+        let process = fresh_native_registry_fixture(process_id);
+        state
+            .processes
+            .lock()
+            .unwrap()
+            .insert(process_id.into(), process.clone());
+        assert!(super::stop_fresh_native_if_registered(&state, process_id).is_err());
+        assert!(process.child.lock().unwrap().try_wait().unwrap().is_none());
+        super::kill_and_wait(&mut process.child.lock().unwrap()).unwrap();
+        assert!(super::stop_codex_process_if_registered(&state, process_id, true).is_err());
+        assert!(state.processes.lock().unwrap().contains_key(process_id));
+        assert!(super::stop_codex_process_if_registered(&state, process_id, false).is_err());
+    }
 
     fn unique_temp_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

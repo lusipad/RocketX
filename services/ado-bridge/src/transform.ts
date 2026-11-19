@@ -2,10 +2,33 @@ import type { RcMessageAttachment } from '@rcx/rc-client';
 
 /** Azure DevOps Service Hooks 通用载荷（所有事件都带 message/detailedMessage） */
 export interface AdoEvent {
+  id?: string;
+  notificationId?: number;
   eventType?: string;
+  createdDate?: string;
   message?: { text?: string; html?: string; markdown?: string };
   detailedMessage?: { text?: string; html?: string; markdown?: string };
   resource?: Record<string, any>;
+  resourceContainers?: Record<string, any>;
+}
+
+export interface AdoStructuredEventMetadata {
+  dedupeKey: string;
+  source: 'ado_webhook';
+  eventType: string;
+  resourceKey: string;
+  resourceVersion: number;
+  project?: string;
+  repo?: string;
+  branch?: string;
+  commitSha?: string;
+  workItemId?: number;
+  prId?: number;
+  buildId?: number;
+  result?: string;
+  webUrl?: string;
+  summary: string;
+  occurredAt: number;
 }
 
 interface EventStyle {
@@ -66,9 +89,99 @@ function adjustColor(event: AdoEvent, style: EventStyle): string {
   return style.color;
 }
 
+function toPositiveNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value);
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 提取 ADO Service Hooks 事件的结构化关联元数据，供管家反馈回路去重、水位抑制与关联卡片使用。
+ */
+export function extractAdoStructuredEvent(event: AdoEvent): AdoStructuredEventMetadata | null {
+  const eventType = event.eventType?.trim();
+  const title = event.message?.text ?? event.message?.markdown ?? '';
+  if (!eventType && !title) return null;
+
+  const r = event.resource ?? {};
+  const pr = r.pullRequest ?? r;
+  const project: string | undefined =
+    r.project?.name ??
+    pr.repository?.project?.name ??
+    r.repository?.project?.name ??
+    r.fields?.['System.TeamProject']?.newValue ??
+    r.fields?.['System.TeamProject'] ??
+    r.revision?.fields?.['System.TeamProject'];
+  const repo: string | undefined = pr.repository?.name ?? r.repository?.name;
+  const branch: string | undefined =
+    pr.sourceRefName ??
+    r.sourceBranch ??
+    r.refUpdates?.[0]?.name;
+  const commitSha: string | undefined =
+    pr.lastMergeSourceCommit?.commitId ??
+    r.sourceVersion ??
+    r.refUpdates?.[0]?.newObjectId;
+
+  const workItemId =
+    eventType?.startsWith('workitem.')
+      ? toPositiveNumber(r.workItemId ?? r.revision?.id ?? r.id)
+      : toPositiveNumber(r.workItemId);
+  const prId =
+    eventType?.includes('pullrequest')
+      ? toPositiveNumber(r.pullRequestId ?? pr.pullRequestId ?? pr.id)
+      : undefined;
+  const buildId =
+    eventType === 'build.complete' ? toPositiveNumber(r.id ?? r.buildNumber) : undefined;
+
+  const occurredAt = event.createdDate ? Date.parse(event.createdDate) || Date.now() : Date.now();
+  const resourceVersion =
+    toPositiveNumber(r.rev ?? r.revision?.rev ?? buildId ?? event.notificationId) ?? occurredAt;
+
+  let resourceKey = `ado:${eventType ?? 'unknown'}`;
+  if (workItemId) {
+    resourceKey = `ado:workitem:${project ?? 'default'}:${workItemId}`;
+  } else if (prId) {
+    resourceKey = `ado:pr:${project ?? 'default'}:${repo ?? 'default'}:${prId}`;
+  } else if (buildId) {
+    const defId = r.definition?.id ?? r.definition?.name ?? 'pipeline';
+    resourceKey = `ado:build:${project ?? 'default'}:${defId}:${ branch ?? 'default' }`;
+  } else if (repo && branch) {
+    resourceKey = `ado:branch:${project ?? 'default'}:${repo}:${branch}`;
+  }
+
+  const dedupeKey =
+    event.id?.trim() ||
+    `${resourceKey}:${eventType ?? 'event'}:${resourceVersion}:${commitSha ?? ''}`;
+
+  return {
+    dedupeKey,
+    source: 'ado_webhook',
+    eventType: eventType ?? 'unknown',
+    resourceKey,
+    resourceVersion,
+    project,
+    repo,
+    branch,
+    commitSha,
+    workItemId,
+    prId,
+    buildId,
+    result: typeof r.result === 'string' ? r.result : undefined,
+    webUrl: findLink(event),
+    summary: (event.detailedMessage?.text ?? title ?? eventType ?? 'ADO 事件').trim(),
+    occurredAt,
+  };
+}
+
 export interface CardMessage {
   text: string;
   attachments: RcMessageAttachment[];
+  structuredEvent?: AdoStructuredEventMetadata;
 }
 
 /**
@@ -96,5 +209,6 @@ export function transformAdoEvent(event: AdoEvent): CardMessage | null {
     collapsed: false,
   };
 
-  return { text: title ?? style.label, attachments: [attachment] };
+  const structuredEvent = extractAdoStructuredEvent(event) ?? undefined;
+  return { text: title ?? style.label, attachments: [attachment], structuredEvent };
 }

@@ -22,6 +22,7 @@ export type AiRuntimeStartupSource =
   | 'explicit-unavailable'
   | 'full-default'
   | 'mode-disabled'
+  | 'performance'
   | 'web';
 
 export interface AiRuntimeStartupResolution {
@@ -46,7 +47,6 @@ export type AiRuntimeBootstrapInvoker = <T>(
 export interface AiRuntimeBootstrapOptions {
   desktop?: boolean;
   invokeRuntime?: AiRuntimeBootstrapInvoker;
-  manualCodexPath?: string | null;
   storage?: RuntimeModeStorage;
 }
 
@@ -75,7 +75,6 @@ export function getAiRuntimeStartupResolution(): AiRuntimeStartupResolution {
 export async function initializeStartupAiRuntimeProvider({
   desktop = isTauri,
   invokeRuntime = invoke,
-  manualCodexPath = null,
   storage,
 }: AiRuntimeBootstrapOptions = {}): Promise<AiRuntimeProvider> {
   const configured = readConfiguredAiRuntimeProvider(storage);
@@ -103,65 +102,18 @@ export async function initializeStartupAiRuntimeProvider({
       source: 'explicit',
     });
   }
-  if (configured) {
-    const command = configured === 'deepseek' ? 'dsh_runtime_probe' : 'codex_runtime_probe';
-    const args = configured === 'deepseek'
-      ? { sourcePath: null }
-      : { manualPath: manualCodexPath };
-    const probe = await probeRuntime(invokeRuntime, command, args);
-    const active = selectStartupAiRuntimeProvider(configured, {
-      deepseek: configured === 'deepseek' && probe.ready,
-      codex: configured === 'codex' && probe.ready,
-    });
-    return applyStartupResolution({
-      active,
-      configured,
-      profile: 'unknown',
-      ...(probe.ready ? {} : { reason: probe.reason }),
-      source: probe.ready ? 'explicit' : 'explicit-unavailable',
-    });
-  }
 
-  let profile: DesktopDistributionProfile = 'unknown';
-  try {
-    const detectedProfile = await invokeRuntime<string>('desktop_distribution_profile');
-    if (detectedProfile === 'full' || detectedProfile === 'slim') profile = detectedProfile;
-  } catch {
-    // 旧版或损坏的包形态命令按 slim 处理，由实际运行时探测决定是否启用 AI。
-  }
-  if (profile === 'full') {
-    // full 版的探测包含归档校验与外部进程 spawn，两个探测必须并行，
-    // 串行会把首屏延迟翻倍（slim 路径早已并行）。
-    const [deepseekProbe, codexProbe] = await Promise.all([
-      probeRuntime(invokeRuntime, 'dsh_runtime_probe', { sourcePath: null }),
-      probeRuntime(invokeRuntime, 'codex_runtime_probe', { manualPath: manualCodexPath }),
-    ]);
-    if (deepseekProbe.ready) {
-      return applyStartupResolution({
-        active: 'deepseek',
-        profile,
-        source: 'full-default',
-      });
-    }
-    const active = selectStartupAiRuntimeProvider(undefined, {
-      deepseek: false,
-      codex: codexProbe.ready,
-    });
-    return applyStartupResolution({
-      active,
-      profile,
-      source: 'automatic',
-      reason: deepseekProbe.reason ?? codexProbe.reason,
-    });
-  }
+  const probe = await probeRuntime(invokeRuntime, 'pi_runtime_probe', { manualPath: null });
+  const active = selectStartupAiRuntimeProvider(configured, { pi: probe.ready });
+  const reason = !probe.ready && probe.reason?.trim() ? probe.reason.trim() : undefined;
 
-  const [deepseekProbe, codexProbe] = await Promise.all([
-    probeRuntime(invokeRuntime, 'dsh_runtime_probe', { sourcePath: null }),
-    probeRuntime(invokeRuntime, 'codex_runtime_probe', { manualPath: manualCodexPath }),
-  ]);
-  const active = selectStartupAiRuntimeProvider(undefined, {
-    deepseek: deepseekProbe.ready,
-    codex: codexProbe.ready,
+  return applyStartupResolution({
+    active,
+    ...(configured ? { configured } : {}),
+    profile: 'unknown',
+    ...(reason ? { reason } : {}),
+    source: configured === 'pi'
+      ? (probe.ready ? 'explicit' : 'explicit-unavailable')
+      : 'automatic',
   });
-  return applyStartupResolution({ active, profile, source: 'automatic' });
 }

@@ -36,7 +36,7 @@ function deps(shown: string[]): NotificationCoordinatorDeps {
     },
     playNotificationSound: () => {},
     navigateToMessage: () => {},
-    documentHasFocus: () => false,
+    isViewingRoom: () => false,
   };
 }
 

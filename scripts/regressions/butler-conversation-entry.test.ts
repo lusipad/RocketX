@@ -8,8 +8,8 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
   const styles = readFileSync('apps/web/src/styles.css', 'utf8');
 
-  assert.match(page, /codexRuntime && activeView === 'routines' \? \(/);
-  assert.match(page, /codexRuntime && activeView === 'plugins' \? \(/);
+  assert.match(page, /piRuntime && activeView === 'routines' \? \(/);
+  assert.match(page, /piRuntime && activeView === 'plugins' \? \(/);
   assert.match(page, /<ButlerRoutines \/>/);
   assert.match(page, /<ButlerPluginsPage \/>/);
   assert.match(page, /<section aria-label="任务" className="butler-task-surface">/);
@@ -17,16 +17,16 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.doesNotMatch(page, /butler-task-provider-mobile|管家执行引擎/);
   assert.doesNotMatch(page, /任务执行视图|role="tab"/);
   assert.doesNotMatch(page, /localStorage/);
-  assert.match(page, /<ButlerConversation embedded \/>/);
+  assert.match(page, /<ButlerConversation embedded workBrief=\{workBrief\} \/>/);
   assert.doesNotMatch(page, /ButlerSessionSwitcher|ButlerIdentityPage|ButlerConnectionsPanel|Today/);
 
-  assert.match(history, /<nav className="butler-codex-surface-nav" aria-label="Codex 工作区">/);
+  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label="AI 协作">/);
   assert.match(history, /setButlerView\('conversation'\)/);
   assert.match(history, /setButlerView\('routines'\)/);
   assert.match(history, /setButlerView\('plugins'\)/);
   assert.match(history, /await startThread\(\)/);
   assert.match(history, /void resumeThread\(thread\.id\)/);
-  assert.match(history, /选择 Codex 工作区/);
+  assert.match(history, /选择工作区/);
   assert.match(history, /const workspaceRoots = useCodexWorkspace\(\(state\) => state\.workspaceRoots\)/);
   assert.match(history, /aria-label="添加托管项目"/);
   assert.match(history, /const butlerWorkspaceRoot = useCodexWorkspace/);
@@ -69,7 +69,7 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(conversation, /const composerPlaceholder = status === 'external'/);
   assert.match(conversation, /Codex App 保留原任务/);
   assert.match(conversation, /id="codex-external-composer-notice"/);
-  assert.match(conversation, /aria-describedby=\{status === 'external' \? 'codex-external-composer-notice' : undefined\}/);
+  assert.match(conversation, /aria-describedby=\{`butler-composer-target\$\{status === 'external' \? ' codex-external-composer-notice' : ''\}`\}/);
   assert.match(conversation, /requestAnimationFrame\(\(\) => textareaRef\.current\?\.focus\(\)\)/);
   assert.match(conversation, /替我审批/);
   assert.match(conversation, /只在检测到潜在危险时询问/);

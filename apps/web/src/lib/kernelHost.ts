@@ -118,10 +118,14 @@ export function createDefaultKernelHost(): KernelHost {
       startBridge: async () => {
         const { startSharedAgentBridge } = await import('../stores/sharedAgent');
         await startSharedAgentBridge();
+        const { startSuperAgentBridge } = await import('../agent/superAgentBridge');
+        await startSuperAgentBridge();
       },
       stopBridge: async () => {
         const { stopSharedAgentBridge } = await import('../stores/sharedAgent');
         stopSharedAgentBridge();
+        const { stopSuperAgentBridge } = await import('../agent/superAgentBridge');
+        stopSuperAgentBridge();
       },
     },
   };

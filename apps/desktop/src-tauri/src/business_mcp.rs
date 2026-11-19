@@ -40,8 +40,11 @@ pub struct BusinessMcpLaunchConfig {
 }
 
 fn keychain_entry(service: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(service, KEYCHAIN_ACCOUNT)
-        .map_err(|error| format!("业务 MCP 系统凭据库不可用：{error}"))
+    keyring::Entry::new(
+        &crate::credential_scope::service_name(service)?,
+        KEYCHAIN_ACCOUNT,
+    )
+    .map_err(|error| format!("业务 MCP 系统凭据库不可用：{error}"))
 }
 
 fn load_keychain<T: DeserializeOwned>(service: &str) -> Result<Option<T>, String> {

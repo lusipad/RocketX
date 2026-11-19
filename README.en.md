@@ -22,7 +22,7 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 
 - **Team messaging** over your existing Rocket.Chat server, with a Lark-style three-pane layout, threads, reactions, mentions, file sharing, and discussion cards.
 - **GTD-style work surfaces**: Inbox, Todos, Calendar, Contacts, and a Workbench that talks to Azure DevOps Server 2022.
-- **Local AI runtime**: pick one startup AI backend — OpenAI Codex, DeepSeek Harness (DSH), or no AI. The choice is global, persists across restarts, and never runs two backends at once.
+- **Local AI workspace** uses Pi with a model service of your choice. It keeps project work, conversations, decisions, and results together.
 - **Shared agent hosting** in rooms and discussions, backed by the same startup runtime. Web and no-AI clients can view an active host and use `@ai`; only a desktop client with the matching runtime can start or resume one.
 - **LAN continuity** through authenticated peer links and an optional IPMSG/Intranet Link Sidecar plugin on Windows.
 
@@ -84,13 +84,9 @@ The file supplies defaults for Rocket.Chat, Azure DevOps, work-item templates, h
 
 ### AI runtime selection
 
-In **Settings → AI** you choose exactly one startup AI runtime: **Codex**, **DSH**, or **no AI**. The choice is saved and takes effect after restart. The same runtime is used for Butler local execution, private room AI, starting or resuming AI hosting, `/ai`, and message handoff.
+Desktop installers include the Pi SDK and its Node runtime. Open Butler to configure a model service and credentials, or keep AI disabled. Existing Codex and DSH startup selections migrate to Pi. Users who previously selected no AI keep that preference.
 
-- **Codex** requires a compatible, signed-in local Codex runtime discoverable on `PATH`, in a standard installation location, or through RocketX's manual runtime path setting. It reuses native threads, models, permissions, Skills, Plugins, Apps, local Memory, and Codex-only routines / runtime probes through `app-server`.
-- **DSH** requires a RocketX-verified system DSH in slim installations, or the private DSH and Node runtimes supplied by the Windows full installer. It opens the official DSH Web inside Butler; RocketX owns the desktop shell, the controller/host path for room sidebar AI and hosting, and the process lifecycle. The official DSH Web remains the source of truth for model, Agent, permission, approval, question, and credential configuration.
-- **No AI** starts no local executor. Butler and existing shared-hosting records remain visible, and room members can still use `@ai` with an active host on another device, while local start, resume, and execution actions stay disabled.
-
-Slim installers probe compatible system Codex and DSH runtimes without bundling either. The Windows full installer additionally supplies exactly pinned private Codex, DSH, Node, and OCR resources. Scheduled tasks remain Codex-backed, device-local, and execute only while RocketX is running. See the [capability matrix](docs/specs/capability-matrix.md) for exact platform and degradation behavior.
+Native Codex work requires a compatible Codex installation and its own account. The Windows full installer also includes private Codex, DSH and OCR resources. Save any DSH private-room conversation you need before upgrading, as its previous room binding will not reopen automatically.
 
 ### Optional self-host with Docker
 

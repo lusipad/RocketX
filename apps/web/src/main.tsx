@@ -5,11 +5,14 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { initializeStartupAiRuntimeProvider } from './lib/aiRuntimeBootstrap';
 import { getServerBase, installContextMenuGuard, installLinkInterceptor } from './lib/client';
 import { applyRuntimeModeDocumentState, runtimeFeatures } from './lib/runtimeMode';
+import { autostartAvailable } from './lib/autostart';
+import { hasExistingRocketXUserState, prepareDesktopDefaultsRecord, resetFirstRun } from './lib/firstRun';
 import { initTheme } from './lib/theme';
 import { preloadPinyin } from './lib/pinyin';
 import { ensureKernelStoreReady, initializeKernel } from './kernel/runtime';
-import { getCodexManualPath } from './stores/codexRuntime';
-import { useCodexRuntime } from './stores/codexRuntime';
+import { probePiRuntime, selectNativeButlerAccount } from './platform/desktopCommands';
+import { isTauri } from './lib/http';
+import { LOCAL_ACCOUNT_OWNER } from './lib/accountScope';
 import { useAuth } from './stores/auth';
 import { useChat } from './stores/chat';
 import { usePrefs } from './stores/prefs';
@@ -18,9 +21,11 @@ import { useImLayout } from './stores/imLayout';
 import { useFileIndex } from './stores/fileIndex';
 import { useDownloadHistory } from './stores/downloadHistory';
 import { useCodexWorkspace } from './stores/codexWorkspace';
+import { beginWorkLedgerAccount } from './stores/workLedger';
+import { awaitTodoAccountReady } from './stores/todos';
 import { createStartupCoordinator, type StartupCoordinator } from './lib/startup';
 import { toast } from './stores/toast';
-import { useUI } from './stores/ui';
+import { UI_MODULE_STORAGE_KEY, useUI } from './stores/ui';
 import './styles.css';
 
 function scheduleStartupWarmups(): void {
@@ -38,12 +43,27 @@ function scheduleStartupWarmups(): void {
 let bootstrapPromise: Promise<void> | null = null;
 let startupCoordinator: StartupCoordinator | null = null;
 
-function hydrateAccount(userId: string): void {
+async function hydrateAccount(userId: string): Promise<void> {
+  const scope = useAuth.getState().localMode ? LOCAL_ACCOUNT_OWNER : `${userId}@${getServerBase() || 'same-origin'}`;
+  const activateLedger = beginWorkLedgerAccount(scope);
+  if (isTauri) {
+    await selectNativeButlerAccount(scope);
+    await awaitTodoAccountReady();
+  }
+  activateLedger();
   useOnboarding.getState().hydrate(userId);
   useImLayout.getState().hydrate(userId);
   useFileIndex.getState().hydrate(userId);
   useDownloadHistory.getState().hydrate(userId);
   useCodexWorkspace.getState().hydrate(`${getServerBase() || 'same-origin'}:${userId}`);
+}
+
+function hasPersistedModuleSelection(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && Boolean(localStorage.getItem(UI_MODULE_STORAGE_KEY));
+  } catch {
+    return false;
+  }
 }
 
 function createCoordinator(
@@ -59,8 +79,10 @@ function createCoordinator(
       preparePlatform: async (signal) => {
         if (signal?.aborted) throw new Error('启动任务已取消');
         if (platformPrepared) return;
-        // 桌面端：所有外链点击交给系统浏览器（webview 内 target="_blank" 无效）
-        installLinkInterceptor((error) => toast.error(error, '无法用系统浏览器打开链接'));
+        installLinkInterceptor(
+          (mid) => void useChat.getState().jumpToMessage(mid),
+          (error) => toast.error(error, '无法用系统浏览器打开链接'),
+        );
         // 桌面端：屏蔽 webview 自带的右键菜单（聊天软件里不该弹出「刷新 / 另存为 / 检查」）
         installContextMenuGuard();
         await ensureKernelStoreReady();
@@ -89,10 +111,17 @@ function createCoordinator(
       },
       initializeKernel: async (signal) => {
         if (runtimeFeatures().bootKernel) await initializeKernel(undefined, signal);
+        if (
+          useAuth.getState().localMode &&
+          !hasPersistedModuleSelection() &&
+          useUI.getState().module === 'messages'
+        ) {
+          useUI.getState().setModule(runtimeFeatures().butler ? 'butler-view' : 'todos');
+        }
         if (signal?.aborted) throw new Error('扩展内核启动已取消');
       },
       startBackground: async (signal) => {
-        if (runtimeFeatures().runtimeProbes) await useCodexRuntime.getState().probe();
+        if (runtimeFeatures().runtimeProbes) await probePiRuntime().catch(() => undefined);
         if (signal?.aborted) throw new Error('后台任务启动已取消');
       },
     },
@@ -106,14 +135,20 @@ async function bootstrapOnce(): Promise<void> {
   // 运行模式和主题必须先落到 document，避免首屏闪烁并让后续启动门禁读到正确模式。
   applyRuntimeModeDocumentState();
   initTheme();
+  if (isTauri) {
+    // 恢复无账号会创建本地 owner；设备是否首次安装必须提前判定。
+    const hasExistingUserState = hasExistingRocketXUserState(localStorage);
+    prepareDesktopDefaultsRecord({ storage: localStorage, releaseDesktop: autostartAvailable, hasExistingUserState });
+    if (!hasExistingUserState) resetFirstRun(localStorage);
+  }
   // AI 运行时探测不阻塞首屏，协调器会在消息连接后等待它再启动 Kernel。
-  const aiRuntimeProviderReady = initializeStartupAiRuntimeProvider({
-    manualCodexPath: getCodexManualPath() || null,
-  });
+  const aiRuntimeProviderReady = initializeStartupAiRuntimeProvider({});
 
   startupCoordinator ??= createCoordinator(aiRuntimeProviderReady);
   useAuth.subscribe((state, previous) => {
-    if (state.status === 'authed' && previous.status !== 'authed') {
+    if (state.status === 'authed' && (
+      state.user?._id !== previous.user?._id || (!state.localMode && previous.status !== 'authed')
+    )) {
       void startupCoordinator?.start();
     }
   });

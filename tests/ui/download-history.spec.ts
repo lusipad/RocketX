@@ -10,6 +10,7 @@ async function installDesktopBridge(page: Page) {
     const requests = new Map<number, { method: string; url: string; headers: string[][]; data?: number[] }>();
     const responses = new Map<number, { bytes: number[]; read: boolean }>();
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    let accountGeneration = 0;
     (window as unknown as { __desktopCalls: typeof calls }).__desktopCalls = calls;
 
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
@@ -17,6 +18,9 @@ async function installDesktopBridge(page: Page) {
       value: {
         invoke: async (command: string, args?: Record<string, any>) => {
           calls.push({ command, args });
+          if (command === 'butler_db_select_account') {
+            return { accountScope: args?.accountScope, generation: ++accountGeneration };
+          }
           if (command === 'allow_http_origin') return new URL(String(args?.origin)).origin;
           if (command === 'plugin:http|fetch') {
             const rid = nextRid++;

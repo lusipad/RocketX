@@ -5,7 +5,41 @@
 
 路径缩写：表中的 `pages/`、`stores/`、`components/`、`lib/`、`agent/` 均相对于 `apps/web/src/`；未带目录的 `*.test.ts` 均相对于 `scripts/regressions/`。`tests/ui/` 和 `apps/desktop/` 使用仓库根目录完整路径。
 
+## Agent 工作台 S1 增量
+
+2026-11-15 工作树的[输入与工作上下文规格](agent-workspace-input-and-context.md)单独追踪；运行结果统一保存在[实施记录](../implementation-notes-rocketx-agent-workspace-refactor.md)，不将模拟执行器证据视为真实 Codex 接续。
+
+| 验收 ID | 主要实现 | 自动化入口 | 验证状态与边界 |
+| --- | --- | --- | --- |
+| AWC-S1-01–04 | components/ButlerConversation.tsx、components/AcpWorkspaceSurface.tsx、components/CodexImagePicker.tsx、stores/agentComposerDrafts.ts、stores/codexWorkspace.ts、agent/AppServerController.ts | tests/ui/agent-composer-reliability.spec.ts、agent-composer-runtime.test.ts | R、UI；真实 Windows 输入法另验；工作详情／SQLite 的真实 WebView 证据单列如下，不代替全部草稿行为 |
+| AWC-S1-05–06 | components/ButlerWorkPortalDock.tsx、components/ButlerConversation.tsx、lib/workContext.ts | tests/ui/agent-work-context.spec.ts、work-context-report.test.ts | R、UI；详情与成果归属、删除选择、后台更新与显式标签切换 |
+| AWC-S1-07–08 | agent/workflowReport.ts、components/WorkflowReportCard.tsx | work-context-report.test.ts、tests/ui/agent-work-context.spec.ts | R、UI；真实计划计数与无计划状态，不代表验收完成 |
+
+### 2026-11-16 工作台易用性增量
+
+现行行为见[输入与工作上下文规格第 7 节](agent-workspace-input-and-context.md#7-2026-11-16-工作台易用性增量)，不改变原生交接、人工验收或外部写入权限。
+
+| 验收 ID | 主要实现 | 自动化入口 | 验证状态与边界 |
+| --- | --- | --- | --- |
+| AWC-UX-01–03 | components/WorkSessionImport.tsx、components/WorkSessionHistoryPreview.tsx、components/AcpWorkspaceSurface.tsx、agent/superAgentBridge.ts | work-session-import.test.ts、tests/ui/work-session-import.spec.ts | R、UI；300 条发现上限、30 条分页、批量／部分失败／完整身份／账号隔离；只读预览最多 24 条，不能证明完整历史或活动接管 |
+| AWC-UX-04 | components/WorkKanbanBoard.tsx、agent/superAgentBridge.ts | tests/ui/workboard-usability.spec.ts、work-session-import.test.ts | R、UI；普通优先级、摘要区分、当前版本记录／阻碍、初始扫描共享状态及窄窗，不将未知活动状态显示为运行 |
+| AWC-UX-05–06 | components/WorkCardPortal.tsx | tests/ui/work-portal-usability.spec.ts、work-acceptance-portal.spec.ts、workflow-report-delivery.spec.ts | 阅读优先、折叠管理、跨卡迟到保存 CAS／新输入／错误隔离及最新失败可见；定向复现含先红后绿与 StrictMode；本轮未重跑原生 WebView |
+
 ## 1. 证据等级
+
+S2–S5 的现行合同见[执行、验收与可靠投递](agent-workspace-execution-and-delivery.md)，可选 S6 见[本地语音](local-voice.md)。本轮新增追踪如下，最终运行结果以[实施记录](../implementation-notes-rocketx-agent-workspace-refactor.md)为准。
+
+| 方案验收 | 实现 | 行为证据 |
+| --- | --- | --- |
+| AC01–02、07–12 | codexHostTools、workLedger、workCoordinator、workArtifacts、原生 butler_ledger／butler_worktree、WorkCardPortal | work-host-lifecycle、work-ledger-lifecycle、work-acceptance-contract、work-ci-evidence、workflow-end-to-end；work-acceptance-portal UI |
+| AC03–06、29 | local_sessions、acp_bridge、acpAgents、sessionAdapter、superAgentBridge | native-session-handoff；原生身份／令牌 Rust 测试；native-session-handoff UI；smoke-native-codex-handoff |
+| AC13–15、26 | externalActionExecutor、externalWorkActions、workflowReport、WorkflowReportCard | external-work-actions、external-work-actions-integration、workflow-report-identity、workflow-end-to-end；workflow-report-delivery UI；smoke-local-report-delivery 在真实 RC 8.6.1 验证 3 段正常＋1 条丢回执、重复 0、恢复写入 0；ADO 401，真实写入未验收 |
+| AC08–09、16–19、27–28 | workSupervisor、superAgentBridge、codexWorkspace、ACP 审批与取消 | work-supervisor、work-supervisor-runtime、codex-workspace-parallel、native-session-handoff；隔离实机 Alt+F4 隐藏／single-instance 再启动显示及隔离进程中止后同工作恢复已验；未点击物理托盘菜单，系统休眠另验 |
+| AC20–24、30a | 草稿、阅读位置、工作上下文、工作台与导航 | agent-composer-reliability、agent-reading-position、agent-work-context、agent-workboard-state UI（100 条、半屏、缩放与键盘） |
+| AC25、30b | butler_account、账号代际保护、butlerMemory、workSearch、workMethods | work-account-generation；butler_account／butler_memory Rust；work-context-memory、work-context-search、work-method-reuse；work-context-memory-search UI |
+| AC31 | components/LocalVoiceControls.tsx、lib/localVoiceAudio.ts、stores/localVoice.ts、platform/localVoice.ts、apps/desktop/src-tauri/src/local_voice.rs／local_voice.ps1 | local-voice-audio；tests/ui/local-voice.spec.ts；Rust local_voice 专项 7／7，含真实离线 TTS→ASR 和挂起探测取消；desktop-voice-ipc 的真实 Tauri 探测／静默合成识别及输入限制通过；物理拾音／播放未验收，限 Windows 可选 PTT |
+| 原生工作保存 | desktopCommands.ts、apps/desktop/src-tauri/src/butler_ledger.rs、WorkCardPortal | work-ledger-native-ipc；smoke-desktop-workspace 的隔离 Tauri WebView 创建→详情保存→SQLite 回读→刷新→隔离进程中止后重启，同工作、要求版本 2／成果版本 0、暂停状态保持；不代替托盘退出菜单或 IME 验收 |
+| 测试凭据隔离 | apps/desktop/src-tauri/src/credential_scope.rs、业务 MCP／Agent bot／LAN／live_e2e 的 keyring 入口 | credential_scope Rust 4 项；正式 service 名称兼容、测试标识独立、未初始化拒绝访问；实际桌面实例使用独立标识与数据路径 |
 
 | 等级 | 含义 | 能否单独证明“已实现” |
 | --- | --- | --- |

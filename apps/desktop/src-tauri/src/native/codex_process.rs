@@ -14,11 +14,15 @@ use std::{
 
 use super::{
     codex_contract::*,
+    codex_rpc::NativeCodexRpc,
     supervisor::{RuntimeStatus, RuntimeSupervisor},
 };
 
 #[derive(Clone)]
 pub(crate) struct ManagedCodex {
+    pub(crate) native_session_key: Option<(String, String)>,
+    pub(crate) fresh_source_scope: Option<String>,
+    pub(crate) native_tree_stopped: Arc<AtomicBool>,
     pub(crate) process_id: String,
     pub(crate) session_id: String,
     pub(crate) child: Arc<Mutex<Child>>,
@@ -29,6 +33,15 @@ pub(crate) struct ManagedCodex {
     pub(crate) runtime_source: CodexRuntimeSource,
     pub(crate) supervisor: Arc<Mutex<RuntimeSupervisor>>,
     pub(crate) stopping: Arc<AtomicBool>,
+    pub(crate) native_rpc: Option<Arc<NativeCodexRpc>>,
+}
+
+pub(crate) struct NativeCodexHandle {
+    pub(crate) info: CodexProcessInfo,
+    pub(crate) rpc: Arc<NativeCodexRpc>,
+    pub(crate) executable_fingerprint: String,
+    pub(crate) executable_fingerprint_scope: String,
+    pub(crate) resolved_executable_path: String,
 }
 
 #[derive(Default)]

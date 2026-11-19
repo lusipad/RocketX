@@ -3,7 +3,7 @@ import { useAuth } from '../stores/auth';
 import { observeNearViewport } from '../lib/nearViewport';
 import AuthImage from './AuthImage';
 
-const PALETTE = ['#3370ff', '#7f3bf5', '#00b96b', '#ff8800', '#f54a45', '#04a5a5', '#c71fbf'];
+const PALETTE = ['#3b6cf0', '#6e56cf', '#12a594', '#d97706', '#e5484d', '#0891b2', '#db2777'];
 
 function colorFor(name: string): string {
   let h = 0;
@@ -46,9 +46,12 @@ export default function Avatar({
    */
   const version = useAuth((s) => s.avatarVersion);
   const myUsername = useAuth((s) => s.user?.username);
+  const localMode = useAuth((s) => s.localMode);
   const bust = version > 0 && username && username === myUsername ? `&v=${version}` : '';
 
-  const path = username
+  const path = localMode
+    ? null
+    : username
     ? `/avatar/${encodeURIComponent(username)}?size=${size * 2}${bust}`
     : roomId
       ? `/avatar/room/${encodeURIComponent(roomId)}?size=${size * 2}`

@@ -25,6 +25,7 @@ export const MODULE_ORDER: ModuleKey[] = [
 ];
 
 export const UI_MODULE_STORAGE_KEY = 'rcx-ui';
+export const NAV_COLLAPSED_STORAGE_KEY = 'rcx-nav-collapsed';
 export const BUTLER_TASK_PROVIDER_STORAGE_KEY = AI_RUNTIME_PROVIDER_STORAGE_KEY;
 export const DEFAULT_WORK_ITEM_STATE_FILTER = '__default_hide_shelved__';
 
@@ -37,7 +38,17 @@ interface ModuleStorage {
 }
 
 function browserStorage(): ModuleStorage | undefined {
-  return typeof localStorage === 'undefined' ? undefined : localStorage;
+  try {
+    if (typeof window !== 'undefined' && window.localStorage && typeof window.localStorage.getItem === 'function') {
+      return window.localStorage;
+    }
+    if (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function') {
+      return localStorage;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 function readPersistedUIValue(storage: ModuleStorage | undefined = browserStorage()): unknown {
@@ -69,6 +80,11 @@ function persistedModuleValue(parsed: unknown): unknown {
 }
 
 export function readPersistedModule(storage: ModuleStorage | undefined = browserStorage()): ModuleKey {
+  if (!storage || typeof storage.getItem !== 'function') return 'messages';
+  const rawCheck = storage.getItem(UI_MODULE_STORAGE_KEY);
+  if (!rawCheck && storage?.getItem('rcx-local-mode-v1') === '1' && runtimeFeatures().butler) {
+    return 'butler-view';
+  }
   if (!storage) return 'messages';
   try {
     const parsed = readPersistedUIValue(storage);
@@ -76,6 +92,23 @@ export function readPersistedModule(storage: ModuleStorage | undefined = browser
     return !runtimeFeatures().butler && module === 'butler-view' ? 'messages' : module;
   } catch {
     return 'messages';
+  }
+}
+
+export function readPersistedNavCollapsed(storage: ModuleStorage | undefined = browserStorage()): boolean {
+  if (!storage) return false;
+  try {
+    return storage.getItem(NAV_COLLAPSED_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function persistNavCollapsed(collapsed: boolean, storage: ModuleStorage | undefined = browserStorage()): void {
+  try {
+    storage?.setItem(NAV_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
+  } catch {
+    // 忽略受限
   }
 }
 
@@ -158,10 +191,8 @@ interface UIState {
   butlerView: ButlerWorkspaceView;
   /** 从房间跳转时需要聚焦的同一条 AI 托管会话。 */
   selectedHostedSessionKey: string | null;
-  /** 从私人房间 AI 跳转时需要在 DSH Web 中聚焦的原生会话。 */
-  selectedPersonalDshSessionId: string | null;
-  /** 私人 DSH 会话的聚焦请求序号；允许同一 session 重复触发 focus。 */
-  selectedPersonalDshFocusNonce: number;
+  /** 在 ACP 工作台预选或聚焦的本地 Agent ID。 */
+  selectedAcpAgentId: string | null;
   /** 本次启动独占使用的 AI 运行时。 */
   aiRuntimeProvider: AiRuntimeProvider;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
@@ -183,12 +214,20 @@ interface UIState {
   openCommandCenter: () => void;
   seedComposer: (text: string) => void;
   openButlerConversation: (focusSessionKey?: string) => void;
-  openPersonalDshConversation: (sessionId: string | null) => void;
+  openButlerAssistant: () => void;
+  openAcpHub: (agentId?: string | null) => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
   setSelectedHostedSessionKey: (sessionKey: string | null) => void;
+  setSelectedAcpAgentId: (agentId: string | null) => void;
   setWorkbenchTab: (t: WorkbenchTab) => void;
   setWorkItemStateFilter: (s: string) => void;
   setPrTab: (t: 'review' | 'mine') => void;
+  navRailCollapsed: boolean;
+  setNavRailCollapsed: (collapsed: boolean) => void;
+  toggleNavRailCollapsed: () => void;
+  butlerSidebarCollapsed: boolean;
+  setButlerSidebarCollapsed: (collapsed: boolean) => void;
+  toggleButlerSidebarCollapsed: () => void;
   setBuildsFailedOnly: (v: boolean) => void;
 }
 
@@ -202,8 +241,7 @@ export const useUI = create<UIState>((set) => ({
   composerSeed: null,
   butlerView: 'conversation',
   selectedHostedSessionKey: null,
-  selectedPersonalDshSessionId: null,
-  selectedPersonalDshFocusNonce: 0,
+  selectedAcpAgentId: null,
   aiRuntimeProvider: getAiRuntimeProvider(),
   workbenchTab: readPersistedWorkbenchTab(),
   workItemStateFilter: readPersistedWorkItemStateFilter(),
@@ -220,8 +258,6 @@ export const useUI = create<UIState>((set) => ({
             module: m,
             butlerView: 'conversation',
             selectedHostedSessionKey: null,
-            selectedPersonalDshSessionId: null,
-            selectedPersonalDshFocusNonce: 0,
           }
         : { module: m });
     }
@@ -246,19 +282,25 @@ export const useUI = create<UIState>((set) => ({
       module: 'butler-view',
       butlerView: 'conversation',
       selectedHostedSessionKey: focusSessionKey ?? null,
-      selectedPersonalDshSessionId: null,
-      selectedPersonalDshFocusNonce: 0,
     });
   },
-  openPersonalDshConversation: (sessionId) => {
+  openButlerAssistant: () => {
+    if (!runtimeFeatures().butler) return;
+    persistUIState({ module: 'butler-view' });
+    set({
+      module: 'butler-view',
+      butlerView: 'assistant',
+      selectedHostedSessionKey: null,
+    });
+  },
+  openAcpHub: (agentId) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
     set((state) => ({
       module: 'butler-view',
-      butlerView: 'conversation',
+      butlerView: 'acp-hub',
       selectedHostedSessionKey: null,
-      selectedPersonalDshSessionId: sessionId,
-      selectedPersonalDshFocusNonce: state.selectedPersonalDshFocusNonce + 1,
+      selectedAcpAgentId: agentId === undefined ? state.selectedAcpAgentId : agentId,
     }));
   },
   setButlerView: (view) => {
@@ -267,23 +309,31 @@ export const useUI = create<UIState>((set) => ({
     set({
       module: 'butler-view',
       butlerView: view,
-      ...(view === 'hosting' ? {} : {
-        selectedHostedSessionKey: null,
-        selectedPersonalDshSessionId: null,
-        selectedPersonalDshFocusNonce: 0,
-      }),
+      ...(view === 'hosting' ? {} : { selectedHostedSessionKey: null }),
     });
   },
   setSelectedHostedSessionKey: (sessionKey) => set({
     selectedHostedSessionKey: sessionKey,
-    selectedPersonalDshSessionId: null,
-    selectedPersonalDshFocusNonce: 0,
   }),
+  setSelectedAcpAgentId: (agentId) => set({ selectedAcpAgentId: agentId }),
   setWorkbenchTab: (t) => set({ workbenchTab: t }),
   setWorkItemStateFilter: (s) => {
     persistUIState({ workItemStateFilter: s });
     set({ workItemStateFilter: s });
   },
   setPrTab: (t) => set({ prTab: t }),
+  navRailCollapsed: readPersistedNavCollapsed(),
+  setNavRailCollapsed: (collapsed) => {
+    persistNavCollapsed(collapsed);
+    set({ navRailCollapsed: collapsed });
+  },
+  toggleNavRailCollapsed: () => set((state) => {
+    const next = !state.navRailCollapsed;
+    persistNavCollapsed(next);
+    return { navRailCollapsed: next };
+  }),
+  butlerSidebarCollapsed: false,
+  setButlerSidebarCollapsed: (collapsed) => set({ butlerSidebarCollapsed: collapsed }),
+  toggleButlerSidebarCollapsed: () => set((state) => ({ butlerSidebarCollapsed: !state.butlerSidebarCollapsed })),
   setBuildsFailedOnly: (v) => set({ buildsFailedOnly: v }),
 }));

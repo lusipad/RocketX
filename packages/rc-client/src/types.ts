@@ -46,6 +46,14 @@ export interface RcMessageAttachmentField {
   value?: string;
 }
 
+export interface RcMessageFile {
+  _id: string;
+  name: string;
+  type?: string;
+  size?: number;
+  typeGroup?: string;
+}
+
 export interface RcMessageAttachment {
   /** 服务端附件类别，例如留存策略清理后的 removed-file。 */
   type?: string;
@@ -58,8 +66,14 @@ export interface RcMessageAttachment {
   title_link?: string;
   /** 文件附件标记（RC 文件消息为 true，可下载） */
   title_link_download?: boolean;
+  fileId?: string;
+  file?: RcMessageFile;
   description?: string;
   image_url?: string;
+  audio_url?: string;
+  audio_type?: string;
+  video_url?: string;
+  video_type?: string;
   /** 图片原始尺寸（RC 上传时探测）。渲染前按它预留空间，加载完成不再撑开列表 */
   image_dimensions?: { width?: number; height?: number };
   author_name?: string;
@@ -113,7 +127,8 @@ export interface RcMessage {
   /** 讨论里最后一条消息的时间 */
   dlm?: RcDate;
   /** 文件消息的文件信息 */
-  file?: { _id: string; name: string; type?: string; size?: number };
+  file?: RcMessageFile;
+  files?: RcMessageFile[];
   /** 消息里 URL 的服务端解析结果（链接卡片预览） */
   urls?: {
     url: string;

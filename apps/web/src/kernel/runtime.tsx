@@ -73,10 +73,6 @@ const ButlerPanel = lazyComponent(() => import('../components/ButlerPanel'));
 const AgentPanel = lazyComponent(() => import('../components/AgentPanel'));
 
 async function summarizeRoom(rid: string): Promise<void> {
-  if (getAiRuntimeProvider() === 'deepseek') {
-    runButlerCommand({ rid, params: '请总结当前会话的未读消息，并列出需要我跟进的事项。' });
-    return;
-  }
   activeKernelHost.navigation.setPanel('ai');
   await activeKernelHost.ai.summarize(rid);
 }
@@ -465,7 +461,7 @@ function registerBuiltins(): void {
   ] as const;
   for (const [id, render] of panels) {
     if (
-      (id === 'ai' && (!features.ai || aiRuntimeProvider !== 'codex'))
+      (id === 'ai' && (!features.ai || aiRuntimeProvider !== 'pi'))
       || (id === 'butler' && !features.butler)
       || (id === 'agent' && !features.sharedAgent)
     ) continue;
@@ -487,7 +483,7 @@ function registerBuiltins(): void {
       params: '问题（可选）',
       run: runButlerCommand,
     });
-    if (aiRuntimeProvider === 'codex') kernelRegistry.register('core', 'composer.trigger', {
+    if (aiRuntimeProvider === 'pi') kernelRegistry.register('core', 'composer.trigger', {
       id: 'codex',
       prefix: '$codex',
       run: async (context) => {

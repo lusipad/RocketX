@@ -142,6 +142,7 @@ export interface AdoBuildInfo {
   id: number;
   buildNumber: string;
   definition: string;
+  definitionId?: number;
   project: string;
   status: string;
   result: string;
@@ -151,6 +152,7 @@ export interface AdoBuildInfo {
   webUrl: string;
   reason?: string;
   sourceBranch?: string;
+  sourceVersion?: string;
   repository?: string;
   pullRequestId?: number;
   pullRequestUrl?: string;

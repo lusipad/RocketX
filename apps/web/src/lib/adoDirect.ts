@@ -1385,6 +1385,7 @@ function mapBuild(cfg: DirectConfig, build: any) {
     id: build.id,
     buildNumber: build.buildNumber ?? String(build.id),
     definition: build.definition?.name ?? '',
+    definitionId: typeof build.definition?.id === 'number' ? build.definition.id : undefined,
     project,
     status: build.status ?? '',
     result: build.result ?? '',
@@ -1393,6 +1394,7 @@ function mapBuild(cfg: DirectConfig, build: any) {
     finishTime: build.finishTime ?? '',
     reason: build.reason ?? '',
     sourceBranch: build.sourceBranch ?? '',
+    sourceVersion: build.sourceVersion ?? '',
     repository,
     pullRequestId,
     pullRequestUrl:

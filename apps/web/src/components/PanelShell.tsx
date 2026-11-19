@@ -86,22 +86,22 @@ export default function PanelShell({
             }
           }}
           style={{ touchAction: 'none' }}
-          className="group flex w-1.5 shrink-0 cursor-col-resize items-stretch justify-center bg-surface-3 outline-none focus:bg-primary-light"
+          className="group flex w-1.5 shrink-0 cursor-col-resize items-center justify-center bg-surface-3 outline-none focus:bg-primary-light"
         >
-          <span className="w-px bg-line transition group-hover:bg-primary group-focus:bg-primary" />
+          <span className="h-full w-px bg-line transition-colors group-hover:w-0.5 group-hover:bg-primary group-focus:bg-primary" />
         </div>
       )}
       <aside
         style={resizable ? { width, maxWidth: 'calc(100% - 0.375rem)' } : undefined}
-        className="flex min-w-0 w-[380px] shrink-0 flex-col border-l border-line-strong bg-surface-3"
+        className="flex min-w-0 w-[380px] shrink-0 flex-col border-l border-line bg-surface-3"
       >
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
+        <header className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-4">
           <span className="min-w-0 flex-1 text-base font-semibold text-ink">{title}</span>
           <button
             onClick={() => setPanel(null)}
             aria-label="关闭侧栏"
             title="关闭侧栏"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <X size={16} />
           </button>

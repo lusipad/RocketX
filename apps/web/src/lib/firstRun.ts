@@ -31,6 +31,7 @@ const EXISTING_USER_STATE_KEYS = [
   'rcx-owner',
   'rcx-server',
   'rcx-workspace-source',
+  'rcx-local-mode',
 ] as const;
 
 const DESKTOP_DEFAULTS_STATUSES = new Set<DesktopDefaultsStatus>(['fresh', 'applied', 'legacy-migrated']);

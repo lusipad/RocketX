@@ -20,7 +20,7 @@ The matrix describes tested RocketX behavior, not the support lifecycle or secur
 | Surface | Baseline | Notes |
 | --- | --- | --- |
 | Web | Production Vite build behind the pinned Nginx image | Nginx serves the SPA and proxies Rocket.Chat API, file, avatar, emoji, and WebSocket routes on the same origin. |
-| Windows desktop | Tauri 2 / WebView2 | Official x64 NSIS slim, MSI, and optional full installers. Slim only probes installed Codex/DSH runtimes; Windows full additionally carries private Codex/DSH payloads. Windows-specific integrated authentication and native notifications are platform-gated. |
+| Windows desktop | Tauri 2 / WebView2 | Official x64 NSIS slim, MSI, and optional full installers include the Pi runtime. The Windows full installer adds private Codex, DSH, and OCR resources. |
 | macOS desktop | Tauri 2 / system WebView | Official universal DMG and updater archive. The app uses an ad-hoc macOS signature and RocketX updater signature, but is not Apple-notarized; users may need to allow it in Privacy & Security. |
 | Linux desktop | Tauri 2 / WebKitGTK | Official x64 AppImage, DEB, and RPM packages. Distribution-specific behavior beyond the CI baseline remains unverified. |
 
@@ -42,19 +42,11 @@ Default slim, macOS, and Linux installers do not bundle Codex. Desktop AI featur
 
 See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, and release evidence.
 
-## DeepSeek Harness runtime compatibility
+## Pi runtime and upgrades
 
-RocketX `v0.44.18` desktop line is split. Default slim installers do not bundle DSH and only probe already-installed runtimes; when a system DSH is found, any `@deepseek-ai/dsh` version at or above the minimum verified line `0.2.1-rc.2` is accepted (non-hyphenated prerelease spellings such as `1.0.0rcalpha07` are normalized before comparison). Versions newer than `0.2.1-rc.2` are not blocked, but they have not completed full verification and are only warned about in diagnostics until RocketX validates and updates its own support line. The Windows full installer additionally ships the verified private runtime for exactly `@deepseek-ai/dsh@0.2.1-rc.2` plus a private Node payload into the application data directory. When DSH is selected, RocketX embeds the official DSH Web for private conversations and reuses one native Host/controller path for room AI and shared hosting. Provider, model, Agent, permission, and credential configuration remain owned by DSH rather than being duplicated in RocketX. A separate `deepseek-harness` source checkout is never a release prerequisite. The Web client cannot start the local DSH process.
+RocketX `v0.50.0` desktop line is split. Both slim and full packages include the pinned Pi SDK and Node runtime. The Windows full installer adds private Codex, DSH, and OCR resources. Desktop users configure their model service in Butler. The web client can participate in messaging and use an existing room host.
 
-| DSH condition | RocketX behavior |
-| --- | --- |
-| Installed compatible DSH `0.2.1-rc.2` or Windows full private runtime, selected provider credentials configured | DSH sessions, model/provider and reasoning selection, Agent presets, permissions, approvals, questions, and DSH AI hosting are available |
-| DSH missing or unavailable | DSH backend is unavailable in slim mode; Codex and deterministic surfaces keep their own availability |
-| Selected provider credentials missing or invalid | DSH configuration and history remain visible; sending fails closed with the provider's diagnostic until credentials are corrected in DSH |
-| Private full DSH runtime missing or incomplete | RocketX refuses to start that backend, then uses a verified available Codex runtime or no AI instead of downloading an unpinned runtime |
-| Web client | No local DSH transport or hosting; messaging and deterministic work surfaces remain usable, and an active desktop-hosted lease stays visible and reachable through `@ai` |
-
-An upstream DSH upgrade is a full runtime upgrade for the Windows full package: change the exact version in `apps/dsh-runtime/package.json`, update `pnpm-lock.yaml`, run `pnpm prepare:dsh-runtime`, and repeat bridge, Host API, native dependency, session/configuration, approval, and packaging checks. Slim builds only track external installation discovery and do not carry the private runtime. RocketX does not maintain a compatibility shim for multiple DSH wire contracts: system DSH builds below `0.2.1-rc.2` are refused, builds at or above it are accepted on the semver range, and only builds newer than the verified `0.2.1-rc.2` line carry the not-fully-verified warning until this exact upgrade path lands.
+On upgrade, existing Codex and DSH startup selections migrate to Pi. A previous choice to disable AI is preserved. Pi uses its own model settings and credentials. Legacy DSH private-room bindings do not automatically resume in Pi. Save any conversation you need before upgrading.
 
 ## Required and optional server settings
 

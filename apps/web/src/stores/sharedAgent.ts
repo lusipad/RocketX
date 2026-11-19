@@ -81,17 +81,6 @@ import {
   validateButlerErrandInputResponse,
   type ButlerErrandInputResponse,
 } from '../lib/butlerHostInput';
-import type {
-  DshPendingApproval,
-  DshPendingQuestion,
-  DshQuestionAnswer,
-} from '../agent/dsh/types';
-import {
-  HostedDshController,
-  type DshSessionCreateOptions,
-  type DshStartConfiguration,
-  type HostedDshControllerOptions,
-} from '../agent/dsh/HostedDshController';
 import { sendAgentBotMessage } from '../platform/desktopCommands';
 
 const LEASE_MS = 90_000;
@@ -118,11 +107,6 @@ export interface AgentInput extends CodexHostInput {
   tmid: string;
 }
 
-export interface AgentDshQuestion extends DshPendingQuestion {
-  id: string;
-  tmid: string;
-}
-
 export interface AgentMemberRequest {
   id: string;
   tmid: string;
@@ -136,9 +120,6 @@ export interface AgentSessionStartOptions {
   runtimeModel?: AgentSession['runtimeModel'];
   runtimeEffort?: AgentSession['runtimeEffort'];
   runtimePermissionPreset?: AgentSession['runtimePermissionPreset'];
-  dshModelSelection?: AgentSession['dshModelSelection'];
-  dshAgentPreset?: AgentSession['dshAgentPreset'];
-  dshPermissionPreset?: AgentSession['dshPermissionPreset'];
   environmentId?: string;
   environmentName?: string;
   workItem?: AgentSession['workItem'];
@@ -152,7 +133,6 @@ interface SharedAgentState {
   traces: Record<string, AgentTrace[]>;
   approvals: AgentApproval[];
   inputs: AgentInput[];
-  dshQuestions: AgentDshQuestion[];
   memberRequests: AgentMemberRequest[];
   error: string | null;
   restore: () => Promise<void>;
@@ -163,7 +143,6 @@ interface SharedAgentState {
   approveMemberRequest: (id: string, allowed: boolean) => Promise<void>;
   resolveApproval: (id: string, resolution: AgentApprovalResolution) => Promise<void>;
   resolveInput: (id: string, response: ButlerErrandInputResponse) => Promise<void>;
-  resolveDshQuestion: (id: string, answers: DshQuestionAnswer[]) => Promise<void>;
   setAccess: (tmid: string, access: AgentSession['access']) => Promise<void>;
   resumeSession: (tmid: string) => Promise<void>;
   endSession: (tmid: string) => Promise<void>;
@@ -186,8 +165,6 @@ const inputWaiters = new Map<
   string,
   { tmid: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
 >();
-const dshApprovalRequests = new Map<string, { tmid: string; request: DshPendingApproval }>();
-const dshQuestionRequests = new Map<string, { tmid: string; request: DshPendingQuestion }>();
 const processedMessages = new Set<string>();
 const startingSessions = new Map<string, Promise<AgentSession>>();
 const ingestSequences = new Map<string, Promise<void>>();
@@ -195,40 +172,12 @@ const controllers = new Map<string, SharedAgentController>();
 const controllerStarts = new Map<string, Promise<{ controller: SharedAgentController; catalog: CodexCatalog }>>();
 const controllerIdentities = new Map<string, string>();
 const controllerStartIdentities = new Map<string, string>();
-type SharedDshController = Pick<
-  HostedDshController,
-  'connect' | 'createSession' | 'resumeSession' | 'getTranscript' | 'attachmentLeaseId' | 'prompt' | 'cancel' | 'respondApproval' | 'respondQuestion' | 'stop'
-> & Partial<Pick<HostedDshController, 'getStartConfiguration'>>;
-type SharedDshControllerFactory = (
-  workspaceRoot: string,
-  connectionId: string,
-  options: HostedDshControllerOptions,
-) => SharedDshController;
-const dshControllers = new Map<string, SharedDshController>();
-const dshControllerStarts = new Map<string, Promise<SharedDshController>>();
-const dshControllerIdentities = new Map<string, string>();
-const dshControllerStartIdentities = new Map<string, string>();
 let sharedAgentBridgeCleanup: (() => void) | null = null;
-const preparedDshControllers = new Map<string, {
-  workspaceRoot: string;
-  controller: SharedDshController;
-  configuration: DshStartConfiguration;
-}>();
-const preparedDshStarts = new Map<string, {
-  workspaceRoot: string;
-  controller: SharedDshController;
-  promise: Promise<DshStartConfiguration>;
-}>();
-const dshTranscriptHydrated = new Map<string, string>();
 let restoredScope = '';
 let restoreGeneration = 0;
 
 function scopedRuntimeKey(tmid: string, id: string): string {
   return `${tmid}\u0000${id}`;
-}
-
-function dshConnectionId(sessionId: string): string {
-  return `hosting-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '').slice(-48)}`;
 }
 
 function controllerIdentity(session: AgentSession): string {
@@ -296,9 +245,6 @@ type SharedAgentController = {
 type SharedAgentControllerFactory = (options: AppServerControllerOptions) => SharedAgentController;
 
 let sharedAgentControllerFactory: SharedAgentControllerFactory = (options) => new AppServerController(options);
-let sharedDshControllerFactory: SharedDshControllerFactory = (workspaceRoot, connectionId, options) => (
-  new HostedDshController(workspaceRoot, connectionId, options)
-);
 let sharedAgentMessageSizeProvider = async (): Promise<unknown> => {
   const clientModule = await import('../lib/client');
   return clientModule.getPublicSetting('Message_MaxAllowedSize');
@@ -311,7 +257,6 @@ function emptySharedAgentScope() {
     traces: {},
     approvals: [],
     inputs: [],
-    dshQuestions: [],
     memberRequests: [],
     error: null,
   };
@@ -817,27 +762,10 @@ function rejectSessionWaiters<T extends { tmid: string; reject: (error: Error) =
 }
 
 function clearPendingSessionRequests(tmid: string): void {
-  for (const [id, pending] of dshApprovalRequests) {
-    if (pending.tmid === tmid) dshApprovalRequests.delete(id);
-  }
-  for (const [id, pending] of dshQuestionRequests) {
-    if (pending.tmid === tmid) dshQuestionRequests.delete(id);
-  }
   useSharedAgent.setState((state) => ({
     approvals: state.approvals.filter((approval) => approval.tmid !== tmid),
     inputs: state.inputs.filter((input) => input.tmid !== tmid),
-    dshQuestions: state.dshQuestions.filter((question) => question.tmid !== tmid),
   }));
-}
-
-function syncDshWaitingStatus(tmid: string): void {
-  const state = useSharedAgent.getState();
-  const session = state.sessions[tmid];
-  if (!session || session.status === 'ended' || session.status === 'interrupted') return;
-  const stillWaiting = state.approvals.some((item) => item.tmid === tmid)
-    || state.dshQuestions.some((item) => item.tmid === tmid);
-  const status = stillWaiting ? 'waiting-approval' : session.activeTurnId ? 'running' : 'ready';
-  if (session.status !== status) updateSession({ ...session, status, updatedAt: Date.now() });
 }
 
 function onInterrupted(tmid: string, error: Error): void {
@@ -845,11 +773,6 @@ function onInterrupted(tmid: string, error: Error): void {
   controllerStarts.delete(tmid);
   controllerIdentities.delete(tmid);
   controllerStartIdentities.delete(tmid);
-  dshControllers.delete(tmid);
-  dshControllerStarts.delete(tmid);
-  dshControllerIdentities.delete(tmid);
-  dshControllerStartIdentities.delete(tmid);
-  dshTranscriptHydrated.delete(tmid);
   const session = useSharedAgent.getState().sessions[tmid];
   if (session && session.status !== 'ended') {
     const detail = redactAgentOutput(error.message).text;
@@ -863,108 +786,6 @@ function onInterrupted(tmid: string, error: Error): void {
   rejectSessionWaiters(tmid, approvalWaiters, error);
   rejectSessionWaiters(tmid, inputWaiters, error);
   clearPendingSessionRequests(tmid);
-}
-
-function onDshApproval(tmid: string, request: DshPendingApproval): void {
-  const session = useSharedAgent.getState().sessions[tmid];
-  if (
-    !session
-    || session.status === 'ended'
-    || agentBackend(session) !== 'deepseek'
-    || session.dshSessionId !== request.sessionId
-  ) {
-    return;
-  }
-  if ([...dshApprovalRequests.values()].some((pending) => (
-    pending.tmid === tmid && pending.request.approvalId === request.approvalId
-  ))) return;
-  const approvalId = id('approval');
-  dshApprovalRequests.set(approvalId, { tmid, request });
-  useSharedAgent.setState((state) => ({
-    approvals: [...state.approvals, {
-      id: approvalId,
-      tmid,
-      method: 'dsh/approval',
-      policy: 'host-approval',
-      params: {
-        toolName: request.toolName,
-        ...(request.callId ? { callId: request.callId } : {}),
-        ...(request.reason ? { reason: request.reason } : {}),
-      },
-    }],
-  }));
-  updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
-  trace(tmid, 'tool', `等待宿主审批：${request.toolName}`);
-}
-
-function onDshApprovalResolved(tmid: string, sessionId: string, approvalId: string): void {
-  const session = useSharedAgent.getState().sessions[tmid];
-  if (!session || agentBackend(session) !== 'deepseek' || session.dshSessionId !== sessionId) return;
-  const resolvedIds: string[] = [];
-  for (const [id, pending] of dshApprovalRequests) {
-    if (pending.tmid === tmid && pending.request.approvalId === approvalId) {
-      dshApprovalRequests.delete(id);
-      resolvedIds.push(id);
-    }
-  }
-  if (resolvedIds.length === 0) return;
-  const resolved = new Set(resolvedIds);
-  useSharedAgent.setState((state) => ({
-    approvals: state.approvals.filter((approval) => !resolved.has(approval.id)),
-  }));
-  syncDshWaitingStatus(tmid);
-}
-
-function onDshQuestion(tmid: string, request: DshPendingQuestion): void {
-  const session = useSharedAgent.getState().sessions[tmid];
-  if (
-    !session
-    || session.status === 'ended'
-    || agentBackend(session) !== 'deepseek'
-    || session.dshSessionId !== request.sessionId
-  ) {
-    return;
-  }
-  if ([...dshQuestionRequests.values()].some((pending) => (
-    pending.tmid === tmid && pending.request.rpcId === request.rpcId
-  ))) return;
-  const questionId = id('question');
-  dshQuestionRequests.set(questionId, { tmid, request });
-  useSharedAgent.setState((state) => ({
-    dshQuestions: [...state.dshQuestions, { ...request, id: questionId, tmid }],
-  }));
-  updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
-  trace(tmid, 'tool', '等待宿主回答 DeepSeek 问题');
-}
-
-function onDshQuestionResolved(tmid: string, sessionId: string, questionRpcId: string): void {
-  const session = useSharedAgent.getState().sessions[tmid];
-  if (!session || agentBackend(session) !== 'deepseek' || session.dshSessionId !== sessionId) return;
-  const resolvedIds: string[] = [];
-  for (const [id, pending] of dshQuestionRequests) {
-    if (pending.tmid === tmid && pending.request.rpcId === questionRpcId) {
-      dshQuestionRequests.delete(id);
-      resolvedIds.push(id);
-    }
-  }
-  if (resolvedIds.length === 0) return;
-  const resolved = new Set(resolvedIds);
-  useSharedAgent.setState((state) => ({
-    dshQuestions: state.dshQuestions.filter((question) => !resolved.has(question.id)),
-  }));
-  syncDshWaitingStatus(tmid);
-}
-
-function traceDshRequest(tmid: string, request: { payload: unknown }): void {
-  const frame = recordParams(request.payload);
-  if (frame.type !== 'session/event') return;
-  const event = recordParams(frame.event);
-  const data = recordParams(event.data);
-  if (event.type === 'tool/call') {
-    trace(tmid, 'tool', `开始：${typeof data.name === 'string' ? data.name : '工具调用'}`);
-  } else if (event.type === 'tool/result') {
-    trace(tmid, 'tool', data.error ? '工具执行失败' : '工具执行完成');
-  }
 }
 
 async function ensureController(
@@ -1011,148 +832,16 @@ async function ensureController(
   }
 }
 
-function createSharedDshController(
-  tmid: string,
-  workspaceRoot: string,
-  connectionId: string,
-): SharedDshController {
-  let next!: SharedDshController;
-  next = sharedDshControllerFactory(workspaceRoot, connectionId, {
-    onApproval: (request) => onDshApproval(tmid, request),
-    onApprovalResolved: (sessionId, approvalId) => onDshApprovalResolved(tmid, sessionId, approvalId),
-    onQuestion: (request) => onDshQuestion(tmid, request),
-    onQuestionResolved: (sessionId, questionRpcId) => onDshQuestionResolved(tmid, sessionId, questionRpcId),
-    onTrace: (request) => traceDshRequest(tmid, request),
-    onInterrupted: (error) => {
-      const prepared = preparedDshControllers.get(tmid)?.controller === next
-        || preparedDshStarts.get(tmid)?.controller === next;
-      if (prepared) {
-        preparedDshControllers.delete(tmid);
-        preparedDshStarts.delete(tmid);
-      }
-      if (dshControllers.get(tmid) === next) onInterrupted(tmid, error);
-    },
-  });
-  return next;
-}
-
-async function stopPreparedDshController(tmid: string): Promise<void> {
-  const prepared = preparedDshControllers.get(tmid)?.controller;
-  const starting = preparedDshStarts.get(tmid)?.controller;
-  preparedDshControllers.delete(tmid);
-  preparedDshStarts.delete(tmid);
-  const controllersToStop = new Set([prepared, starting].filter(Boolean) as SharedDshController[]);
-  await Promise.all([...controllersToStop].map((controller) => controller.stop().catch(() => undefined)));
-}
-
-export async function prepareSharedDshStartConfiguration(
-  tmid: string,
-  workspaceRoot: string,
-): Promise<DshStartConfiguration> {
-  const normalizedRoot = workspaceRoot.trim();
-  if (!tmid || !normalizedRoot) throw new Error('请先选择 AI 托管项目');
-  const prepared = preparedDshControllers.get(tmid);
-  if (prepared?.workspaceRoot === normalizedRoot) return prepared.configuration;
-  const pending = preparedDshStarts.get(tmid);
-  if (pending?.workspaceRoot === normalizedRoot) return pending.promise;
-  await stopPreparedDshController(tmid);
-
-  const controller = createSharedDshController(
-    tmid,
-    normalizedRoot,
-    dshConnectionId(`preview-${tmid}`),
-  );
-  const promise = (async () => {
-    try {
-      await controller.connect();
-      if (!controller.getStartConfiguration) throw new Error('当前 DSH Runtime 不支持读取启动配置');
-      const configuration = await controller.getStartConfiguration();
-      if (preparedDshStarts.get(tmid)?.controller !== controller) {
-        await controller.stop().catch(() => undefined);
-        throw new Error('DSH 启动配置已失效，请重试');
-      }
-      preparedDshStarts.delete(tmid);
-      preparedDshControllers.set(tmid, {
-        workspaceRoot: normalizedRoot,
-        controller,
-        configuration,
-      });
-      return configuration;
-    } catch (error) {
-      if (preparedDshStarts.get(tmid)?.controller === controller) preparedDshStarts.delete(tmid);
-      await controller.stop().catch(() => undefined);
-      throw error;
-    }
-  })();
-  preparedDshStarts.set(tmid, { workspaceRoot: normalizedRoot, controller, promise });
-  return promise;
-}
-
-export async function releaseSharedDshStartConfiguration(tmid: string): Promise<void> {
-  await stopPreparedDshController(tmid);
-}
-
 export async function shutdownSharedAgentRuntime(): Promise<void> {
   sharedAgentBridgeCleanup?.();
   const tmids = new Set([
     ...controllers.keys(),
     ...controllerStarts.keys(),
-    ...dshControllers.keys(),
-    ...dshControllerStarts.keys(),
-    ...preparedDshControllers.keys(),
-    ...preparedDshStarts.keys(),
   ]);
   await Promise.all([...tmids].map((tmid) => stopController(tmid).catch(() => undefined)));
 }
 
-async function promotePreparedDshController(session: AgentSession): Promise<void> {
-  const root = session.workspaceRoots[0];
-  const pending = preparedDshStarts.get(session.tmid);
-  if (pending?.workspaceRoot === root) await pending.promise;
-  const prepared = preparedDshControllers.get(session.tmid);
-  if (!prepared || prepared.workspaceRoot !== root) {
-    if (prepared || pending) await stopPreparedDshController(session.tmid);
-    return;
-  }
-  preparedDshControllers.delete(session.tmid);
-  dshControllers.set(session.tmid, prepared.controller);
-  dshControllerIdentities.set(session.tmid, controllerIdentity(session));
-}
-
-async function ensureDshController(session: AgentSession): Promise<SharedDshController> {
-  if (!isTauriRuntime()) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
-  const identity = controllerIdentity(session);
-  const current = dshControllers.get(session.tmid);
-  if (current && dshControllerIdentities.get(session.tmid) === identity) return current;
-  if (current) await stopController(session.tmid);
-  const pending = dshControllerStarts.get(session.tmid);
-  if (pending && dshControllerStartIdentities.get(session.tmid) === identity) return pending;
-  if (pending) await stopController(session.tmid);
-  const connectionId = dshConnectionId(session.sessionId);
-  const start = (async () => {
-    const next = createSharedDshController(session.tmid, session.workspaceRoots[0], connectionId);
-    try {
-      await next.connect();
-      dshControllers.set(session.tmid, next);
-      dshControllerIdentities.set(session.tmid, identity);
-      return next;
-    } catch (error) {
-      await next.stop().catch(() => undefined);
-      throw error;
-    }
-  })();
-  dshControllerStarts.set(session.tmid, start);
-  dshControllerStartIdentities.set(session.tmid, identity);
-  try {
-    return await start;
-  } finally {
-    dshControllerStarts.delete(session.tmid);
-    dshControllerStartIdentities.delete(session.tmid);
-  }
-}
-
 async function stopController(tmid: string): Promise<void> {
-  await stopPreparedDshController(tmid);
   const pending = controllerStarts.get(tmid);
   let current = controllers.get(tmid);
   controllers.delete(tmid);
@@ -1163,32 +852,11 @@ async function stopController(tmid: string): Promise<void> {
   controllers.delete(tmid);
   controllerIdentities.delete(tmid);
   if (current) await current.stop();
-  const pendingDsh = dshControllerStarts.get(tmid);
-  let currentDsh = dshControllers.get(tmid);
-  dshControllers.delete(tmid);
-  dshControllerStarts.delete(tmid);
-  dshControllerIdentities.delete(tmid);
-  dshControllerStartIdentities.delete(tmid);
-  if (!currentDsh && pendingDsh) currentDsh = await pendingDsh.catch(() => undefined);
-  dshControllers.delete(tmid);
-  dshControllerIdentities.delete(tmid);
-  if (currentDsh) await currentDsh.stop();
-  dshTranscriptHydrated.delete(tmid);
 }
 
 async function releaseTranscriptController(session: AgentSession): Promise<void> {
   const identity = controllerIdentity(session);
-  if (agentBackend(session) === 'deepseek') {
-    if (dshControllerIdentities.get(session.tmid) !== identity) return;
-    const controller = dshControllers.get(session.tmid);
-    dshControllers.delete(session.tmid);
-    dshControllerIdentities.delete(session.tmid);
-    if (dshTranscriptHydrated.get(session.tmid) === session.dshSessionId) {
-      dshTranscriptHydrated.delete(session.tmid);
-    }
-    await controller?.stop();
-    return;
-  }
+  if (agentBackend(session) === 'deepseek') return;
   if (controllerIdentities.get(session.tmid) !== identity) return;
   const controller = controllers.get(session.tmid);
   controllers.delete(session.tmid);
@@ -1268,33 +936,21 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
   if (remoteSessionControls(session.tmid)) return;
   let current = useSharedAgent.getState().sessions[session.tmid] ?? session;
   const selectedProvider = getAiRuntimeProvider();
-  if (selectedProvider === 'none' || agentBackend(current) !== selectedProvider) {
+  if (selectedProvider === 'none' || agentBackend(current) !== 'codex') {
     throw new Error('该托管会话使用了另一套 AI 运行时，请结束会话并重新开启');
   }
-  let codex: { controller: SharedAgentController; selection: CodexRuntimeSelection } | undefined;
-  let dsh: SharedDshController | undefined;
-  if (agentBackend(current) === 'deepseek') {
-    dsh = await ensureDshController(current);
-  } else {
-    current = withSessionRuntimeSnapshot(current);
-    updateSession(current);
-    const { controller, catalog } = await ensureController(current);
-    const resolvedRuntime = resolveSessionRuntime(current, catalog);
-    current = resolvedRuntime.session;
-    codex = { controller, selection: resolvedRuntime.selection };
-    updateSession(current);
-  }
+  current = withSessionRuntimeSnapshot(current);
+  updateSession(current);
+  const { controller, catalog } = await ensureController(current);
+  const resolvedRuntime = resolveSessionRuntime(current, catalog);
+  current = resolvedRuntime.session;
+  const codex = { controller, selection: resolvedRuntime.selection };
+  updateSession(current);
   const messages = await loadContextMessages(current, message);
   const selectedMessages = replyTmid(current)
     ? selectAgentContextMessages(message, messages)
     : messages.filter((item) => item.rid === message.rid).slice(-200);
-  const attachmentDestination: AgentAttachmentDestination = dsh
-    ? {
-        kind: 'dsh',
-        connectionId: dshConnectionId(current.sessionId),
-        leaseId: dsh.attachmentLeaseId(),
-      }
-    : { kind: 'codex', sessionId: current.sessionId };
+  const attachmentDestination: AgentAttachmentDestination = { kind: 'pi', sessionId: current.sessionId };
   const attachments = await materializeAgentAttachments(attachmentDestination, selectedMessages);
   for (const warning of attachments.warnings) trace(current.tmid, 'warning', warning);
   const prompt = buildAgentContext({
@@ -1309,37 +965,11 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
       useWorkbench.getState().workItems,
     ),
   });
-  if (dsh) {
-    const turnId = id('dsh-turn');
-    updateSession({ ...current, status: 'running', activeTurnId: turnId, lastError: undefined, updatedAt: Date.now() });
-    trace(current.tmid, 'status', 'DeepSeek 正在处理指令');
-    const result = await dsh.prompt(current.dshSessionId!, prompt);
-    const latest = useSharedAgent.getState().sessions[current.tmid] ?? current;
-    if (latest.status === 'ended' || latest.status === 'interrupted') return;
-    if (result.text) {
-      const output = redactAgentOutput(result.text);
-      const prefix = output.redacted > 0
-        ? `🤖 DeepSeek（已脱敏 ${output.redacted} 处）\n`
-        : '🤖 DeepSeek\n';
-      await sendAgentReply(latest, `${prefix}${output.text}`);
-    } else {
-      await sendAgentReply(latest, '🤖 DeepSeek 本轮已完成，未返回文本。');
-    }
-    updatePublishedSession({
-      ...latest,
-      status: 'ready',
-      activeTurnId: undefined,
-      currentTaskLabel: undefined,
-      updatedAt: Date.now(),
-    });
-    trace(current.tmid, 'status', `本轮结束：${result.turnId}`);
-    return;
-  }
   updateSession({ ...current, status: 'running', lastError: undefined, updatedAt: Date.now() });
-  const turnId = await codex!.controller.startTurn(
+  const turnId = await codex.controller.startTurn(
     current.codexThreadId!,
     agentTurnInput(prompt, attachments.imagePaths),
-    codex!.selection,
+    codex.selection,
     { runtimeWorkspaceRoots: attachments.roots },
   );
   updateSession({ ...current, status: 'running', activeTurnId: turnId, updatedAt: Date.now() });
@@ -1394,7 +1024,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   traces: {},
   approvals: [],
   inputs: [],
-  dshQuestions: [],
   memberRequests: [],
   error: null,
 
@@ -1419,25 +1048,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const releaseAfterRead = session.status === 'ended';
     try {
       if (agentBackend(session) === 'deepseek') {
-        if (!session.dshSessionId) {
-          if (session.status === 'starting') return [];
-          throw new Error('DeepSeek 托管会话缺少 sessionId');
-        }
-        const dsh = await ensureDshController(session);
-        if (dshTranscriptHydrated.get(tmid) !== session.dshSessionId) {
-          await dsh.resumeSession(session.dshSessionId);
-          dshTranscriptHydrated.set(tmid, session.dshSessionId);
-        }
-        return naturalTranscript(dsh.getTranscript(session.dshSessionId).messages.flatMap((message) => (
-          message.role === 'user' || message.role === 'assistant'
-            ? [{
-                id: message.id,
-                role: message.role,
-                text: message.text,
-                ...(message.streaming ? { pending: true } : {}),
-              }]
-            : []
-        )));
+        throw new Error('历史 DSH 托管会话已退役，请查看房间消息记录');
       }
       if (!session.codexThreadId) {
         if (session.status === 'starting') return [];
@@ -1536,10 +1147,11 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       assertAllowedWorkspacePath(root, [root]);
       const selectedProvider = getAiRuntimeProvider();
       if (selectedProvider === 'none') throw new Error('当前未启用 AI');
-      if (options.backend && options.backend !== selectedProvider) {
+      const effectiveBackend: AgentBackend = 'codex';
+      if (options.backend && options.backend !== effectiveBackend) {
         throw new Error('AI 托管必须使用当前启动的 AI 运行时');
       }
-      const backend: AgentBackend = selectedProvider;
+      const backend: AgentBackend = effectiveBackend;
       const initialSession: AgentSession = {
         sessionId,
         serverId: getServerBase() || 'same-origin',
@@ -1553,15 +1165,9 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         approvedMemberIds: [],
         status: 'starting',
         backend,
-        ...(backend === 'codex' ? {
-          runtimeModel: options.runtimeModel,
-          runtimeEffort: options.runtimeEffort,
-          runtimePermissionPreset: options.runtimePermissionPreset,
-        } : {
-          dshModelSelection: options.dshModelSelection,
-          dshAgentPreset: options.dshAgentPreset,
-          dshPermissionPreset: options.dshPermissionPreset,
-        }),
+        runtimeModel: options.runtimeModel,
+        runtimeEffort: options.runtimeEffort,
+        runtimePermissionPreset: options.runtimePermissionPreset,
         workspaceRoots: [root],
         environmentId: options.environmentId,
         environmentName: options.environmentName,
@@ -1570,47 +1176,27 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         baseBranch: options.baseBranch,
         updatedAt: now,
       };
-      let session = backend === 'codex'
-        ? withSessionRuntimeSnapshot(initialSession)
-        : initialSession;
+      let session = withSessionRuntimeSnapshot(initialSession);
       updateSession(session);
-      if (backend === 'deepseek') {
-        await promotePreparedDshController(session);
-        const dsh = await ensureDshController(session);
-        const dshStartOptions: DshSessionCreateOptions = {
-          model: session.dshModelSelection,
-          agentPreset: session.dshAgentPreset,
-          permissionPreset: session.dshPermissionPreset,
-        };
-        session = {
-          ...session,
-          dshSessionId: await dsh.createSession(dshStartOptions),
-          status: 'ready',
-          lastError: undefined,
-          updatedAt: Date.now(),
-        };
-        dshTranscriptHydrated.set(session.tmid, session.dshSessionId!);
-      } else {
-        const { controller: appServer, catalog } = await ensureController(session);
-        const resolvedRuntime = resolveSessionRuntime(session, catalog);
-        session = resolvedRuntime.session;
-        updateSession(session);
-        const response = await appServer.startThread(resolvedRuntime.selection);
-        session = {
-          ...session,
-          codexThreadId: response.id,
-          ...(appServer.processInfo?.version
-            ? { createdWithCodexVersion: appServer.processInfo.version }
-            : {}),
-          ...(appServer.processInfo?.runtimeSource
-            ? { createdWithRuntimeSource: appServer.processInfo.runtimeSource }
-            : {}),
-          status: 'ready',
-          lastError: undefined,
-          updatedAt: Date.now(),
-        };
-        nameCodexThread(appServer, session);
-      }
+      const { controller: appServer, catalog } = await ensureController(session);
+      const resolvedRuntime = resolveSessionRuntime(session, catalog);
+      session = resolvedRuntime.session;
+      updateSession(session);
+      const response = await appServer.startThread(resolvedRuntime.selection);
+      session = {
+        ...session,
+        codexThreadId: response.id,
+        ...(appServer.processInfo?.version
+          ? { createdWithCodexVersion: appServer.processInfo.version }
+          : {}),
+        ...(appServer.processInfo?.runtimeSource
+          ? { createdWithRuntimeSource: appServer.processInfo.runtimeSource }
+          : {}),
+        status: 'ready',
+        lastError: undefined,
+        updatedAt: Date.now(),
+      };
+      nameCodexThread(appServer, session);
       updateSession(session);
       trace(tmid, 'status', `${agentName(session)} 会话已启动`);
       const leaseMessage = await sendLeaseCard(session);
@@ -1628,7 +1214,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       const failed = get().sessions[tmid];
       if (failed && failed.status !== 'ended') {
         updateSession(
-          failed.codexThreadId || failed.dshSessionId
+          failed.codexThreadId
             ? { ...interruptSession(failed), lastError: detail }
             : { ...failed, status: 'ended', lastError: detail, updatedAt: Date.now() },
         );
@@ -1731,19 +1317,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const session = get().sessions[approval.tmid];
     if (!session) return;
     assertHost(session, actor());
-    if (approval.method === 'dsh/approval') {
-      const pending = dshApprovalRequests.get(approvalId);
-      const controller = dshControllers.get(session.tmid);
-      if (!pending || pending.tmid !== session.tmid || !controller) {
-        throw new Error('DeepSeek 审批请求已失效');
-      }
-      await controller.respondApproval(pending.request, resolution !== 'decline');
-      dshApprovalRequests.delete(approvalId);
-      set((state) => ({ approvals: state.approvals.filter((item) => item.id !== approvalId) }));
-      syncDshWaitingStatus(session.tmid);
-      trace(session.tmid, 'status', resolution === 'decline' ? '宿主已拒绝请求' : '宿主已允许请求');
-      return;
-    }
     const params = recordParams(approval.params);
     let safeApproval = resolution !== 'decline';
     if (safeApproval) {
@@ -1796,24 +1369,6 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     trace(session.tmid, 'status', '宿主已提交所需输入');
   },
 
-  resolveDshQuestion: async (questionId, answers) => {
-    const question = get().dshQuestions.find((item) => item.id === questionId);
-    if (!question) return;
-    const session = get().sessions[question.tmid];
-    if (!session) return;
-    assertHost(session, actor());
-    const pending = dshQuestionRequests.get(questionId);
-    const controller = dshControllers.get(session.tmid);
-    if (!pending || pending.tmid !== session.tmid || !controller) {
-      throw new Error('DeepSeek 问题已失效');
-    }
-    await controller.respondQuestion(pending.request, answers);
-    dshQuestionRequests.delete(questionId);
-    set((state) => ({ dshQuestions: state.dshQuestions.filter((item) => item.id !== questionId) }));
-    syncDshWaitingStatus(session.tmid);
-    trace(session.tmid, 'status', '宿主已回答 DeepSeek 问题');
-  },
-
   setAccess: async (tmid, access) => {
     const session = get().sessions[tmid];
     if (!session) return;
@@ -1835,43 +1390,34 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       throw new Error(`该会话由 @${authoritativeRemote.hostUsername} 的另一台设备托管，请在宿主设备恢复`);
     }
     const selectedProvider = getAiRuntimeProvider();
-    if (selectedProvider === 'none' || agentBackend(existing) !== selectedProvider) {
+    if (selectedProvider === 'none' || agentBackend(existing) !== 'codex') {
       throw new Error('该托管会话使用了另一套 AI 运行时，请结束会话并重新开启');
     }
     const host = actor();
     const now = Date.now();
     const leased = takeHostLease(existing, host, now, LEASE_MS);
-    let resuming: AgentSession = { ...enterResumeState(leased, host, now), lastError: undefined };
-    if (agentBackend(resuming) === 'codex') resuming = withSessionRuntimeSnapshot(resuming);
+    let resuming: AgentSession = withSessionRuntimeSnapshot({ ...enterResumeState(leased, host, now), lastError: undefined });
     updateSession(resuming);
     try {
-      let resumed: AgentSession;
-      if (agentBackend(resuming) === 'deepseek') {
-        const dsh = await ensureDshController(resuming);
-        await dsh.resumeSession(resuming.dshSessionId!);
-        dshTranscriptHydrated.set(tmid, resuming.dshSessionId!);
-        resumed = { ...resuming, status: 'ready', lastError: undefined, updatedAt: Date.now() };
-      } else {
-        const { controller: appServer, catalog } = await ensureController(resuming);
-        const resolvedRuntime = resolveSessionRuntime(resuming, catalog);
-        resuming = resolvedRuntime.session;
-        updateSession(resuming);
-        const response = await appServer.resumeThread(resuming.codexThreadId!, resolvedRuntime.selection);
-        resumed = {
-          ...resuming,
-          codexThreadId: response.id,
-          ...(appServer.processInfo?.version
-            ? { lastResumedWithCodexVersion: appServer.processInfo.version }
-            : {}),
-          ...(appServer.processInfo?.runtimeSource
-            ? { lastResumedWithRuntimeSource: appServer.processInfo.runtimeSource }
-            : {}),
-          status: 'ready',
-          lastError: undefined,
-          updatedAt: Date.now(),
-        };
-        nameCodexThread(appServer, resumed); // 旧线程也补上名字
-      }
+      const { controller: appServer, catalog } = await ensureController(resuming);
+      const resolvedRuntime = resolveSessionRuntime(resuming, catalog);
+      resuming = resolvedRuntime.session;
+      updateSession(resuming);
+      const response = await appServer.resumeThread(resuming.codexThreadId!, resolvedRuntime.selection);
+      const resumed: AgentSession = {
+        ...resuming,
+        codexThreadId: response.id,
+        ...(appServer.processInfo?.version
+          ? { lastResumedWithCodexVersion: appServer.processInfo.version }
+          : {}),
+        ...(appServer.processInfo?.runtimeSource
+          ? { lastResumedWithRuntimeSource: appServer.processInfo.runtimeSource }
+          : {}),
+        status: 'ready',
+        lastError: undefined,
+        updatedAt: Date.now(),
+      };
+      nameCodexThread(appServer, resumed); // 旧线程也补上名字
       updateSession(resumed);
       trace(tmid, 'status', `已恢复 ${agentName(resumed)} 会话`);
       try {
@@ -1927,11 +1473,8 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     const ended = { ...session, status: 'ended' as const, activeTurnId: undefined, updatedAt: Date.now() };
     updateSession(ended);
     const appServer = controllers.get(tmid);
-    const dsh = dshControllers.get(tmid);
-    if (agentBackend(session) === 'deepseek' && session.activeTurnId && session.dshSessionId && dsh) {
-      await dsh.cancel(session.dshSessionId).catch(() => undefined);
-    } else if (session.activeTurnId && appServer) {
-      await appServer.interruptTurn(session.codexThreadId!, session.activeTurnId).catch(() => undefined);
+    if (session.activeTurnId && session.codexThreadId && appServer) {
+      await appServer.interruptTurn(session.codexThreadId, session.activeTurnId).catch(() => undefined);
     }
     await stopController(tmid).catch(() => undefined);
     const endedError = new Error('Agent 会话已结束');
@@ -1952,14 +1495,6 @@ export function setSharedAgentControllerFactory(factory: SharedAgentControllerFa
   sharedAgentControllerFactory = factory;
   return () => {
     sharedAgentControllerFactory = previous;
-  };
-}
-
-export function setSharedAgentDshControllerFactory(factory: SharedDshControllerFactory): () => void {
-  const previous = sharedDshControllerFactory;
-  sharedDshControllerFactory = factory;
-  return () => {
-    sharedDshControllerFactory = previous;
   };
 }
 

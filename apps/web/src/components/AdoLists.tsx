@@ -170,7 +170,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
             <select
               value={effectiveState}
               onChange={(e) => setState(e.target.value)}
-              className="h-8 appearance-none rounded-md border border-line bg-surface-4 pr-7 pl-2.5 text-xs text-ink outline-none focus:border-primary"
+              className="h-8 appearance-none rounded-xl border border-line bg-surface-4 pr-7 pl-3 text-xs text-ink shadow-raise outline-none focus:border-primary"
             >
               {stateOptions.map((s) => (
                 <option key={s} value={s}>
@@ -186,13 +186,13 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
+      <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {rows.map(({ item: w, depth, hasChildren }) => {
           const isCollapsed = collapsed.has(w.id) && !filtering;
           return (
             <div
               key={w.id}
-              className="group flex items-center border-b border-line last:border-b-0 hover:bg-fill-2"
+              className="group flex items-center border-b border-line-soft transition last:border-b-0 hover:bg-surface-hover"
             >
               <span
                 className="flex h-full shrink-0 items-center"
@@ -521,7 +521,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
+      <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {filtered.map((pr) => (
           <PrRow
             key={pr.id}
@@ -615,10 +615,10 @@ export function BuildList({ builds }: { builds: Build[] }) {
           failedCount > 0 ? (
             <button
               onClick={() => setFailedOnly(!failedOnly)}
-              className={`flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs transition ${
+              className={`flex h-8 items-center gap-1.5 rounded-xl border px-3 text-xs shadow-raise transition ${
                 failedOnly
                   ? 'border-danger bg-danger/10 text-danger'
-                  : 'border-line text-ink-2 hover:bg-fill-hover'
+                  : 'border-line bg-surface-4 text-ink-2 hover:bg-surface-hover'
               }`}
             >
               <XCircle size={14} />
@@ -628,9 +628,9 @@ export function BuildList({ builds }: { builds: Build[] }) {
         }
       />
 
-      <div className="flex-1 overflow-y-auto rounded-lg bg-surface-4 shadow-raise">
+      <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {filtered.length > 0 && (
-          <div className="flex items-center gap-3 border-b border-line px-4 py-2 text-xs text-ink-3">
+          <div className="flex items-center gap-3 border-b border-line bg-surface-2/50 px-4 py-2.5 text-xs font-medium text-ink-3">
             <span className="min-w-0 flex-1 pl-5">构建</span>
             <span className="w-24 shrink-0">关联 PR</span>
             <span className="w-16 shrink-0 text-right">状态</span>
@@ -641,7 +641,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
         {filtered.map((b) => (
           <div
             key={`${b.project}-${b.id}`}
-            className="group flex items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
+            className="group flex items-center gap-3 border-b border-line-soft px-4 py-3 transition last:border-b-0 hover:bg-surface-hover"
           >
             <a
               href={b.webUrl}

@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Download, Loader2, X } from 'lucide-react';
 import { normalizeAssetPath, rest } from '../lib/client';
 import { renderMarkdownDoc } from '../lib/markdown';
@@ -7,6 +8,7 @@ import { toast } from '../stores/toast';
 import { saveFile } from '../lib/download';
 import type { DownloadSourceV1 } from '../lib/downloadHistory';
 import { sandboxArtifactHtml } from '../lib/codexArtifacts';
+import { decodeHtmlPreview, MAX_HTML_PREVIEW_BYTES } from '../lib/htmlPreview';
 
 /** 能直接看的文本类文件：按扩展名判断（服务端返回的 MIME 不一定靠谱） */
 const TEXT_EXT = new Set([
@@ -47,8 +49,12 @@ const TEXT_EXT = new Set([
   'dockerfile',
 ]);
 
-const PDF_EXT = new Set(['pdf']);
-const VIDEO_EXT = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'ogg', 'ogv']);
+const VIDEO_MIME = new Map([
+  ['mp4', 'video/mp4'], ['m4v', 'video/mp4'], ['webm', 'video/webm'], ['mov', 'video/quicktime'],
+  ['mkv', 'video/x-matroska'], ['avi', 'video/x-msvideo'], ['ogv', 'video/ogg'],
+]);
+const AUDIO_EXT = new Set(['wav', 'mp3', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'weba']);
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif', 'ico']);
 
 /** 超过这个大小就不当文本预览了——渲染几十兆纯文本会把页面卡死 */
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
@@ -58,14 +64,25 @@ export function extOf(name: string): string {
   return i < 0 ? '' : name.slice(i + 1).toLowerCase();
 }
 
-/** 这个文件能不能预览（决定要不要显示「预览」入口） */
-export function canPreview(name: string): boolean {
+export function filePreviewKind(name: string, contentType = '') {
   const ext = extOf(name);
-  return TEXT_EXT.has(ext) || PDF_EXT.has(ext) || VIDEO_EXT.has(ext);
+  const mime = contentType.split(';', 1)[0].trim().toLowerCase();
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (IMAGE_EXT.has(ext)) return 'image';
+  if (AUDIO_EXT.has(ext)) return 'audio';
+  if (VIDEO_MIME.has(ext)) return 'video';
+  if (mime === 'text/html' || mime === 'application/xhtml+xml' || ['html', 'htm', 'xhtml'].includes(ext)) return 'html';
+  if (mime === 'text/markdown' || ext === 'md' || ext === 'markdown') return 'markdown';
+  if (TEXT_EXT.has(ext) || name.toLowerCase() === 'dockerfile' || mime.startsWith('text/') ||
+      /^(application\/(json|xml|javascript)|application\/[\w.-]+\+(json|xml))$/.test(mime)) return 'text';
+  return null;
 }
 
 /**
- * 文件预览：文本 / 代码 / Markdown / 沙箱 HTML / 视频，PDF 用 pdf.js 画。
+ * 文件预览：文本 / 代码 / Markdown / 沙箱 HTML / 音视频，PDF 用 pdf.js 画。
  *
  * 两个踩过的坑：
  * 1. 不能把服务端 URL 直接交给 <iframe>：Rocket.Chat 给文件带的是
@@ -78,26 +95,25 @@ export function canPreview(name: string): boolean {
 export default function FilePreview({
   path,
   fileName,
+  kind,
+  contentType,
   size,
   source,
   onClose,
 }: {
   path: string;
   fileName: string;
+  kind: Exclude<ReturnType<typeof filePreviewKind>, 'image' | null>;
+  contentType?: string;
   size?: number;
   source?: DownloadSourceV1;
   onClose: () => void;
 }) {
-  const ext = extOf(fileName);
-  const isPdf = PDF_EXT.has(ext);
-  const isHtml = ext === 'html' || ext === 'htm';
-  const isVideo = VIDEO_EXT.has(ext);
-  const isMarkdown = ext === 'md' || ext === 'markdown';
-
   const [text, setText] = useState<string | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
-  const [htmlText, setHtmlText] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [mediaFailed, setMediaFailed] = useState(false);
+  const [videoPercent, setVideoPercent] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -117,45 +133,75 @@ export default function FilePreview({
     let objectUrl: string | null = null;
     setText(null);
     setPdfData(null);
-    setHtmlText(null);
-    setVideoUrl(null);
+    setMediaUrl(null);
+    setMediaFailed(false);
+    setVideoPercent(null);
     setError(null);
 
-    if (size !== undefined && size > MAX_TEXT_BYTES && !isPdf && !isVideo) {
-      setError('文件太大，不适合在线预览，请下载后查看');
+    const isText = kind === 'text' || kind === 'markdown' || kind === 'html';
+    const limit = kind === 'html' ? MAX_HTML_PREVIEW_BYTES : MAX_TEXT_BYTES;
+    const sizeError = `文件超过 ${limit / 1024 / 1024} MiB，请下载后查看`;
+    if (isText && size !== undefined && size > limit) {
+      setError(sizeError);
       return;
     }
 
+    const controller = new AbortController();
     void rest
-      .fetchFile(normalizeAssetPath(path))
+      .fetchFileWithProgress(normalizeAssetPath(path), {
+        signal: controller.signal,
+        onProgress: (loaded, total) => {
+          if (!alive) return;
+          if (isText && (loaded > limit || (total !== null && total > limit))) {
+            controller.abort();
+            setError(sizeError);
+          } else if (kind === 'video') {
+            const expected = total ?? size;
+            if (expected && expected > 0) setVideoPercent(Math.min(100, Math.floor(loaded * 100 / expected)));
+          }
+        },
+      })
       .then(async (blob) => {
-        if (!alive) return;
+        if (!alive || controller.signal.aborted) return;
         // PDF 交给 pdf.js 自己画（见 PdfView），不依赖 webview 自带的阅读器
-        if (isPdf) setPdfData(await blob.arrayBuffer());
-        else if (isVideo) {
-          objectUrl = URL.createObjectURL(blob);
-          setVideoUrl(objectUrl);
+        if (kind === 'pdf') {
+          const data = await blob.arrayBuffer();
+          if (alive) setPdfData(data);
+        } else if (kind === 'audio' || kind === 'video') {
+          // 对象存储和旧消息都可能只给 octet-stream，按原文件名补回视频容器类型。
+          const mime = [blob.type, contentType?.trim().toLowerCase()].find((value) => value?.startsWith(kind + '/'))
+            ?? (kind === 'video' ? VIDEO_MIME.get(extOf(fileName)) : undefined);
+          const mediaBlob = mime && mime !== blob.type ? blob.slice(0, blob.size, mime) : blob;
+          objectUrl = URL.createObjectURL(mediaBlob);
+          setMediaUrl(objectUrl);
+        } else if (blob.size > limit) {
+          setError(sizeError);
+        } else if (kind === 'html') {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          if (alive) setText(decodeHtmlPreview(bytes, blob.type, contentType));
+        } else {
+          const body = await blob.text();
+          if (alive) setText(body);
         }
-        else if (isHtml) setHtmlText(await blob.text());
-        else setText(await blob.text());
       })
       .catch((err: unknown) => {
-        if (!alive) return;
+        if (!alive || controller.signal.aborted) return;
         const raw = err instanceof Error ? err.message : String(err);
         setError(
           /failed to fetch|networkerror|load failed/i.test(raw)
-            ? '浏览器拦截了跨域的文件请求 —— Rocket.Chat 只给 /api 开了跨域，文件路径没开。桌面客户端不受此限制；网页版需要把 RocketX 和 Rocket.Chat 部署在同一个域名下（反向代理）。文件本身可以正常下载。'
+            ? '无法读取文件。请检查网络连接；网页版跨域访问还需要文件服务允许跨域，或通过同源代理访问。'
             : raw,
         );
       });
 
     return () => {
       alive = false;
+      controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, isPdf, isHtml, isVideo, size]);
+  }, [path, kind, contentType, size, fileName]);
 
-  const sandboxHtml = htmlText !== null ? sandboxArtifactHtml(htmlText) : null;
+  const sandboxHtml = useMemo(() => kind === 'html' && text !== null ? sandboxArtifactHtml(text) : null, [kind, text]);
 
   const download = async () => {
     setSaving(true);
@@ -168,9 +214,9 @@ export default function FilePreview({
     }
   };
 
-  const loading = text === null && !pdfData && htmlText === null && !videoUrl && !error;
+  const loading = text === null && !pdfData && !mediaUrl && !error;
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex flex-col bg-black/70"
       onMouseDown={(e) => {
@@ -202,7 +248,7 @@ export default function FilePreview({
         {loading && (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-3">
             <Loader2 size={16} className="animate-spin" />
-            加载中…
+            {kind === 'video' && videoPercent !== null ? `正在读取视频 ${videoPercent}%` : '加载中…'}
           </div>
         )}
 
@@ -221,19 +267,27 @@ export default function FilePreview({
 
         {pdfData && <PdfView data={pdfData} />}
 
-        {videoUrl && <video className="h-full w-full" controls src={videoUrl} />}
+        {mediaUrl && (kind === 'audio' ? (
+          <audio className="m-auto w-4/5" controls src={mediaUrl} onError={() => setMediaFailed(true)} />
+        ) : (
+          <video className="min-h-0 w-full flex-1" controls src={mediaUrl} onError={() => setMediaFailed(true)} />
+        ))}
+        {mediaFailed && <p className="p-3 text-center text-sm text-ink-2">当前设备无法解码此文件，可下载后用本地播放器打开。</p>}
 
+        {sandboxHtml && text && /<script\b/i.test(text) && (
+          <p className="shrink-0 px-4 py-2 text-xs text-ink-2">此网页含脚本。交互内容可下载后在浏览器中查看。</p>
+        )}
         {sandboxHtml && (
           <iframe
             title="网页预览"
-            className="h-full w-full bg-white"
+            className="min-h-0 w-full flex-1 bg-white"
             sandbox=""
             srcDoc={sandboxHtml}
           />
         )}
 
-        {text !== null &&
-          (isMarkdown ? (
+        {text !== null && kind !== 'html' &&
+          (kind === 'markdown' ? (
             <div className="flex-1 overflow-auto px-6 py-5 text-sm leading-relaxed text-ink">
               {renderMarkdownDoc(text)}
             </div>
@@ -243,6 +297,6 @@ export default function FilePreview({
             </pre>
           ))}
       </div>
-    </div>
+    </div>, document.body,
   );
 }

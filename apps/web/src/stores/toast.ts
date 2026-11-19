@@ -14,6 +14,8 @@ export interface Toast {
 
 interface ToastState {
   toasts: Toast[];
+  viewport: HTMLElement | null;
+  setViewport: (element: HTMLElement | null) => void;
   show: (t: Omit<Toast, 'id'>) => string;
   dismiss: (id: string) => void;
   /** 更新已有 toast（loading → success/error） */
@@ -29,6 +31,8 @@ const DEFAULT_DURATION: Record<ToastKind, number> = {
 
 export const useToast = create<ToastState>((set, get) => ({
   toasts: [],
+  viewport: null,
+  setViewport: (viewport) => set({ viewport }),
 
   show: (t) => {
     const id = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;

@@ -98,7 +98,7 @@ export default function Dialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-xs"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -110,9 +110,9 @@ export default function Dialog({
         aria-label={title}
         tabIndex={-1}
         style={{ width, maxWidth: 'calc(100vw - 2rem)' }}
-        className="flex max-h-[72vh] flex-col rounded-xl bg-surface-4 shadow-2xl"
+        className="flex max-h-[76vh] flex-col overflow-hidden rounded-2xl border border-line bg-surface-4 shadow-pop"
       >
-        <header className="flex items-start justify-between px-5 pt-4 pb-2">
+        <header className="flex items-start justify-between border-b border-line-soft px-5 pt-4 pb-3">
           <div className="min-w-0">
             <div className="text-base font-semibold text-ink">{title}</div>
             {hint && <div className="mt-1 text-xs leading-relaxed text-ink-3">{hint}</div>}
@@ -120,13 +120,13 @@ export default function Dialog({
           <button
             onClick={onClose}
             aria-label={`关闭${title}`}
-            className="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover"
+            className="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <X size={16} />
           </button>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
-        {footer && <footer className="flex items-center justify-end gap-2 px-5 py-3.5">{footer}</footer>}
+        {footer && <footer className="flex items-center justify-end gap-2 border-t border-line-soft bg-surface-2/50 px-5 py-3.5">{footer}</footer>}
       </div>
     </div>
   );

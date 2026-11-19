@@ -38,6 +38,12 @@ function messageTime(message: RcMessage): number {
   return message.rocketxOriginalTs ?? tsMs(message.ts);
 }
 
+function centerMessage(viewport: HTMLElement, target: HTMLElement) {
+  const row = target.getBoundingClientRect();
+  const top = row.top - viewport.getBoundingClientRect().top;
+  viewport.scrollTop += top - Math.max(0, (viewport.clientHeight - row.height) / 2);
+}
+
 export function shouldShowUnreadDivider({
   unreadMark,
   messageTs,
@@ -100,10 +106,13 @@ export default function MessageList({
   useDayTick();
   const all = useChat((s) => s.messages[rid]);
   const historyLoaded = useChat((s) => s.historyLoaded[rid] ?? false);
-  const hasMore = useChat((s) => s.hasMore[rid] ?? false);
+  const context = transaction?.context;
+  const hasMore = useChat((s) => !context && (s.hasMore[rid] ?? false));
   const loadOlder = useChat((s) => s.loadOlder);
+  const scrollToLatest = useChat((s) => s.scrollToLatest);
   const scrollNonce = useChat((s) => s.scrollNonce);
-  const unreadMark = useChat((s) => s.unreadMarkTs[rid]);
+  const unreadMark = useChat((s) => context ? undefined : s.unreadMarkTs[rid]);
+  const highlightMid = useChat((s) => s.highlightMid);
   const showThreadsInMain = usePrefs((s) => s.prefs.showThreadsInMainChannel);
   const myId = useAuth((s) => s.user?._id);
   // 多选合并转发（issue #16）
@@ -119,7 +128,7 @@ export default function MessageList({
   const userScrollIntent = useRef(false);
   const openPhase = useRef<'waiting' | 'settling' | 'complete' | 'cancelled'>('waiting');
   const settleScrollFrame = useRef<number | null>(null);
-  const locateSettled = useRef(false);
+  const locatedRow = useRef<HTMLElement | null>(null);
   /** 翻页前的可见消息位置；只在请求完成后消费，实时消息不能提前把它清掉。 */
   const anchor = useRef<{
     height: number;
@@ -137,10 +146,11 @@ export default function MessageList({
   const [newCount, setNewCount] = useState(0);
 
   // 线程回复默认不进主消息流（可在设置里打开）
-  const list = useMemo(
-    () => messagesInMain(all ?? [], showThreadsInMain),
-    [all, showThreadsInMain],
-  );
+  const list = useMemo(() => {
+    if (!context) return messagesInMain(all ?? [], showThreadsInMain);
+    const cached = new Map(all?.map((message) => [message._id, message] as const));
+    return messagesInMain(context.map((message) => cached.get(message._id) ?? message), showThreadsInMain);
+  }, [all, context, showThreadsInMain]);
 
   const recordScrollPhase = useCallback((
     phase: MessageScrollDiagnosticPhase,
@@ -216,6 +226,7 @@ export default function MessageList({
     if (!el) return;
     cancelSettleFrame();
     openPhase.current = 'complete';
+    locatedRow.current = null;
     userScrollIntent.current = false;
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
     stickToBottom.current = true;
@@ -251,6 +262,9 @@ export default function MessageList({
     const el = scrollRef.current;
     if (!el) return;
     const userInitiated = userScrollIntent.current;
+    // 定位产生的 scroll 事件不应开启贴底或在列表顶部触发翻页。
+    if (locatedRow.current && !userInitiated) return;
+    if (userInitiated) locatedRow.current = null;
     const scrollState = nextMessageScrollState({
       stickToBottom: stickToBottom.current,
       userInitiated,
@@ -310,7 +324,7 @@ export default function MessageList({
     userScrollIntent.current = false;
     openPhase.current = 'waiting';
     observedInitialList.current = false;
-    locateSettled.current = false;
+    locatedRow.current = null;
     setShowJump(false);
     setNewCount(0);
     anchor.current = null;
@@ -352,25 +366,23 @@ export default function MessageList({
     // 列表级定位与 transaction 和 DOM 布局同步，避免跨房间切换时遗漏子项 effect。
     if (command === 'locate') {
       const messageId = transaction?.messageId;
-      if (!locateSettled.current && messageId && transactionIsCurrent()) {
+      if (messageId && transactionIsCurrent()) {
         const target = [...el.querySelectorAll<HTMLElement>('[data-message-id]')].find(
           (node) => node.dataset.messageId === messageId,
         );
         if (target) {
-          const viewportRect = el.getBoundingClientRect();
-          const targetRect = target.getBoundingClientRect();
-          const targetTop = el.scrollTop + targetRect.top - viewportRect.top;
-          el.scrollTop = Math.max(0, targetTop - (el.clientHeight - targetRect.height) / 2);
-          locateSettled.current = true;
+          centerMessage(el, target);
+          locatedRow.current = target;
           openPhase.current = 'complete';
           stickToBottom.current = false;
+          setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight >= NEAR_BOTTOM_PX);
         }
       }
       return;
     }
 
-    // 3) 普通打开只有在历史与容器都就绪后才进入有界的贴底复核。
-    if (command === 'latest' && historyLoaded) {
+    // 3) 先显示实时缓存时也在首次绘制前贴底，历史返回后继续跟随。
+    if (command === 'latest') {
       settleLatestOpen();
       return;
     }
@@ -409,8 +421,9 @@ export default function MessageList({
   useEffect(() => {
     if (scrollNonce === initialScrollNonce.current) return;
     initialScrollNonce.current = scrollNonce;
-    scrollToBottom(false, true);
-  }, [scrollNonce, scrollToBottom]);
+    if (context) scrollToLatest();
+    else scrollToBottom(false, true);
+  }, [context, scrollNonce, scrollToBottom, scrollToLatest]);
 
   /**
    * 图片/附件是异步加载的，撑开高度发生在渲染之后。
@@ -426,6 +439,10 @@ export default function MessageList({
     const ro = new ResizeObserver(() => {
       if (!transactionIsCurrent() || anchor.current) return;
       recordScrollPhase('resize');
+      if (locatedRow.current && el.contains(locatedRow.current)) {
+        centerMessage(el, locatedRow.current);
+        return;
+      }
       if (openPhase.current === 'cancelled') return;
       if (
         transactionEntry === 'latest' &&
@@ -648,9 +665,13 @@ export default function MessageList({
             const extensionRenderer = extensionRenderers.find((renderer) =>
               renderer.match({ message: msg }),
             );
+            const specialRowProps = {
+              'data-message-id': msg._id,
+              className: highlightMid === msg._id ? 'bg-primary-light' : undefined,
+            };
             if (extensionRenderer) {
               return (
-                <div key={msg._id}>
+                <div key={msg._id} {...specialRowProps}>
                   {divider}
                   {unreadDivider}
                   {extensionRenderer.render({ message: msg })}
@@ -661,7 +682,7 @@ export default function MessageList({
             // 建讨论：RC 在父频道留的是一张可点的卡片，不是一行灰字
             if (msg.t === 'discussion-created' && msg.drid) {
               return (
-                <div key={msg._id}>
+                <div key={msg._id} {...specialRowProps}>
                   {divider}
                   {unreadDivider}
                   <DiscussionCard message={msg} />
@@ -671,7 +692,7 @@ export default function MessageList({
 
             if (msg.t) {
               return (
-                <div key={msg._id}>
+                <div key={msg._id} {...specialRowProps}>
                   {divider}
                   {unreadDivider}
                   <div className="my-2 text-center text-xs text-ink-3">
@@ -706,16 +727,16 @@ export default function MessageList({
       </div>
 
       {/* 回到底部 / N 条新消息（飞书式浮条） */}
-      {showJump && (
+      {(showJump || context) && (
         <button
-          onClick={() => scrollToBottom(true)}
-          className={`absolute right-6 bottom-4 flex items-center gap-1.5 rounded-full border border-line bg-surface-4 shadow-[0_2px_10px_rgba(0,0,0,0.15)] transition hover:border-primary ${
-            newCount > 0 ? 'h-8 px-3 text-primary' : 'h-9 w-9 justify-center text-ink-2'
+          onClick={() => context ? scrollToLatest() : scrollToBottom(true)}
+          className={`absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface-4 shadow-[0_2px_10px_rgba(0,0,0,0.15)] transition hover:border-primary ${
+            context || newCount > 0 ? 'h-8 px-3 text-primary' : 'h-9 w-9 justify-center text-ink-2'
           }`}
-          title="回到底部"
+          title={context ? '返回最新消息' : '回到底部'}
         >
           <ArrowDown size={16} />
-          {newCount > 0 && (
+          {context ? <span className="text-xs font-medium">返回最新消息</span> : newCount > 0 && (
             <span className="text-xs font-medium">{newCount} 条新消息</span>
           )}
         </button>

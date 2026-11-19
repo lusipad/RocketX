@@ -54,20 +54,16 @@ test('私人房间 AI 自然进入对话态，共享托管继续由 AgentPanel �
   assert.match(chatArea, /onClick=\{\(\) => setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)\}/);
 
   assert.match(butlerPanel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/);
-  assert.match(butlerPanel, /privateRoomDshKey\(scope, rid\)/);
-  assert.match(butlerPanel, /usePrivateRoomDsh/);
   assert.match(butlerPanel, /useCodexWorkspace\.getState\(\)\.send/);
+  assert.doesNotMatch(butlerPanel, /usePrivateRoomDsh|privateRoomDshKey/);
   assert.match(butlerPanel, /<PanelShell[\s\S]*resizable/);
   assert.match(butlerPanel, /aria-label="私人房间 AI 对话"/);
   assert.match(butlerPanel, /私人会话/);
   assert.match(butlerPanel, /仅你可见，不会向当前房间发送消息/);
   assert.match(butlerPanel, /ConversationCopyButton/);
   assert.match(butlerPanel, /navigator\.clipboard\.writeText\(text\)/);
-  assert.match(butlerPanel, /aria-label="设置 Codex 模型与权限"/);
-  assert.match(butlerPanel, /aria-label="设置 DSH 模型与 Agent"/);
-  assert.match(butlerPanel, /const workspaceRoot = defaultWorkspaceRoot \|\| butlerWorkspaceRoot/);
-  assert.match(butlerPanel, /在 DSH 中配置/);
-  assert.match(butlerPanel, /openPersonalDshConversation\(null\)/);
+  assert.match(butlerPanel, /aria-label="设置管家模型与权限"/);
+  assert.match(butlerPanel, /const workspaceRoot = useCodexWorkspace\(\(state\) => state\.workspaceRoot\)/);
   assert.doesNotMatch(butlerPanel, /shadow-\[0_24px_64px/);
   assert.doesNotMatch(butlerPanel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|send\(`?@ai/);
 

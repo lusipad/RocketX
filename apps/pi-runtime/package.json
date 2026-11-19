@@ -1,0 +1,13 @@
+{
+  "name": "@rcx/pi-runtime",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Private deployable Pi Coding Agent runtime bundle for RocketX desktop packaging",
+  "scripts": {
+    "typecheck": "node -e \"process.exit(0)\""
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  }
+}

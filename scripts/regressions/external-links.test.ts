@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { localPermalinkMessageId } from '../../apps/web/src/lib/messageText';
+
+test('仅识别当前 Rocket.Chat 部署路径以内的消息永久链接', () => {
+  const bases = ['https://chat.example.test/rocket/', 'https://proxy.example.test'];
+  assert.equal(localPermalinkMessageId('https://chat.example.test/rocket/channel/general?msg=a%2Fb', bases), 'a/b');
+  assert.equal(localPermalinkMessageId('https://proxy.example.test/direct/room?msg=m', bases), 'm');
+  for (const href of [
+    'https://other.example.test/channel/general?msg=m',
+    'https://chat.example.test/rocket2/channel/general?msg=m',
+    'https://proxy.example.test/report?msg=m',
+    'https://proxy.example.test/group/team',
+    'invalid',
+  ]) assert.equal(localPermalinkMessageId(href, bases), null, href);
+});
 
 test('普通 HTTP(S) 外链走受校验的原生命令，失败会明确提示（issue #129）', () => {
   const client = readFileSync('apps/web/src/lib/client.ts', 'utf8');

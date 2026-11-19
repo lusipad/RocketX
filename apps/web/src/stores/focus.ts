@@ -97,9 +97,11 @@ export const useFocus = create<FocusStoreState>((set, get) => ({
     set({ session: { startedAt, endsAt, prevStatus }, stats: emptyFocusStats(), digest: null });
     if (endsAt !== null) armTimer(endsAt, get().end);
     // 状态切换失败不阻断专注：通知聚合是本机行为，busy 只是给别人的信号
-    await rest.setStatus('busy').catch((err) => {
-      toast.error(err, '状态切换失败');
-    });
+    if (!useAuth.getState().localMode) {
+      await rest.setStatus('busy').catch((err) => {
+        toast.error(err, '状态切换失败');
+      });
+    }
   },
 
   end: async () => {
@@ -117,9 +119,11 @@ export const useFocus = create<FocusStoreState>((set, get) => ({
         stats,
       },
     });
-    await rest.setStatus(session.prevStatus).catch((err) => {
-      toast.error(err, '状态恢复失败');
-    });
+    if (!useAuth.getState().localMode) {
+      await rest.setStatus(session.prevStatus).catch((err) => {
+        toast.error(err, '状态恢复失败');
+      });
+    }
   },
 
   extend: (minutes) => {

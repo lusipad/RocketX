@@ -1,9 +1,15 @@
 export const RUNTIME_MODE_STORAGE_KEY = 'rcx-runtime-mode-v1';
 export const RUNTIME_MODE_QUERY_KEY = 'rcx-mode';
 export const AI_RUNTIME_PROVIDER_STORAGE_KEY = 'rocketx.butler.task-provider';
+export const PI_CONFIGURED_STORAGE_KEY = 'rcx-pi-configured-v1';
+export const PI_MIGRATED_STORAGE_KEY = 'rcx-pi-migrated-v1';
 
 export type RuntimeMode = 'standard' | 'performance';
-export type AiRuntimeProvider = 'codex' | 'deepseek' | 'none';
+export type AiRuntimeProvider = 'pi' | 'none';
+
+export function isNativeButlerRuntime(provider: AiRuntimeProvider): boolean {
+  return provider === 'pi';
+}
 
 export interface RuntimeFeatures {
   mode: RuntimeMode;
@@ -63,15 +69,22 @@ export function readRuntimeMode(
 }
 
 export function normalizeAiRuntimeProvider(value: unknown): AiRuntimeProvider {
-  return value === 'codex' || value === 'none' ? value : 'deepseek';
+  return typeof value === 'string' && value.trim().toLowerCase() === 'none'
+    ? 'none'
+    : 'pi';
 }
 
 export function readConfiguredAiRuntimeProvider(
   storage: RuntimeModeStorage | undefined = browserStorage(),
 ): AiRuntimeProvider | undefined {
   try {
-    const value = storage?.getItem(AI_RUNTIME_PROVIDER_STORAGE_KEY);
-    return value === 'codex' || value === 'deepseek' || value === 'none' ? value : undefined;
+    const raw = storage?.getItem(AI_RUNTIME_PROVIDER_STORAGE_KEY);
+    if (typeof raw !== 'string') return undefined;
+    const value = raw.trim().toLowerCase();
+    if (!value) return undefined;
+    if (value === 'none') return 'none';
+    if (value === 'pi' || value === 'codex' || value === 'deepseek') return 'pi';
+    return undefined;
   } catch {
     return undefined;
   }
@@ -79,13 +92,10 @@ export function readConfiguredAiRuntimeProvider(
 
 export function selectStartupAiRuntimeProvider(
   configured: AiRuntimeProvider | undefined,
-  availability: Readonly<Record<'codex' | 'deepseek', boolean>>,
+  availability: Readonly<{ pi: boolean }>,
 ): AiRuntimeProvider {
   if (configured === 'none') return 'none';
-  if (configured) return availability[configured] ? configured : 'none';
-  if (availability.deepseek) return 'deepseek';
-  if (availability.codex) return 'codex';
-  return 'none';
+  return availability.pi ? 'pi' : 'none';
 }
 
 export function readAiRuntimeProvider(
@@ -94,7 +104,7 @@ export function readAiRuntimeProvider(
   try {
     return normalizeAiRuntimeProvider(storage?.getItem(AI_RUNTIME_PROVIDER_STORAGE_KEY));
   } catch {
-    return 'deepseek';
+    return 'pi';
   }
 }
 
@@ -127,6 +137,7 @@ export function persistAiRuntimeProvider(
   const next = normalizeAiRuntimeProvider(provider);
   try {
     storage?.setItem(AI_RUNTIME_PROVIDER_STORAGE_KEY, next);
+    storage?.setItem(PI_MIGRATED_STORAGE_KEY, '1');
   } catch {
     // 存储不可用时保持当前启动配置。
   }
@@ -160,8 +171,8 @@ export function runtimeFeatures(
     ocr: aiEnabled,
     polling: true,
     reducedMotion: false,
-    routines: provider === 'codex',
-    runtimeProbes: provider === 'codex',
+    routines: aiEnabled,
+    runtimeProbes: aiEnabled,
     sharedAgent: true,
   };
 }

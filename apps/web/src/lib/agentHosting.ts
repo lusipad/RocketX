@@ -63,7 +63,7 @@ export function setRoomHostingWorkspace(rid: string, workspaceRoot?: string): vo
 export function defaultHostingBackend(): AgentBackend {
   const provider = useUI.getState().aiRuntimeProvider;
   if (provider === 'none') throw new Error('当前未启用 AI');
-  return provider;
+  return provider === 'pi' ? 'codex' : provider;
 }
 
 export async function startRoomAgentHosting(

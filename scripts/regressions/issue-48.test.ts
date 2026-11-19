@@ -57,7 +57,7 @@ test('默认发送方式只让无修饰的 Enter 发送，Alt+Enter 保留为换
 
 test('本地引用附件保留原消息首张图片', () => {
   const quoted: RcMessage = {
-    _id: 'message',
+    _id: 'message/42',
     rid: 'room',
     msg: '请看截图',
     ts: '2026-07-16T00:00:00.000Z',
@@ -73,7 +73,7 @@ test('本地引用附件保留原消息首张图片', () => {
   };
 
   assert.deepEqual(localQuoteAttachment(quoted), {
-    message_link: 'local-quote',
+    message_link: '?msg=message%2F42',
     author_name: '张三',
     text: '请看截图',
     ts: quoted.ts,

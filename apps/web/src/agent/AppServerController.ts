@@ -1,6 +1,6 @@
 import {
   AppServerClient,
-  TauriCodexTransport,
+  TauriPiTransport,
   type CodexTransport,
   type ServerRequestContext,
 } from './protocol';
@@ -121,6 +121,8 @@ async function readCatalog(
 
 export class AppServerController {
   private client?: AppServerClient;
+  private startingClient?: AppServerClient;
+  private connectionGeneration = 0;
   private sessionId?: string;
   private requestedWorkspaceRoot?: string;
   private workspaceRoot?: string;
@@ -130,7 +132,7 @@ export class AppServerController {
 
   constructor(private readonly options: AppServerControllerOptions = {}) {
     this.transportFactory = options.transportFactory
-      ?? ((sessionId, workspaceRoot) => new TauriCodexTransport(sessionId, workspaceRoot));
+      ?? ((sessionId, workspaceRoot) => new TauriPiTransport(sessionId, workspaceRoot));
   }
 
   get currentCatalog(): CodexCatalog | undefined {
@@ -157,28 +159,45 @@ export class AppServerController {
     if (this.client && this.sessionId === sessionId && this.requestedWorkspaceRoot === workspaceRoot && this.catalog) {
       return this.catalog;
     }
-    await this.stop();
+    const stopping = this.stop();
+    const generation = this.connectionGeneration;
+    await stopping;
+    if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
     const client = new AppServerClient(this.transportFactory(sessionId, workspaceRoot), {
-      onNotification: this.options.onNotification,
-      onServerRequest: (request) => this.handleServerRequest(request),
+      onNotification: (method, params) => {
+        if (generation === this.connectionGeneration) this.options.onNotification?.(method, params);
+      },
+      onServerRequest: (request) => {
+        if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+        return this.handleServerRequest(request);
+      },
       onInterrupted: (error) => {
+        if (generation !== this.connectionGeneration) return;
+        this.connectionGeneration += 1;
         this.client = undefined;
+        this.startingClient = undefined;
         this.catalog = undefined;
+        void client.stop().catch(() => undefined);
         this.options.onInterrupted?.(error);
       },
     });
-    const process = await client.start();
+    this.startingClient = client;
     try {
+      const process = await client.start();
+      if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
       if (process.managedSkillRoots.length === 0) {
         throw new Error('RocketX 没有提供 Codex Skill 根目录');
       }
       await client.request('skills/extraRoots/set', { extraRoots: process.managedSkillRoots });
+      if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
       const projectless = !workspaceRoot.trim() || workspaceRoot.trim() === '~';
       const runtimeWorkspaceRoot = projectless
         ? process.runtimeWorkspaceRoot?.trim() || workspaceRoot
         : workspaceRoot;
       const catalog = await readCatalog(client, runtimeWorkspaceRoot, null);
+      if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
       this.assertPermissionProfiles(catalog.permissionProfiles);
+      this.startingClient = undefined;
       this.client = client;
       this.sessionId = sessionId;
       this.requestedWorkspaceRoot = workspaceRoot;
@@ -186,7 +205,8 @@ export class AppServerController {
       this.catalog = catalog;
       return catalog;
     } catch (error) {
-      await client.stop().catch(() => undefined);
+      if (this.startingClient === client) this.startingClient = undefined;
+      void client.stop().catch(() => undefined);
       throw error;
     }
   }
@@ -194,9 +214,12 @@ export class AppServerController {
   async refreshCatalog(threadId?: string): Promise<CodexCatalog> {
     const client = this.requireClient();
     const workspaceRoot = this.requireWorkspaceRoot();
-    this.catalog = await readCatalog(client, workspaceRoot, threadId ?? null);
-    this.assertPermissionProfiles(this.catalog.permissionProfiles);
-    return this.catalog;
+    const generation = this.connectionGeneration;
+    const catalog = await readCatalog(client, workspaceRoot, threadId ?? null);
+    if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+    this.assertPermissionProfiles(catalog.permissionProfiles);
+    this.catalog = catalog;
+    return catalog;
   }
 
   async listThreads(workspaceRoots?: readonly string[]): Promise<Thread[]> {
@@ -242,9 +265,9 @@ export class AppServerController {
     await this.requireClient().request('thread/archive', { threadId });
   }
 
-  async startThread(selection: CodexRuntimeSelection, name?: string): Promise<Thread> {
+  async startThread(selection: CodexRuntimeSelection, name?: string, targetWorkspaceRoot?: string): Promise<Thread> {
     const client = this.requireClient();
-    const workspaceRoot = this.requireWorkspaceRoot();
+    const workspaceRoot = targetWorkspaceRoot?.trim() || this.requireWorkspaceRoot();
     this.assertSelection(selection);
     const permissions = permissionSettings(selection.permissionPreset);
     const config = await businessMcpThreadConfig({ features: { memories: true } });
@@ -269,9 +292,9 @@ export class AppServerController {
     return response.thread;
   }
 
-  async resumeThread(threadId: string, selection: CodexRuntimeSelection): Promise<Thread> {
+  async resumeThread(threadId: string, selection: CodexRuntimeSelection, targetWorkspaceRoot?: string): Promise<Thread> {
     const client = this.requireClient();
-    const workspaceRoot = this.requireWorkspaceRoot();
+    const workspaceRoot = targetWorkspaceRoot?.trim() || this.requireWorkspaceRoot();
     this.assertSelection(selection);
     const permissions = permissionSettings(selection.permissionPreset);
     const config = await businessMcpThreadConfig({ features: { memories: true } });
@@ -336,10 +359,10 @@ export class AppServerController {
     threadId: string,
     input: UserInput[],
     selection: CodexRuntimeSelection,
-    options?: { runtimeWorkspaceRoots?: string[] },
+    options?: { runtimeWorkspaceRoots?: string[]; workspaceRoot?: string },
   ): Promise<string> {
     this.assertSelection(selection);
-    const workspaceRoot = this.requireWorkspaceRoot();
+    const workspaceRoot = options?.workspaceRoot?.trim() || this.requireWorkspaceRoot();
     const runtimeWorkspaceRoots = [...new Set([
       workspaceRoot,
       ...(options?.runtimeWorkspaceRoots ?? []),
@@ -434,8 +457,10 @@ export class AppServerController {
   }
 
   async stop(): Promise<void> {
-    const client = this.client;
+    this.connectionGeneration += 1;
+    const client = this.client ?? this.startingClient;
     this.client = undefined;
+    this.startingClient = undefined;
     this.catalog = undefined;
     this.sessionId = undefined;
     this.requestedWorkspaceRoot = undefined;

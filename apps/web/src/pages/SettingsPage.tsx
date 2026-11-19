@@ -66,6 +66,7 @@ import {
   type ArchivedAliases,
 } from '../stores/aliases';
 import { useUiPrefs } from '../stores/uiPrefs';
+import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { useOnboarding } from '../stores/onboarding';
 import { useWiTemplates } from '../stores/wiTemplates';
@@ -152,6 +153,8 @@ const STATUSES = [
 /** 账号与在线状态 */
 function AccountSection() {
   const user = useAuth((s) => s.user);
+  const localMode = useAuth((s) => s.localMode);
+  const exitLocalMode = useAuth((s) => s.exitLocalMode);
   const logout = useAuth((s) => s.logout);
   const refreshUser = useAuth((s) => s.refreshUser);
   const bumpAvatar = useAuth((s) => s.bumpAvatar);
@@ -194,6 +197,7 @@ function AccountSection() {
 
   // 自定义状态列表：只在打开设置页时拉一次
   useEffect(() => {
+    if (localMode) return;
     let current = true;
     void rest
       .listCustomUserStatuses(100)
@@ -355,6 +359,23 @@ function AccountSection() {
 
   return (
     <>
+      {localMode ? (
+        <Row
+          label="本地使用模式"
+          hint="当前未登录 Rocket.Chat 服务器。待办、统一看板、日历、AI 管家及本地 Git/ADO 项目配置均保存在本机，连接账号后可平滑接续"
+        >
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => void exitLocalMode()}
+              className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-white transition hover:bg-primary-hover"
+            >
+              连接 Rocket.Chat 账号
+            </button>
+          </div>
+        </Row>
+      ) : null}
+      {localMode ? null : (<>
       <Row label="当前账号" hint="点击头像可以更换">
         <div className="flex items-center gap-3">
           <button
@@ -586,6 +607,7 @@ function AccountSection() {
         </button>
       </Row>
 
+      </>)}
       <Row label="启动引导" hint="重新选择团队配置或个人设置，并再次登录">
         <button
           onClick={() => setConfirmSetup(true)}
@@ -611,6 +633,7 @@ function AccountSection() {
           confirmLabel="重新开始"
           onConfirm={() => {
             resetFirstRun();
+            useUI.getState().setModule('messages');
             void logout();
           }}
           onClose={() => setConfirmSetup(false)}
@@ -642,10 +665,10 @@ function AppearanceSection() {
                 setTheme(key);
                 saveTheme(key);
               }}
-              className={`flex w-32 flex-col items-center gap-2 rounded-xl border-2 p-4 transition ${
+              className={`flex w-32 flex-col items-center gap-2 rounded-2xl border-2 p-4 shadow-raise transition ${
                 active
-                  ? 'border-primary bg-primary-light'
-                  : 'border-line hover:border-ink-3 hover:bg-fill-hover'
+                  ? 'border-primary bg-primary-light/80'
+                  : 'border-line bg-surface-3 hover:border-line-strong hover:bg-fill-hover'
               }`}
             >
               <Icon size={22} className={active ? 'text-primary' : 'text-ink-2'} />
@@ -2401,79 +2424,92 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
 
   const needsPrefs = ['sidebar', 'message', 'notification'].includes(section);
 
+  const activeSectionMeta = visibleSections.find((s) => s.key === section);
+
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-surface-2 p-3">
-        <div className="px-2 py-1.5 text-base font-semibold text-ink">设置</div>
-        {visibleSections.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setSection(key)}
-            className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
-              section === key ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
-            }`}
-          >
-            <Icon size={16} />
-            {label}
-          </button>
-        ))}
+      <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">设置</div>
+        <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
+          {visibleSections.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setSection(key)}
+                aria-current={section === key ? 'page' : undefined}
+              className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition ${
+                section === key
+                  ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <Icon size={16} className={section === key ? 'text-primary' : ''} />
+              <span className="truncate">{label}</span>
+            </button>
+          ))}
+        </div>
       </aside>
-      <main className="min-w-0 flex-1 overflow-y-auto bg-surface-3">
-        <div className="mx-auto max-w-3xl px-8 py-6">
-          <h1 className="mb-1 text-lg font-semibold text-ink">
-            {visibleSections.find((s) => s.key === section)?.label}
-          </h1>
+      <main className="flex min-w-0 flex-1 flex-col bg-surface-3">
+        <header className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-8">
+          <div className="flex items-center gap-2.5">
+            {activeSectionMeta && <activeSectionMeta.icon size={18} className="text-primary" />}
+            <h1 className="text-base font-semibold text-ink">
+              {activeSectionMeta?.label}
+            </h1>
+          </div>
           {needsPrefs && (
-            <div className="mb-3 text-xs text-ink-3">
-              这些设置保存在 Rocket.Chat 服务器，登录任意设备都会生效
-            </div>
+            <span className="rounded-full border border-line-soft bg-surface-2 px-3 py-1 text-xs text-ink-3">
+              保存在 Rocket.Chat 服务器，跨设备同步
+            </span>
           )}
-          {needsPrefs && prefsError ? (
-            // 拉失败要说人话并给重试，不能挂着「加载中…」装死
-            <div className="flex flex-col items-center gap-3 py-10 text-center">
-              <XCircle size={22} className="text-danger" />
-              <div className="max-w-sm text-sm break-words text-ink-2">{prefsError}</div>
-              <button
-                onClick={() => void loadPrefs()}
-                className="h-8 rounded-md border border-line px-4 text-sm text-ink transition hover:bg-fill-hover"
-              >
-                重试
-              </button>
-            </div>
-          ) : needsPrefs && !loaded ? (
-            <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-3">
-              <Loader2 size={14} className="animate-spin" />
-              加载设置中…
-            </div>
-          ) : (
-            <>
-              {section === 'account' && <AccountSection />}
-              {section === 'workspace' && (
-                <WorkspaceConfigSection />
-              )}
-              {section === 'appearance' && <AppearanceSection />}
-              {section === 'sidebar' && <SidebarSection />}
-              {section === 'message' && <MessageSection />}
-              {section === 'notification' && <NotificationSection />}
-              {section === 'desktop' && <DesktopSection />}
-              {section === 'shortcuts' && <ShortcutSection />}
-              {section === 'workbench' && <WorkbenchSection />}
-              {section === 'ai' && aiSettingsVisible && (
-                <Suspense
-                  fallback={
-                    <div className="flex items-center gap-2 py-10 text-sm text-ink-3">
-                      <Loader2 size={14} className="animate-spin" />
-                      加载 AI 设置中…
-                    </div>
-                  }
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+          <div className="mx-auto max-w-4xl">
+            {needsPrefs && prefsError ? (
+              // 拉失败要说人话并给重试，不能挂着「加载中…」装死
+              <div className="flex flex-col items-center gap-3 rounded-2xl border border-line bg-surface-4 py-12 text-center shadow-card">
+                <XCircle size={22} className="text-danger" />
+                <div className="max-w-sm text-sm break-words text-ink-2">{prefsError}</div>
+                <button
+                  onClick={() => void loadPrefs()}
+                  className="h-8 rounded-xl border border-line bg-surface-3 px-4 text-sm text-ink shadow-raise transition hover:bg-fill-hover"
                 >
-                  <AiSettings />
-                </Suspense>
-              )}
-              {section === 'apps' && <AppsSection />}
-              {section === 'about' && <AboutSection />}
-            </>
-          )}
+                  重试
+                </button>
+              </div>
+            ) : needsPrefs && !loaded ? (
+              <div className="flex items-center justify-center gap-2 rounded-2xl border border-line bg-surface-4 py-12 text-sm text-ink-3 shadow-card">
+                <Loader2 size={14} className="animate-spin" />
+                加载设置中…
+              </div>
+            ) : section === 'ai' && aiSettingsVisible ? (
+              <Suspense
+                fallback={
+                  <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface-4 px-6 py-10 text-sm text-ink-3 shadow-card">
+                    <Loader2 size={14} className="animate-spin" />
+                    加载 AI 设置中…
+                  </div>
+                }
+              >
+                <AiSettings />
+              </Suspense>
+            ) : (
+              <div className="rounded-2xl border border-line bg-surface-4 px-6 py-2 shadow-card">
+                {section === 'account' && <AccountSection />}
+                {section === 'workspace' && (
+                  <WorkspaceConfigSection />
+                )}
+                {section === 'appearance' && <AppearanceSection />}
+                {section === 'sidebar' && <SidebarSection />}
+                {section === 'message' && <MessageSection />}
+                {section === 'notification' && <NotificationSection />}
+                {section === 'desktop' && <DesktopSection />}
+                {section === 'shortcuts' && <ShortcutSection />}
+                {section === 'workbench' && <WorkbenchSection />}
+                {section === 'apps' && <AppsSection />}
+                {section === 'about' && <AboutSection />}
+              </div>
+            )}
+          </div>
         </div>
       </main>
     </div>

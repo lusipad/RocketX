@@ -5,7 +5,7 @@ import test from 'node:test';
 test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独立 CodexPage 已退役', () => {
   const hook = readFileSync('apps/web/src/lib/stickToBottom.ts', 'utf8');
   assert.match(hook, /useLayoutEffect\(\(\) => \{/);
-  assert.match(hook, /scrollTop = element\.scrollHeight/);
+  assert.match(hook, /scrollTop = target/);
   assert.match(hook, /element\.scrollHeight - element\.scrollTop - element\.clientHeight < NEAR_BOTTOM_PX/);
 
   const conversation = readFileSync('apps/web/src/components/ButlerConversation.tsx', 'utf8');
@@ -13,7 +13,7 @@ test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独
   assert.doesNotMatch(conversation, /useCodexWorkspace\(\(state\) => state\.events\)/);
   assert.match(
     conversation,
-    /useStickToBottom\(\[\s*messages,\s*streamingText,\s*events,\s*requests,\s*queuedMessages,\s*\]\)/,
+    /useStickToBottom\(\[\s*messages,\s*streamingText,\s*events,\s*requests,\s*queuedMessages,\s*\], composerKey\)/,
   );
   assert.match(conversation, /<main ref=\{scrollRef\} onScroll=\{onScroll\} className="codex-native-transcript">/);
   assert.match(conversation, /stickToBottom\.current = true/);
@@ -27,7 +27,6 @@ test('Codex 任务流和托管会话过程流都使用共享贴底 hook，旧独
   assert.match(roomPanel, /useStickToBottom\(\[/);
   assert.match(roomPanel, /<div ref=\{scrollRef\} onScroll=\{onScroll\}/);
   assert.match(roomPanel, /useRoomCodexThreadProjection\(threadId\)/);
-  assert.match(roomPanel, /usePrivateRoomDshProjection\(key\)/);
   assert.match(roomPanel, /<StableStreamingMarkdown text=\{entry\.text\}/);
   assert.match(roomPanel, /key="active-room-assistant"/);
   assert.doesNotMatch(roomPanel, /renderMarkdownDoc\(streamingText/);

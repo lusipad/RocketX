@@ -56,7 +56,7 @@ export default function Card({
   return (
     <Tag
       className={[
-        'rounded-xl',
+        'rounded-2xl transition-colors',
         TONE[tone],
         PAD[pad],
         bordered ? 'border border-line' : '',

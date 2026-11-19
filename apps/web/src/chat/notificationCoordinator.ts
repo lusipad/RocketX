@@ -3,7 +3,6 @@ import { routeNotification, type NotificationAggregationInput, type Notification
 import { focusAggregationConfig } from '../stores/focus';
 import { stripAgentSessionMarker } from '../agent/card';
 import {
-  conversationIsActivelyViewed,
   messageIsFromCurrentUser,
   messageIsNotificationCandidate,
   messageMentionsCurrentUser,
@@ -15,7 +14,6 @@ export interface ChatNotificationSnapshot {
   subscriptions: Record<string, RcSubscription>;
   rooms: Record<string, RcRoom>;
   messages: Record<string, RcMessage[]>;
-  activeRid: string | null;
 }
 
 export interface NotificationCoordinatorDeps {
@@ -51,7 +49,7 @@ export interface NotificationCoordinatorDeps {
   }) => Promise<boolean>;
   playNotificationSound: (volume: number) => void;
   navigateToMessage: (mid: string, rid: string) => void;
-  documentHasFocus: () => boolean;
+  isViewingRoom: (rid: string) => boolean;
 }
 
 const notifiedMids = new Set<string>();
@@ -87,10 +85,10 @@ export async function notifyChatMessage(
   const auth = deps.loadAuth();
   if (!auth || !messageIsNotificationCandidate(msg)) return;
   const currentUser = deps.currentUser();
-  const expectedAgentReply = deps.consumeExpectedAgentReply(rid, msg.msg ?? '');
   if (locallySentMids.has(msg._id) || messageIsFromCurrentUser(msg.u, auth.userId, currentUser)) return;
   const subscription = snapshot.subscriptions[rid];
-  if (!subscription || !rememberNotifiedMessage(msg._id) || expectedAgentReply) return;
+  if (!subscription || !rememberNotifiedMessage(msg._id)) return;
+  if (deps.consumeExpectedAgentReply(rid, msg.msg ?? '')) return;
 
   let threadRoot = msg.tmid
     ? snapshot.messages[rid]?.find((message) => message._id === msg.tmid)
@@ -110,12 +108,11 @@ export async function notifyChatMessage(
   const roomType = subscription.t ?? snapshot.rooms[rid]?.t;
   const dmSize = snapshot.rooms[rid]?.uids?.length ?? snapshot.rooms[rid]?.usersCount;
   const isGroupish = roomType !== 'd' || (dmSize !== undefined && dmSize > 2);
-  const focused = conversationIsActivelyViewed(snapshot.activeRid, rid, deps.documentHasFocus());
   const policy = notificationAttentionPolicy({
     subscribed: true,
     muted: !!subscription.disableNotifications,
     mentioned,
-    focused,
+    focused: deps.isViewingRoom(rid),
     isGroupish,
     desktopNotifications: prefs.desktopNotifications,
     muteFocusedConversations: prefs.muteFocusedConversations ?? true,

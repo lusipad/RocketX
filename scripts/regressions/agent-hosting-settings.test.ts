@@ -20,18 +20,12 @@ test('AI 托管在开启面板选择运行配置，并把选择快照写入会�
   assert.match(panel, /runtimeModel: hostingModel/);
   assert.match(panel, /runtimeEffort: hostingEffort/);
   assert.match(panel, /runtimePermissionPreset: hostingPermissionPreset/);
-  assert.match(panel, /aria-label="DSH AI 托管模型"/);
-  assert.match(panel, /aria-label="DSH AI 托管推理强度"/);
-  assert.match(panel, /aria-label="DSH AI 托管 Agent"/);
-  assert.match(panel, /aria-label="DSH AI 托管权限"/);
-  assert.match(panel, /dshModelSelection: dshModelOverride/);
-  assert.match(panel, /dshAgentPreset: dshAgentOverride/);
-  assert.match(panel, /dshPermissionPreset: dshPermissionOverride/);
-  assert.match(sharedAgent, /dshModelSelection: options\.dshModelSelection/);
-  assert.match(sharedAgent, /dshAgentPreset: options\.dshAgentPreset/);
-  assert.match(sharedAgent, /dshPermissionPreset: options\.dshPermissionPreset/);
-  assert.match(sharedAgent, /prepareSharedDshStartConfiguration/);
-  assert.match(sharedAgent, /createSession\(dshStartOptions\)/);
+  assert.match(panel, /aria-label="AI 托管项目"/);
+  assert.match(panel, /aria-label="AI 托管模型"/);
+  assert.match(panel, /aria-label="AI 托管推理强度"/);
+  assert.match(panel, /aria-label="AI 托管权限"/);
+  assert.match(panel, /nextCodexRuntimeSummary/);
+  assert.match(panel, /activeCodexRuntimeSummary/);
   assert.doesNotMatch(workspace, /hostingModel/);
   assert.doesNotMatch(workspace, /hostingEffort/);
   assert.doesNotMatch(workspace, /setHostingModel/);
@@ -63,8 +57,8 @@ test('聊天托管面板展示独立托管配置，并提供管家统一管理�
   assert.match(panel, /aria-label="AI 托管项目"/);
   assert.match(panel, /roomHostingWorkspaceRoot/);
   assert.match(panel, /setRoomHostingWorkspace/);
-  assert.match(panel, /沿用 DSH 默认/);
-  assert.match(panel, /显式模型选择同步为后续会话的默认模型/);
+  assert.match(panel, /availableProjects\[0\]/);
+  assert.match(panel, /const selectedProject = projectEnvironment\?\.path;/);
   assert.doesNotMatch(panel, /defaultWorkspaceRoot|butlerWorkspaceRoot|isSystemCodexWorkspace/);
   assert.doesNotMatch(panel, /临时工作区（系统默认）/);
   assert.doesNotMatch(panel, /临时选择 AI 托管项目|其他目录/);
@@ -90,10 +84,9 @@ test('开启托管会立即显示进度，并反馈跨设备前置检查失败',
   const panel = readFileSync('apps/web/src/components/AgentPanel.tsx', 'utf8');
 
   assert.match(panel, /const startBlockReason/);
-  assert.match(panel, /当前未启用 AI，请在设置中选择 Codex 或 DSH 并重启应用/);
+  assert.match(panel, /当前未启用 AI，请在设置中启用 Pi。/);
   assert.match(panel, /这台设备尚未添加托管项目/);
-  assert.match(panel, /尚未读取到可用 Codex 模型/);
-  assert.match(panel, /DSH 启动配置尚未就绪/);
+  assert.match(panel, /尚未读取到可用 Pi 模型/);
   assert.match(panel, /openDesktopDialog\(\{ directory: true, multiple: false, title: '选择 AI 托管项目' \}\)/);
   assert.match(panel, /ensureEnvironment\(\{ path \}\)/);
   assert.match(panel, /environmentIsBusy\(environment\.id, environmentState\.bindings\)/);

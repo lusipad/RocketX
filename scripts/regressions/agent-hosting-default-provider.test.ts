@@ -6,10 +6,7 @@ import { useUI } from '../../apps/web/src/stores/ui';
 test('AI 托管始终继承本次启动的全局运行时', () => {
   const previous = useUI.getState().aiRuntimeProvider;
   try {
-    useUI.setState({ aiRuntimeProvider: 'deepseek' });
-    assert.equal(defaultHostingBackend(), 'deepseek');
-
-    useUI.setState({ aiRuntimeProvider: 'codex' });
+    useUI.setState({ aiRuntimeProvider: 'pi' });
     assert.equal(defaultHostingBackend(), 'codex');
 
     useUI.setState({ aiRuntimeProvider: 'none' });

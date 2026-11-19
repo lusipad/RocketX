@@ -142,9 +142,9 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
 
   return (
     <>
-      <div className="flex items-center justify-between pb-3">
-        <div className="flex h-9 w-72 items-center gap-2 rounded-md bg-fill-1 px-3">
-          <Search size={14} className="text-ink-3" />
+      <div className="flex items-center justify-between pb-4">
+        <div className="flex h-9 w-80 items-center gap-2 rounded-xl border border-line bg-surface-4 px-3 shadow-raise transition focus-within:border-primary/70 focus-within:ring-2 focus-within:ring-primary/15">
+          <Search size={14} className="shrink-0 text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -152,7 +152,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
-        <span className="text-xs text-ink-3">
+        <span className="rounded-full border border-line-soft bg-surface-2 px-2.5 py-0.5 text-xs text-ink-3">
           {keyword ? (
             `找到 ${users.length} 人`
           ) : (
@@ -167,7 +167,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
           )}
         </span>
       </div>
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line">
+      <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {loading && <SkeletonList rows={6} avatar={36} />}
         {!loading && warning && (
           <div className="border-b border-warning/30 bg-warning/10 px-4 py-2 text-xs text-warning">
@@ -196,7 +196,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
               <div
                 key={u._id}
                 onClick={() => onOpenCard(u)}
-                className="group flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 [contain-intrinsic-size:auto_57px] [content-visibility:auto] last:border-b-0 hover:bg-fill-2"
+                className="group flex cursor-pointer items-center gap-3 border-b border-line-soft px-4 py-3 transition [contain-intrinsic-size:auto_57px] [content-visibility:auto] last:border-b-0 hover:bg-fill-2/75"
               >
                 <Avatar
                   name={shownName}
@@ -290,9 +290,9 @@ function GroupsTab() {
 
   return (
     <>
-      <div className="flex items-center justify-between pb-3">
-        <div className="flex h-9 w-72 items-center gap-2 rounded-md bg-fill-1 px-3">
-          <Search size={14} className="text-ink-3" />
+      <div className="flex items-center justify-between pb-4">
+        <div className="flex h-9 w-80 items-center gap-2 rounded-xl border border-line bg-surface-4 px-3 shadow-raise transition focus-within:border-primary/70 focus-within:ring-2 focus-within:ring-primary/15">
+          <Search size={14} className="shrink-0 text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
@@ -300,14 +300,14 @@ function GroupsTab() {
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
-        <span className="text-xs text-ink-3">共 {groups.length} 个群组</span>
+        <span className="rounded-full border border-line-soft bg-surface-2 px-2.5 py-0.5 text-xs text-ink-3">共 {groups.length} 个群组</span>
       </div>
-      <div className="flex-1 overflow-y-auto rounded-lg border border-line">
+      <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {groups.map(({ sub, room, name }) => (
           <div
             key={sub.rid}
             onClick={() => open(sub.rid)}
-            className="flex cursor-pointer items-center gap-3 border-b border-line px-4 py-2.5 last:border-b-0 hover:bg-fill-2"
+            className="flex cursor-pointer items-center gap-3 border-b border-line-soft px-4 py-3 transition last:border-b-0 hover:bg-fill-2/75"
           >
             <Avatar name={name} size={36} />
             <div className="min-w-0 flex-1">
@@ -336,6 +336,8 @@ function GroupsTab() {
 /** 通讯录模块：成员 / 我的群组 */
 export default function ContactsPage() {
   const [tab, setTab] = useState<Tab>('members');
+  const localMode = useAuth((s) => s.localMode);
+  const exitLocalMode = useAuth((s) => s.exitLocalMode);
   const [card, setCard] = useState<UserCardTarget | null>(null);
 
   const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
@@ -345,23 +347,44 @@ export default function ContactsPage() {
 
   return (
     <div className="flex min-w-0 flex-1">
-      <aside className="w-[200px] shrink-0 border-r border-line-strong bg-fill-2 p-3">
-        <div className="px-2 py-1.5 text-base font-semibold text-ink">通讯录</div>
-        {TABS.map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
-              tab === key ? 'bg-primary-light text-primary' : 'text-ink-2 hover:bg-fill-hover'
-            }`}
-          >
-            <Icon size={16} />
-            {label}
-          </button>
-        ))}
+      <aside className="flex w-[216px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">通讯录</div>
+        <div className="flex flex-col gap-0.5">
+          {TABS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition ${
+                tab === key
+                  ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
+                  : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+              }`}
+            >
+              <Icon size={16} className={tab === key ? 'text-primary' : ''} />
+              {label}
+            </button>
+          ))}
+        </div>
       </aside>
-      <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-5">
-        {tab === 'members' ? <MembersTab onOpenCard={setCard} /> : <GroupsTab />}
+      <main className="flex min-w-0 flex-1 flex-col bg-surface-3 p-6">
+        {localMode ? (
+          <div className="flex flex-1 flex-col items-center justify-center text-center">
+            <div className="flex flex-col items-center gap-3 rounded-2xl border border-line-soft bg-surface-2/60 px-10 py-9 shadow-raise">
+              <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-line bg-surface-4 text-ink-3 shadow-raise">
+                <Users size={26} />
+              </span>
+              <div className="text-sm font-medium text-ink">当前处于本地使用模式</div>
+              <p className="max-w-sm text-xs leading-5 text-ink-3">连接 Rocket.Chat 服务器后即可浏览团队成员花名册与群组目录。</p>
+              <button
+                type="button"
+                onClick={() => void exitLocalMode()}
+                className="mt-1 h-9 rounded-xl bg-primary px-4 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
+              >
+                连接 Rocket.Chat
+              </button>
+            </div>
+          </div>
+        ) : tab === 'members' ? <MembersTab onOpenCard={setCard} /> : <GroupsTab />}
       </main>
       {card && <UserCard user={card} onClose={() => setCard(null)} />}
     </div>

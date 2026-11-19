@@ -462,21 +462,21 @@ export default function CalendarPage() {
       {/* 左侧日历面板 */}
       <main className="flex min-w-0 flex-1 flex-col bg-surface-3">
         {/* 顶栏 */}
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface-4 px-5">
+        <header className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-5">
           <div className="flex items-center gap-3">
             <span className="text-base font-semibold text-ink">{headerLabel}</span>
-            <div className="flex items-center gap-0.5">
+            <div className="flex items-center gap-0.5 rounded-xl border border-line-soft bg-surface-2 p-0.5">
               <button
                 onClick={prev}
                 title={`上一${viewUnit}`}
                 aria-label={`上一${viewUnit}`}
-                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-2 transition hover:bg-surface-4 hover:text-ink"
               >
                 <ChevronLeft size={16} />
               </button>
               <button
                 onClick={goToday}
-                className="h-7 rounded-md px-2 text-xs text-ink-2 transition hover:bg-fill-hover"
+                className="h-7 rounded-lg px-2.5 text-xs font-medium text-ink-2 transition hover:bg-surface-4 hover:text-ink"
               >
                 今天
               </button>
@@ -484,22 +484,22 @@ export default function CalendarPage() {
                 onClick={next}
                 title={`下一${viewUnit}`}
                 aria-label={`下一${viewUnit}`}
-                className="flex h-7 w-7 items-center justify-center rounded-md text-ink-2 transition hover:bg-fill-hover"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-2 transition hover:bg-surface-4 hover:text-ink"
               >
                 <ChevronRight size={16} />
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-md border border-line">
+          <div className="flex items-center gap-2.5">
+            <div className="flex rounded-xl border border-line bg-surface-2 p-0.5">
               {(['month', 'week', 'day'] as CalendarView[]).map((v) => (
                 <button
                   key={v}
                   onClick={() => setView(v)}
-                  className={`h-7 px-3 text-xs transition first:rounded-l-md last:rounded-r-md ${
+                  className={`h-7 rounded-lg px-3 text-xs transition ${
                     view === v
-                      ? 'bg-primary text-white'
-                      : 'text-ink-2 hover:bg-fill-hover'
+                      ? 'bg-surface-4 font-medium text-ink shadow-raise'
+                      : 'text-ink-2 hover:text-ink'
                   }`}
                 >
                   {VIEW_LABELS[v]}
@@ -508,7 +508,7 @@ export default function CalendarPage() {
             </div>
             <button
               onClick={() => setDialog({ mode: 'create', defaultDate: selectedDate ?? today })}
-              className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
+              className="flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
             >
               <Plus size={14} />
               新建日程
@@ -581,9 +581,9 @@ export default function CalendarPage() {
       </main>
 
       {/* 右侧详情面板 */}
-      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line-strong bg-surface-4">
+      <aside className="flex w-[300px] shrink-0 flex-col border-l border-line bg-surface-2/60">
         {/* 选中日期的日程 */}
-        <div className="border-b border-line px-4 py-3">
+        <div className="border-b border-line bg-surface-3/60 px-4 py-3.5">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-ink">
               {selectedDate

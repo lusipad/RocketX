@@ -24,6 +24,9 @@ jobs:
       - name: 准备并校验固定版本 DSH 运行时
         run: pnpm prepare:dsh-runtime
 
+      - name: 验证可分发 Pi 运行时的离线首次会话
+        run: pnpm prepare:pi-runtime
+
       - name: 安装 Codex CLI
         run: npm install --global @openai/codex@0.144.4
 
@@ -61,6 +64,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 安装并验证 Windows Pi 归档及首次会话
+        run: |
+          pnpm --filter @rcx/pi-runtime install --frozen-lockfile
+          pnpm prepare:pi-runtime
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable

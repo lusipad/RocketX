@@ -390,7 +390,7 @@ test('工作区显示原生输入卡，并把命令输出、思考与 Diff 投�
     });
     const interrupted = useCodexWorkspace.getState();
     assert.equal(interrupted.status, 'ready');
-    assert.equal(interrupted.error, 'Codex 本轮已中断');
+    assert.equal(interrupted.error, 'Pi 本轮已中断');
     assert.equal(interrupted.events.find((event) => event.id === 'command-1')?.status, 'failed');
     assert.equal(interrupted.messages.at(-1)?.text, '保留已生成的部分结果');
 

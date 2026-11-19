@@ -231,6 +231,7 @@ export default function ButlerRoutines() {
 
   const normalizedQuery = query.trim();
   const visibleRoutines = routines.filter((routine) => {
+    if (routine.workTemplate) return false;
     if (filter === 'active' && !routine.enabled) return false;
     if (filter === 'paused' && routine.enabled) return false;
     if (!normalizedQuery) return true;

@@ -39,14 +39,18 @@ export async function pasteCodexImages(
   event: ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>,
   images: readonly CodexImageInput[],
   onChange: (images: CodexImageInput[]) => void,
+  onReadingChange?: (reading: boolean) => void,
 ): Promise<void> {
   const files = Array.from(event.clipboardData.files);
   if (!files.length) return;
   event.preventDefault();
+  onReadingChange?.(true);
   try {
     onChange(await appendCodexImages(images, files));
   } catch (error) {
     toast.error(error, '粘贴图片失败');
+  } finally {
+    onReadingChange?.(false);
   }
 }
 
@@ -187,20 +191,24 @@ export default function CodexImagePicker({
   images,
   onChange,
   disabled,
+  onReadingChange,
 }: {
   images: readonly CodexImageInput[];
   onChange: (images: CodexImageInput[]) => void;
   disabled?: boolean;
+  onReadingChange?: (reading: boolean) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const addFiles = async (files: FileList | null) => {
     if (!files?.length) return;
+    onReadingChange?.(true);
     try {
       onChange(await appendCodexImages(images, Array.from(files)));
     } catch (error) {
       toast.error(error, '添加图片失败');
     } finally {
+      onReadingChange?.(false);
       if (inputRef.current) inputRef.current.value = '';
     }
   };
@@ -212,6 +220,7 @@ export default function CodexImagePicker({
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp"
         multiple
+        disabled={disabled}
         hidden
         aria-label="选择图片"
         onChange={(event) => void addFiles(event.target.files)}

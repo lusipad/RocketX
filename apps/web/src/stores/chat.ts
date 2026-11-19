@@ -125,16 +125,15 @@ import {
   type Conversation,
 } from '../chat/roomDirectory';
 import { notifyChatMessage, rememberLocalMessage } from '../chat/notificationCoordinator';
-import {
-  conversationIsActivelyViewed,
-} from '../chat/notificationPolicy';
+import { conversationIsActivelyViewed } from '../chat/notificationPolicy';
+import { notificationTarget } from '../lib/notificationNavigation';
 import { statDesktopFile, uploadDesktopBlob, uploadDesktopFile } from '../platform/desktopFs';
 import { isTauri } from '../lib/http';
 import { shouldSpoolUpload } from '../lib/uploadRouting';
 
 /** 右侧面板：话题 / Pin / 标记 / 成员 / 搜索 / 群信息 / 文件 / 提及我的，同一时刻只开一个 */
 export type RightPanel =
-  | { kind: 'thread'; mid: string }
+  | { kind: 'thread'; mid: string; root?: RcMessage | null }
   | { kind: 'pins' }
   | { kind: 'starred' }
   | { kind: 'members'; highlightName?: string }
@@ -1072,6 +1071,52 @@ declare global {
   }
 }
 
+export function isViewingConversation(rid: string): boolean {
+  const focused = useUI.getState().module === 'messages' && typeof document !== 'undefined' &&
+    document.visibilityState === 'visible' && document.hasFocus();
+  return conversationIsActivelyViewed(useChat.getState().activeRid, rid, focused);
+}
+
+async function loadMessageContext(target: RcMessage, type: RoomType): Promise<RcMessage[]> {
+  const { _id, rid } = target;
+  const surrounding = realtime.status === 'connected'
+    ? await realtime.call<{ messages?: RcMessage[] } | false>(
+      'loadSurroundingMessages', { _id, rid }, HISTORY_PAGE, usePrefs.getState().prefs.showThreadsInMainChannel,
+    ).catch(() => undefined)
+    : undefined;
+  // 实时方法不可用时，从目标的时间往前取一页；即使取不到上下文也能显示已查到的原文。
+  const neighbors = surrounding && surrounding.messages?.length ? surrounding.messages
+    : await rest.getHistory(rid, type, HISTORY_PAGE, new Date(tsMs(target.ts)).toISOString()).catch(() => []);
+  const context = neighbors.filter((message) => message.rid === rid && !isLanControlMessage(message.msg));
+  return upsertMessage(context, target).sort((a, b) => messageTime(a) - messageTime(b));
+}
+
+/** 同一条消息可能同时出现在最近历史、定位片段和话题面板里。 */
+function updateLoadedMessage(
+  state: ChatState,
+  rid: string,
+  mid: string,
+  update: (message: RcMessage) => RcMessage | null,
+): Partial<ChatState> {
+  const patch: Partial<ChatState> = {};
+  const replace = (list: RcMessage[]) => list.flatMap((message) =>
+    message._id === mid ? update(message) ?? [] : message);
+  const latest = state.messages[rid];
+  if (latest?.some((message) => message._id === mid)) {
+    patch.messages = { ...state.messages, [rid]: replace(latest) };
+  }
+  const transaction = state.messageScrollTransaction;
+  if (transaction?.rid === rid && transaction.context?.some((message) => message._id === mid)) {
+    patch.messageScrollTransaction = { ...transaction, context: replace(transaction.context) };
+  }
+  const panel = state.rightPanel;
+  if (state.activeRid === rid && panel?.kind === 'thread' && panel.root?._id === mid) {
+    const root = update(panel.root);
+    patch.rightPanel = root ? { ...panel, root } : null;
+  }
+  return patch;
+}
+
 async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
   await notifyChatMessage(msg, rid, state, {
     loadAuth: loadStoredAuth,
@@ -1093,7 +1138,7 @@ async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     }),
     playNotificationSound,
     navigateToMessage: (mid, roomId) => void useChat.getState().jumpToMessage(mid, roomId),
-    documentHasFocus: () => document.hasFocus(),
+    isViewingRoom: isViewingConversation,
   });
 }
 
@@ -1170,6 +1215,19 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   init: async () => {
+    if (useAuth.getState().localMode) {
+      realtime.clearStreamHandlers();
+      realtime.close();
+      set({
+        subscriptions: {},
+        rooms: {},
+        messages: {},
+        activeRid: null,
+        ready: true,
+        connection: 'idle',
+      });
+      return;
+    }
     const auth = loadStoredAuth();
     if (!auth) return;
     scheduleAttachmentArchiveCleanup();
@@ -1273,6 +1331,13 @@ export const useChat = create<ChatState>((set, get) => ({
       if (isLanControlMessage(msg.msg)) return;
       const rid = msg.rid;
       const state = get();
+      // 定位片段里旧消息的更新不应作为一条新消息追加到最近历史。
+      const transaction = state.messageScrollTransaction;
+      if ((transaction?.rid === rid && transaction.context?.some((message) => message._id === msg._id)) ||
+          (state.rightPanel?.kind === 'thread' && state.rightPanel.root?._id === msg._id)) {
+        set(updateLoadedMessage(state, rid, msg._id, () => msg));
+        return;
+      }
       enqueueAttachmentArchives(
         [msg],
         state.subscriptions[rid]?.fname || state.subscriptions[rid]?.name ||
@@ -1297,11 +1362,14 @@ export const useChat = create<ChatState>((set, get) => ({
       }
       if (!alreadyKnown) void notifyIfNeeded(msg, rid, state);
       const activeRid = get().activeRid;
+      // read 是按房间整体确认。离开后有新消息时，取消之前为已看消息排队的确认。
+      const pendingRead = markReadTimers.get(rid);
+      if (pendingRead && !isViewingConversation(rid)) {
+        clearTimeout(pendingRead);
+        markReadTimers.delete(rid);
+      }
       if (activeRid === rid) {
-        if (
-          get().subscriptions[rid] &&
-          conversationIsActivelyViewed(activeRid, rid, document.hasFocus())
-        ) {
+        if (get().subscriptions[rid] && isViewingConversation(rid)) {
           scheduleMarkRead(rid);
         }
         scheduleReceiptRefresh(rid);
@@ -1321,9 +1389,7 @@ export const useChat = create<ChatState>((set, get) => ({
       if (kind === 'deleteMessage') {
         const deleted = args[0] as { _id: string } | undefined;
         if (!deleted?._id) return;
-        const list = get().messages[rid];
-        if (!list) return;
-        set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== deleted._id) } });
+        set(updateLoadedMessage(get(), rid, deleted._id, () => null));
       } else if (kind === 'user-activity') {
         const [username, activities] = args as [string, string[]];
         const me = useAuth.getState().user?.username;
@@ -1347,7 +1413,30 @@ export const useChat = create<ChatState>((set, get) => ({
       }
     });
 
+    const notifyFromUserStream = async (rid: string, mid: string) => {
+      const state = get();
+      const lastMessage = state.rooms[rid]?.lastMessage;
+      const cached = lastMessage?._id === mid ? lastMessage : state.messages[rid]?.find((item) => item._id === mid);
+      // 个人通知只带精简消息；完整记录保留提及、附件及讨论串，走与房间流相同的规则。
+      const [message, subscription] = await Promise.all([
+        cached ?? rest.getMessage(mid),
+        state.subscriptions[rid] ?? rest.getSubscription(rid),
+      ]);
+      if (loadStoredAuth()?.authToken !== auth.authToken || message?._id !== mid || message.rid !== rid ||
+        !subscription || subscription.rid !== rid || isLanControlMessage(message.msg)) return;
+      const current = get();
+      if (state.subscriptions[rid] && !current.subscriptions[rid]) return;
+      await notifyIfNeeded(message, rid, current.subscriptions[rid] ? current : {
+        ...current, subscriptions: { ...current.subscriptions, [rid]: subscription },
+      });
+    };
     realtime.onStream('stream-notify-user', (eventName, args) => {
+      if (eventName === `${auth.userId}/notification`) {
+        const payload = (args[0] as { payload?: { _id?: unknown; rid?: unknown } } | null)?.payload;
+        const target = notificationTarget({ mid: payload?._id, rid: payload?.rid });
+        if (target) void notifyFromUserStream(target.rid, target.mid).catch(() => {});
+        return;
+      }
       const [action, payload] = args as [string, RcRoom & RcSubscription];
       if (!payload) return;
       if (eventName.endsWith('/rooms-changed')) {
@@ -1360,6 +1449,7 @@ export const useChat = create<ChatState>((set, get) => ({
         set({ subscriptions: subs2 });
       }
     });
+    realtime.subscribe('stream-notify-user', `${auth.userId}/notification`);
     realtime.subscribe('stream-notify-user', `${auth.userId}/rooms-changed`);
     realtime.subscribe('stream-notify-user', `${auth.userId}/subscriptions-changed`);
 
@@ -1515,49 +1605,52 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   openThread: async (mid) => {
-    set({ rightPanel: { kind: 'thread', mid } });
     const rid = get().activeRid;
     if (!rid) return;
-    try {
-      const threadMessages = await rest.getThreadMessages(mid);
-      const snapshot = get();
-      enqueueAttachmentArchives(
-        threadMessages,
-        snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
-          snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
-      );
-      let list = get().messages[rid] ?? [];
-      for (const m of threadMessages) {
-        if (!isLanControlMessage(m.msg)) list = upsertMessage(list, m);
-      }
-      list.sort((a, b) => messageTime(a) - messageTime(b));
-      set({ messages: { ...get().messages, [rid]: list } });
-    } catch {
-      /* 线程功能被服务器禁用时静默降级 */
+    const panel = { kind: 'thread' as const, mid };
+    set({ rightPanel: panel });
+    const knownRoot = get().messages[rid]?.find((m) => m._id === mid)
+      ?? get().messageScrollTransaction?.context?.find((m) => m._id === mid);
+    // chat.getThreadMessages 只保证返回回复。单独保留远处的根消息，不改变房间历史游标。
+    const [root, replies] = await Promise.all([
+      knownRoot ?? rest.getMessage(mid).catch(() => null),
+      rest.getThreadMessages(mid).catch((error: unknown) => {
+        if (get().rightPanel === panel) toast.error(error, '加载话题回复失败');
+        return [];
+      }),
+    ]);
+    const snapshot = get();
+    if (snapshot.activeRid !== rid || snapshot.rightPanel !== panel) return;
+    const threadMessages = replies.filter((message) => message.rid === rid && message.tmid === mid);
+    enqueueAttachmentArchives(
+      threadMessages,
+      snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
+        snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+    );
+    let list = snapshot.messages[rid] ?? [];
+    for (const m of threadMessages) {
+      if (!isLanControlMessage(m.msg)) list = upsertMessage(list, m);
     }
+    set({
+      messages: { ...snapshot.messages, [rid]: [...list].sort((a, b) => messageTime(a) - messageTime(b)) },
+      rightPanel: { ...panel, root: root?.rid === rid ? root : null },
+    });
   },
 
   toggleThreadFollow: async (mid, follow) => {
+    const rid = get().activeRid;
     try {
       if (follow) await rest.followMessage(mid);
       else await rest.unfollowMessage(mid);
 
       const userId = useAuth.getState().user?._id ?? loadStoredAuth()?.userId;
-      const rid = get().activeRid;
-      const list = rid ? get().messages[rid] : undefined;
-      if (rid && list && userId) {
-        set({
-          messages: {
-            ...get().messages,
-            [rid]: list.map((message) => {
-              if (message._id !== mid) return message;
-              const replies = new Set(message.replies ?? []);
-              if (follow) replies.add(userId);
-              else replies.delete(userId);
-              return { ...message, replies: [...replies] };
-            }),
-          },
-        });
+      if (rid && userId) {
+        set(updateLoadedMessage(get(), rid, mid, (message) => {
+          const replies = new Set(message.replies ?? []);
+          if (follow) replies.add(userId);
+          else replies.delete(userId);
+          return { ...message, replies: [...replies] };
+        }));
       }
       toast.success(follow ? '已关注讨论串' : '已关闭讨论串提醒');
       return true;
@@ -1708,7 +1801,7 @@ export const useChat = create<ChatState>((set, get) => ({
     };
     set({
       messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], temp) },
-      ...(opts?.tmid ? {} : { scrollNonce: get().scrollNonce + 1 }),
+      ...(!opts?.tmid && get().activeRid === rid ? { scrollNonce: get().scrollNonce + 1 } : {}),
     });
     // 发送即视为停止输入
     void realtime.call('stream-notify-room', `${rid}/user-activity`, me.username, []).catch(() => {});
@@ -1952,57 +2045,36 @@ export const useChat = create<ChatState>((set, get) => ({
       mid,
     );
 
-    let target = get().messages[targetRid]?.find((message) => message._id === mid);
-    if (!target) {
-      target = await rest.getMessage(mid).catch(() => undefined);
-    }
+    // 通知里的房间可能已经过时。即使该房间的历史请求失败，也按消息 ID 查真实房间。
+    await opening.catch(() => undefined);
     if (!isCurrent()) return;
-    if (target && target.rid !== targetRid) {
-      return get().jumpToMessage(mid, target.rid);
-    }
-    if (target?.tmid) {
-      await opening;
+    const cached = get().messages[targetRid]?.find((message) => message._id === mid);
+    try {
+      const target = cached ?? await rest.getMessage(mid);
       if (!isCurrent()) return;
-      await get().openThread(target.tmid);
-      const panel = get().rightPanel;
-      if (
-        !isCurrent() ||
-        get().activeRid !== targetRid ||
-        panel?.kind !== 'thread' ||
-        panel.mid !== target.tmid
-      ) {
-        return;
+      if (!target || target._id !== mid) throw new Error('消息不存在或已无法访问');
+      if (target.rid !== targetRid) return get().jumpToMessage(mid, target.rid);
+      if (target.tmid) {
+        if (!cached) {
+          set({ messages: { ...get().messages, [targetRid]: upsertMessage(get().messages[targetRid] ?? [], target) } });
+        }
+        await get().openThread(target.tmid);
+        const panel = get().rightPanel;
+        if (!isCurrent() || panel?.kind !== 'thread' || panel.mid !== target.tmid) return;
+      } else if (!cached) {
+        const transaction = get().messageScrollTransaction!;
+        const context = await loadMessageContext(target, roomTypeOf(get(), targetRid));
+        if (!isCurrent()) return;
+        set({ messageScrollTransaction: { ...transaction, context } });
       }
-      set({ highlightMid: mid });
-      setTimeout(() => {
-        if (isCurrent() && get().highlightMid === mid) set({ highlightMid: null });
-      }, 2600);
+    } catch (error) {
+      if (isCurrent()) {
+        get().scrollToLatest();
+        toast.error(error, '无法定位原消息');
+      }
       return;
     }
-
-    await opening;
-    if (!isCurrent()) return;
-
-    // 消息不在已加载的范围内 → 向上翻页找（最多 5 页，避免无限拉）
-    for (let i = 0; i < 5; i++) {
-      if (!isCurrent()) return;
-      const list = get().messages[targetRid] ?? [];
-      if (list.some((m) => m._id === mid)) break;
-      if (get().hasMore[targetRid] === false) break;
-      const loaded = await get().loadOlder();
-      if (!isCurrent()) return;
-      if (loaded === 0) break;
-    }
-
-    const found = (get().messages[targetRid] ?? []).some((m) => m._id === mid);
-    if (!found) {
-      toast.info('原消息太久远，未能定位');
-      return;
-    }
-
-    if (!isCurrent()) return;
     set({ highlightMid: mid });
-    // 滚动由 MessageItem 侧的 effect 执行（拿到 DOM 节点）
     setTimeout(() => {
       if (isCurrent() && get().highlightMid === mid) set({ highlightMid: null });
     }, 2600);
@@ -2141,9 +2213,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!rid || !text.trim()) return;
     try {
       const updated = await rest.updateMessage(rid, msgId, text.trim());
-      set({
-        messages: { ...get().messages, [rid]: upsertMessage(get().messages[rid] ?? [], updated) },
-      });
+      set(updateLoadedMessage(get(), rid, msgId, () => updated));
     } catch (err) {
       toast.error(err, '编辑失败');
     }
@@ -2153,8 +2223,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const { _id: msgId, rid } = message;
     try {
       await rest.deleteMessage(rid, msgId);
-      const list = get().messages[rid] ?? [];
-      set({ messages: { ...get().messages, [rid]: list.filter((m) => m._id !== msgId) } });
+      set(updateLoadedMessage(get(), rid, msgId, () => null));
       const panel = get().rightPanel;
       if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });
     } catch (err) {
@@ -2388,14 +2457,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // RC 置顶/取消置顶不会推送消息更新事件，本地乐观更新 pinned 标志
     const rid = msg.rid;
     const apply = (value: boolean) => {
-      const list = get().messages[rid];
-      if (!list) return;
-      set({
-        messages: {
-          ...get().messages,
-          [rid]: list.map((m) => (m._id === msg._id ? { ...m, pinned: value } : m)),
-        },
-      });
+      set(updateLoadedMessage(get(), rid, msg._id, (message) => ({ ...message, pinned: value })));
     };
     apply(!msg.pinned);
     try {
@@ -2432,23 +2494,12 @@ export const useChat = create<ChatState>((set, get) => ({
     const mine = { _id: auth?.userId ?? '' };
     const starred = msg.starred?.some((s) => s._id === mine._id);
     const apply = (value: boolean) => {
-      const list = get().messages[rid];
-      if (!list) return;
-      set({
-        messages: {
-          ...get().messages,
-          [rid]: list.map((m) =>
-            m._id === msg._id
-              ? {
-                  ...m,
-                  starred: value
-                    ? [...(m.starred ?? []), mine]
-                    : (m.starred ?? []).filter((s) => s._id !== mine._id),
-                }
-              : m,
-          ),
-        },
-      });
+      set(updateLoadedMessage(get(), rid, msg._id, (message) => ({
+        ...message,
+        starred: value
+          ? [...(message.starred ?? []), mine]
+          : (message.starred ?? []).filter((user) => user._id !== mine._id),
+      })));
     };
     apply(!starred);
     try {

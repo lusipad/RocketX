@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-test('Codex 工作区入口使用新对话、拉取请求、已安排、插件和项目历史', () => {
+test('管家保留新事项和项目历史，更多功能内保留拉取请求、已安排和插件', () => {
   const page = readFileSync('apps/web/src/pages/ButlerPage.tsx', 'utf8');
   const history = readFileSync('apps/web/src/components/ButlerConversationHistory.tsx', 'utf8');
   const workspace = readFileSync('apps/web/src/stores/codexWorkspace.ts', 'utf8');
@@ -13,13 +13,14 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.match(page, /<ManagedSurface><ButlerPluginsPage \/><\/ManagedSurface>/);
   assert.doesNotMatch(page, /Dynamic|ButlerWorkspaceNav|今日纸|技能中心|身份中心/);
 
-  assert.match(history, /aria-label="新对话"/);
+  assert.match(history, /aria-label="新管家对话"/);
   assert.match(history, /startThread\(\)/);
   assert.match(history, /resumeThread\(thread\.id\)/);
-  assert.match(history, /aria-label="Codex 工作区"/);
+  assert.match(history, /aria-label="AI 协作"/);
   assert.match(history, /AI 托管/);
   assert.match(history, /aria-label="AI 托管会话"/);
-  assert.match(history, />系统工作区</);
+  assert.match(history, />最近对话与项目</);
+  assert.match(history, /className="work-first-more-features"/);
   assert.match(history, />个人项目</);
   assert.match(history, /Codex 对话历史/);
   assert.match(history, /setWorkbenchTab\('prs'\)/);
@@ -34,7 +35,7 @@ test('Codex 工作区入口使用新对话、拉取请求、已安排、插件�
   assert.doesNotMatch(history, /ButlerSessionSwitcher|today|memory|paper|manage/);
 
   assert.match(workspace, /importLegacyWorkspaceRoots\(legacyWorkspaceRoots\)/);
-  assert.match(workspace, /controller\.listThreads\(threadWorkspaceRoots\(get\(\)\)\)/);
+  assert.match(workspace, /runtime\.listThreads\(threadWorkspaceRoots\(get\(\)\)\)/);
 
   assert.match(ui, /aiRuntimeProvider: getAiRuntimeProvider\(\)/);
   assert.match(ui, /openButlerConversation: \(focusSessionKey\?: string\) => \{/);

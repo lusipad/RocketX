@@ -67,7 +67,7 @@ export function startAutoAway(target: EventTarget = window): () => void {
   };
 
   const onIdle = async () => {
-    if (disposed || !enabled() || currentStatus() !== 'online') return;
+    if (disposed || !enabled() || useAuth.getState().localMode || currentStatus() !== 'online') return;
     awayRequestStartedAt = Date.now();
     try {
       await rest.setStatus('away');

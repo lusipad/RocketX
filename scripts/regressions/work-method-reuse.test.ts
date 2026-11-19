@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { buildVerifiedWorkMethod, createWorkFromSavedMethod } from '../../apps/web/src/agent/workMethods';
+import { resolveButlerAccountScope } from '../../apps/web/src/stores/butlerMemory';
+import { useWorkLedger } from '../../apps/web/src/stores/workLedger';
+import { useRoutines } from '../../apps/web/src/stores/routines';
+import type { NativeWorkEvidence } from '../../apps/web/src/platform/desktopCommands';
+
+test('只有当前验收通过的工作能保存方法，新工作保留来源与验收但不继承证据或自动执行', async () => {
+  const values = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) } });
+  useWorkLedger.setState({ cards: [], sessions: [], links: [], evidences: [], actions: [], events: [] });
+  useRoutines.setState({ routines: [], eventCards: [], seenKeys: [], unloadedTemplateIds: [] });
+  const source = await useWorkLedger.getState().createCard({ title: 'CI 修复', goal: '修复构建', ownerKind: 'ai_suggested', acceptance: ['构建通过'], enroll: true });
+  const card = { ...source, done: true, state: { ...source.state, goal: '修复构建', projectKey: 'RocketX', acceptance: ['构建通过'], requirementsVersion: 1, contentVersion: 1 } };
+  const evidence = { id: 'test', todoId: card.id, kind: 'test_run', title: 'build', passed: true, stale: false, criterionIds: ['构建通过'], requirementsVersion: 1, contentVersion: 1 } as NativeWorkEvidence;
+  const draft = { name: '构建修复方法', inputs: '读取 ADO 缺陷编号', steps: '复现、修复、执行构建', failureHandling: '保留日志并报告阻塞' };
+  assert.throws(() => buildVerifiedWorkMethod(card, [], draft, resolveButlerAccountScope(), 'D:/project'), /验收/);
+  const method = buildVerifiedWorkMethod(card, [evidence], draft, resolveButlerAccountScope(), 'D:/project');
+  assert.equal(method.enabled, false);
+  assert.equal(method.rrule, undefined);
+  assert.match(method.prompt!, /参考已验收工作/);
+  assert.match(method.prompt!, /输入及来源/);
+  assert.match(method.prompt!, /失败处理/);
+  assert.throws(() => buildVerifiedWorkMethod(card, [evidence], { ...draft, steps: 'token sk-12345678901234567890' }, resolveButlerAccountScope(), 'D:/project'), /凭据/);
+  useRoutines.getState().addRoutine(method);
+  await assert.rejects(createWorkFromSavedMethod(method.id, '新修复', 'ADO #813', { projectKey: 'Other' }), /其他项目/);
+  const created = await createWorkFromSavedMethod(method.id, '修复 ADO 813', 'ADO #813', { projectKey: 'RocketX', workspaceRoot: 'D:/project' });
+  assert.notEqual(created.id, source.id);
+  assert.equal(created.done, false);
+  assert.equal(created.state.projectKey, 'RocketX');
+  assert.deepEqual(created.state.acceptance, ['构建通过']);
+  assert.match(created.note!, /ADO #813/);
+  assert.equal(useWorkLedger.getState().evidences.filter((e) => e.todoId === created.id).length, 0);
+  assert.equal(useWorkLedger.getState().sessions.length, 0);
+});
