@@ -48,10 +48,9 @@ def inspect(installer, expected, bridge_hash):
             elif installer.suffix == ".AppImage":
                 subprocess.run([str(installer), "--appimage-extract"], cwd=root, stdout=subprocess.DEVNULL, check=True)
             elif installer.suffix == ".rpm":
-                with (root / "payload.cpio").open("w+b") as cpio:
-                    subprocess.run(["rpm2cpio", str(installer)], stdout=cpio, check=True)
-                    cpio.seek(0)
-                    subprocess.run(["cpio", "-idm", "--quiet", "--no-absolute-filenames"], stdin=cpio, cwd=root, check=True)
+                # Jammy rpm2cpio 4.17 exits 1 when rpm-rs omits the optional archive-size tag.
+                # libarchive reads the actual compressed payload. verify() still hashes the extracted files.
+                subprocess.run(["bsdtar", "-xf", str(installer), "-C", temp], check=True)
             verify(root, expected, bridge_hash)
         print(f"Matched Pi runtime and bridge in {installer.name}", flush=True)
 

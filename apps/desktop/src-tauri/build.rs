@@ -55,24 +55,24 @@ const MODEL_ASSETS: &[FileAsset] = &[
 
 const ORT_WINDOWS_X64: ArchiveAsset = ArchiveAsset {
     cache_key: "windows-x64",
-    url: "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-win-x64-1.23.2.zip",
-    sha256: "0b38df9af21834e41e73d602d90db5cb06dbd1ca618948b8f1d66d607ac9f3cd",
-    file_name: "onnxruntime-win-x64-1.23.2.zip",
+    url: "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.23.2/microsoft.ml.onnxruntime.1.23.2.nupkg",
+    sha256: "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a",
+    file_name: "microsoft.ml.onnxruntime.1.23.2.nupkg",
     entries: &[
         ArchiveEntry {
-            archive_path: "onnxruntime-win-x64-1.23.2/lib/onnxruntime.dll",
+            archive_path: "runtimes/win-x64/native/onnxruntime.dll",
             output_rel_path: "onnxruntime.dll",
         },
         ArchiveEntry {
-            archive_path: "onnxruntime-win-x64-1.23.2/lib/onnxruntime_providers_shared.dll",
+            archive_path: "runtimes/win-x64/native/onnxruntime_providers_shared.dll",
             output_rel_path: "onnxruntime_providers_shared.dll",
         },
         ArchiveEntry {
-            archive_path: "onnxruntime-win-x64-1.23.2/LICENSE",
+            archive_path: "LICENSE",
             output_rel_path: "LICENSE",
         },
         ArchiveEntry {
-            archive_path: "onnxruntime-win-x64-1.23.2/ThirdPartyNotices.txt",
+            archive_path: "ThirdPartyNotices.txt",
             output_rel_path: "ThirdPartyNotices.txt",
         },
     ],
@@ -361,7 +361,7 @@ fn extract_runtime_archive(
         return Ok(());
     }
     clear_directory(runtime_dir).map_err(io_error)?;
-    if asset.file_name.ends_with(".zip") {
+    if asset.file_name.ends_with(".zip") || asset.file_name.ends_with(".nupkg") {
         extract_zip(&archive_path, runtime_dir, asset.entries)
     } else {
         extract_tgz(&archive_path, runtime_dir, asset.entries)

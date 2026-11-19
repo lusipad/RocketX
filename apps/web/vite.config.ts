@@ -20,6 +20,8 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [react(), tailwindcss()],
     server: {
+      // 浏览器回归在同一份代码上完成。热更新会重新加载页面并替换正在验收的 store。
+      ...(process.env.PLAYWRIGHT_PORT ? { watch: null, hmr: false } : {}),
       host: '127.0.0.1',
       port: 1420,
       strictPort: true,
