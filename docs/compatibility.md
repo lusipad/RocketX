@@ -44,7 +44,7 @@ See [Codex Runtime](specs/codex-runtime.md) for discovery, failure, recovery, an
 
 ## Pi runtime and upgrades
 
-RocketX `v0.50.2` desktop line is split. Both slim and full packages include the pinned Pi SDK and Node runtime. The Windows full installer adds private Codex, DSH, and OCR resources. Desktop users configure their model service in Butler. The web client can participate in messaging and use an existing room host.
+RocketX `v0.50.3` desktop line is split. Both slim and full packages include the pinned Pi SDK and Node runtime. The Windows full installer adds private Codex, DSH, and OCR resources. Desktop users configure their model service in Butler. The web client can participate in messaging and use an existing room host.
 
 On upgrade, existing Codex and DSH startup selections migrate to Pi. A previous choice to disable AI is preserved. Pi uses its own model settings and credentials. Legacy DSH private-room bindings do not automatically resume in Pi. Save any conversation you need before upgrading.
 

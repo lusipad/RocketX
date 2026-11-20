@@ -167,8 +167,9 @@ jobs:
               sleep 1
               kill -9 "$APID" 2>/dev/null || true
             fi
+            pkill -9 -x rocketx 2>/dev/null || true
             sudo rm -rf /tmp/rcx-root-appdir || true
-            rm -rf "$CLEAN_HOME" /tmp/rcx-appimage.log /tmp/rcx-appimage-screen.png /tmp/rcx-ocr.tsv /tmp/rcx-ocr-eng.txt || true
+            rm -rf "$CLEAN_HOME" /tmp/rcx-xvfb-check.sh /tmp/rcx-appimage.log /tmp/rcx-appimage-screen.png /tmp/rcx-ocr.tsv /tmp/rcx-ocr-eng.txt || true
           }
           trap cleanup EXIT
 
@@ -182,49 +183,69 @@ jobs:
             exit 1
           fi
 
-          xvfb-run -a -s "-screen 0 1280x800x24" bash -euo pipefail -c '
-            export HOME="'"$CLEAN_HOME"'"
-            export XDG_CONFIG_HOME="'"$CLEAN_HOME"'/.config"
-            export XDG_DATA_HOME="'"$CLEAN_HOME"'/.local/share"
-            export LANG=C
-            export LC_ALL=C
-            export WEBKIT_DISABLE_DMABUF_RENDERER=1
-            export WEBKIT_DISABLE_COMPOSITING_MODE=1
-            /tmp/rcx-root-appdir/squashfs-root/AppRun >/tmp/rcx-appimage.log 2>&1 &
-            APID=$!
-            trap "kill $APID 2>/dev/null || true; pkill -9 -f /tmp/rcx-root-appdir 2>/dev/null || true" EXIT
-
-            sleep 6
-            VISIBLE=""
-            for _ in $(seq 1 25); do
-              if ! kill -0 "$APID" 2>/dev/null; then
-                echo "AppImage exited unexpectedly during startup:" >&2
-                cat /tmp/rcx-appimage.log >&2 || true
-                exit 1
-              fi
-              if timeout 5 xdotool search --onlyvisible --name "." >/dev/null 2>&1; then
-                VISIBLE=1
-                break
-              fi
-              sleep 1
-            done
-            if [ -z "$VISIBLE" ]; then
-              echo "Timed out waiting for visible AppImage window:" >&2
-              cat /tmp/rcx-appimage.log >&2 || true
-              exit 1
+          cat > /tmp/rcx-xvfb-check.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          CLEAN_HOME="$1"
+          unset XDG_CURRENT_DESKTOP DESKTOP_SESSION GNOME_DESKTOP_SESSION_ID KDE_FULL_SESSION WAYLAND_DISPLAY
+          export HOME="$CLEAN_HOME"
+          export XDG_CONFIG_HOME="$CLEAN_HOME/.config"
+          export XDG_DATA_HOME="$CLEAN_HOME/.local/share"
+          export LANG=C
+          export LC_ALL=C
+          export WEBKIT_DISABLE_DMABUF_RENDERER=1
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1
+          APID=""
+          cleanup_inner() {
+            if [ -n "$APID" ]; then
+              kill "$APID" 2>/dev/null || true
             fi
+            pkill -9 -x rocketx 2>/dev/null || true
+          }
+          trap cleanup_inner EXIT
 
-            sleep 5
+          /tmp/rcx-root-appdir/squashfs-root/AppRun >/tmp/rcx-appimage.log 2>&1 &
+          APID=$!
+
+          sleep 4
+          VISIBLE=""
+          for _ in $(seq 1 25); do
             if ! kill -0 "$APID" 2>/dev/null; then
-              echo "AppImage exited right after showing window:" >&2
+              echo "AppImage exited unexpectedly during startup:" >&2
+              xwininfo -root -tree >&2 || true
+              ps -ef | grep -E "rocketx|WebKit" | grep -v grep >&2 || true
               cat /tmp/rcx-appimage.log >&2 || true
               exit 1
             fi
-            timeout 30 import -window root /tmp/rcx-appimage-screen.png
-            kill "$APID" 2>/dev/null || true
-            wait "$APID" 2>/dev/null || true
-            pkill -9 -f "/tmp/rcx-root-appdir" 2>/dev/null || true
-          '
+            if timeout 5 xdotool search --onlyvisible --name "." >/dev/null 2>&1; then
+              VISIBLE=1
+              break
+            fi
+            sleep 1
+          done
+          if [ -z "$VISIBLE" ]; then
+            echo "Timed out waiting for visible AppImage window:" >&2
+            xwininfo -root -tree >&2 || true
+            ps -ef | grep -E "rocketx|WebKit" | grep -v grep >&2 || true
+            cat /tmp/rcx-appimage.log >&2 || true
+            exit 1
+          fi
+
+          sleep 5
+          if ! kill -0 "$APID" 2>/dev/null; then
+            echo "AppImage exited right after showing window:" >&2
+            xwininfo -root -tree >&2 || true
+            ps -ef | grep -E "rocketx|WebKit" | grep -v grep >&2 || true
+            cat /tmp/rcx-appimage.log >&2 || true
+            exit 1
+          fi
+          timeout 30 import -window root /tmp/rcx-appimage-screen.png
+          kill "$APID" 2>/dev/null || true
+          wait "$APID" 2>/dev/null || true
+          EOF
+          chmod +x /tmp/rcx-xvfb-check.sh
+
+          xvfb-run -a -s "-screen 0 800x600x24" /tmp/rcx-xvfb-check.sh "$CLEAN_HOME"
 
           convert /tmp/rcx-appimage-screen.png -resize 200% -colorspace Gray png:- \
             | OMP_THREAD_LIMIT=1 tesseract stdin stdout -l eng --psm 11 >/tmp/rcx-ocr-eng.txt 2>/dev/null

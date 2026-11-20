@@ -862,11 +862,114 @@ fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn linux_is_bare_headless_x11_from_env<F>(get_env: F) -> bool
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let has_display = get_env("DISPLAY")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_display {
+        return false;
+    }
+    for key in [
+        "WAYLAND_DISPLAY",
+        "XDG_CURRENT_DESKTOP",
+        "DESKTOP_SESSION",
+        "GNOME_DESKTOP_SESSION_ID",
+        "KDE_FULL_SESSION",
+    ] {
+        if get_env(key)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn clamp_window_geometry_for_monitor(
+    monitor_pos: (f64, f64),
+    monitor_size: (f64, f64),
+) -> Option<((f64, f64), (f64, f64), Option<(f64, f64)>)> {
+    let (mx, my) = monitor_pos;
+    let (mw, mh) = monitor_size;
+    if mw <= 0.0 || mh <= 0.0 || (mw >= 1280.0 && mh >= 800.0) {
+        return None;
+    }
+    let target_size = (mw.min(1280.0), mh.min(800.0));
+    let min_override = if mw < 940.0 || mh < 640.0 {
+        Some((mw.min(640.0), mh.min(480.0)))
+    } else {
+        None
+    };
+    let pos = (
+        mx + ((mw - target_size.0).max(0.0) / 2.0).floor(),
+        my + ((mh - target_size.1).max(0.0) / 2.0).floor(),
+    );
+    Some((pos, target_size, min_override))
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_runtime_env() {
+    if std::env::var("DBUS_SESSION_BUS_ADDRESS")
+        .map(|value| value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        std::env::remove_var("DBUS_SESSION_BUS_ADDRESS");
+    }
+    if linux_is_bare_headless_x11_from_env(|key| std::env::var(key).ok()) {
+        if std::env::var_os("GTK_USE_PORTAL").is_none() {
+            std::env::set_var("GTK_USE_PORTAL", "0");
+        }
+        if std::env::var_os("NO_AT_BRIDGE").is_none() {
+            std::env::set_var("NO_AT_BRIDGE", "1");
+        }
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // 在无桌面会话的裸 Xvfb/X11 中断开缺失的 session bus，避免 xdg-desktop-portal 阻塞约 30s；
+        // 使用明确的地址而非移除变量，可避免 tauri-plugin-single-instance 访问空 session 地址时出错。
+        if std::env::var_os("ROCKETX_KEEP_HEADLESS_DBUS").is_none() {
+            std::env::set_var("DBUS_SESSION_BUS_ADDRESS", "unix:path=/dev/null");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn fit_linux_window_to_monitor(w: &tauri::WebviewWindow) {
+    let Some(monitor) = w
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| w.primary_monitor().ok().flatten())
+    else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let pos = monitor.position().to_logical::<f64>(scale);
+    let size = monitor.size().to_logical::<f64>(scale);
+    if let Some(((x, y), (width, height), min_override)) =
+        clamp_window_geometry_for_monitor((pos.x, pos.y), (size.width, size.height))
+    {
+        if let Some((min_w, min_h)) = min_override {
+            let _ = w.set_min_size(Some(tauri::LogicalSize::new(min_w, min_h)));
+        }
+        let _ = w.set_size(tauri::LogicalSize::new(width, height));
+        let _ = w.set_position(tauri::LogicalPosition::new(x, y));
+    }
+}
+
 /// 显示并聚焦主窗口（从托盘点回来）
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         #[cfg(windows)]
         set_webview_memory_usage(&w, WebviewMemoryUsage::Normal);
+        #[cfg(target_os = "linux")]
+        fit_linux_window_to_monitor(&w);
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
@@ -1130,14 +1233,59 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 #[cfg(test)]
 mod tray_icon_tests {
     use super::{
-        autostart_registration_allowed, dim_tray_icon, is_autostart_launch,
-        launch_opens_main_window, locale_tag_prefers_chinese, native_media_confirm_body,
-        native_media_response, native_media_url, normalize_desktop_distribution_profile,
-        normalize_http_origin, refresh_autostart_registration_with, resolve_download_history_path,
-        resolve_unc_path, system_prefers_chinese_from_env, validate_external_url,
+        autostart_registration_allowed, clamp_window_geometry_for_monitor, dim_tray_icon,
+        is_autostart_launch, launch_opens_main_window, linux_is_bare_headless_x11_from_env,
+        locale_tag_prefers_chinese, native_media_confirm_body, native_media_response,
+        native_media_url, normalize_desktop_distribution_profile, normalize_http_origin,
+        refresh_autostart_registration_with, resolve_download_history_path, resolve_unc_path,
+        system_prefers_chinese_from_env, validate_external_url,
     };
     use std::{cell::Cell, path::Path};
     use tauri::image::Image;
+
+    #[test]
+    fn bare_headless_x11_detection_requires_display_without_desktop_or_wayland() {
+        assert!(linux_is_bare_headless_x11_from_env(|key| match key {
+            "DISPLAY" => Some(":99".to_string()),
+            _ => None,
+        }));
+        assert!(!linux_is_bare_headless_x11_from_env(|key| match key {
+            "DISPLAY" => Some(":0".to_string()),
+            "XDG_CURRENT_DESKTOP" => Some("ubuntu:GNOME".to_string()),
+            _ => None,
+        }));
+        assert!(!linux_is_bare_headless_x11_from_env(|key| match key {
+            "DISPLAY" => Some(":0".to_string()),
+            "DESKTOP_SESSION" => Some("xfce".to_string()),
+            _ => None,
+        }));
+        assert!(!linux_is_bare_headless_x11_from_env(|key| match key {
+            "DISPLAY" => Some(":0".to_string()),
+            "WAYLAND_DISPLAY" => Some("wayland-0".to_string()),
+            _ => None,
+        }));
+        assert!(!linux_is_bare_headless_x11_from_env(|_| None));
+    }
+
+    #[test]
+    fn window_geometry_clamps_only_when_monitor_smaller_than_default() {
+        assert_eq!(
+            clamp_window_geometry_for_monitor((0.0, 0.0), (1920.0, 1080.0)),
+            None
+        );
+        assert_eq!(
+            clamp_window_geometry_for_monitor((0.0, 0.0), (1280.0, 800.0)),
+            None
+        );
+        assert_eq!(
+            clamp_window_geometry_for_monitor((0.0, 0.0), (1024.0, 768.0)),
+            Some(((0.0, 0.0), (1024.0, 768.0), None))
+        );
+        assert_eq!(
+            clamp_window_geometry_for_monitor((0.0, 0.0), (800.0, 600.0)),
+            Some(((0.0, 0.0), (800.0, 600.0), Some((640.0, 480.0))))
+        );
+    }
 
     #[test]
     fn locale_detection_prefers_chinese_only_for_zh_tags() {
@@ -1388,6 +1536,8 @@ fn main() {
         }
         return;
     }
+    #[cfg(target_os = "linux")]
+    configure_linux_runtime_env();
     let show_main_on_launch = launch_opens_main_window(&launch_args);
     tauri::Builder::default()
         // 必须最先注册：第二实例立即退出；只有用户手动启动才把已有窗口带回前台。
