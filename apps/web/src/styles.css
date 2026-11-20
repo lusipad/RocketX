@@ -451,10 +451,12 @@
 }
 
 .butler-conversation-history > header button:disabled,
+.butler-conversation-history nav[aria-label='Chat History'] button:disabled,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] button:disabled {
   opacity: 0.5;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'],
 .butler-conversation-history nav[aria-label='Codex 对话历史'] {
   min-height: 0;
   flex: 1;
@@ -466,6 +468,7 @@
   margin-top: 3px;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] button,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] button {
   display: grid;
   width: 100%;
@@ -478,11 +481,13 @@
   text-align: left;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] button:hover,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] button:hover {
   background: var(--color-fill-hover);
   color: var(--color-ink);
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] button[aria-current='page'],
 .butler-conversation-history nav[aria-label='Codex 对话历史'] button[aria-current='page'] {
   background: color-mix(in srgb, var(--color-fill-active) 76%, transparent);
   color: var(--color-ink);
@@ -687,6 +692,7 @@
   text-align: center;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-expand,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-expand {
   display: flex;
   width: calc(100% - 24px);
@@ -705,15 +711,18 @@
   white-space: nowrap;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-expand:hover,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-expand:hover {
   background: var(--color-fill-hover);
   color: var(--color-ink-2);
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-row,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-row {
   position: relative;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-main,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-main {
   padding-right: 42px;
 }
@@ -724,6 +733,7 @@
   right: 4px;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-actions > button,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-actions > button {
   display: grid;
   width: 28px;
@@ -736,6 +746,8 @@
   opacity: 0;
 }
 
+.butler-conversation-history nav[aria-label='Chat History']
+  .codex-native-thread-main[aria-current='page'] + .codex-native-thread-actions > button,
 .butler-conversation-history nav[aria-label='Codex 对话历史']
   .codex-native-thread-main[aria-current='page'] + .codex-native-thread-actions > button {
   background: var(--color-fill-hover);
@@ -764,6 +776,7 @@
   box-shadow: var(--shadow-pop);
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-actions [role='menu'] button,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-actions [role='menu'] button {
   display: flex;
   width: 100%;
@@ -801,6 +814,7 @@
   outline: none;
 }
 
+.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-rename button,
 .butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-rename button {
   display: block;
   width: auto;
@@ -3938,6 +3952,7 @@
   white-space: nowrap;
 }
 
+.butler-codex-project-list + nav[aria-label='Chat History'],
 .butler-codex-project-list + nav[aria-label='Codex 对话历史'] {
   padding-left: 20px;
 }
@@ -4497,6 +4512,7 @@
   font-size: var(--text-xs);
 }
 
+.codex-native-image-viewer header button[aria-label='Close image preview'],
 .codex-native-image-viewer header button[aria-label='关闭图片预览'] {
   width: 32px;
   justify-content: center;

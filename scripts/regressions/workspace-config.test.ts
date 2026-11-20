@@ -608,10 +608,10 @@ test('设置页团队配置分区保留内部 key，但只展示团队配置入�
 
   assert.match(settings, /\{ key: 'workspace', label: '团队配置', icon: UsersRound \}/);
   assert.doesNotMatch(settings, /LocalAgentEnvironmentsSettings/);
-  assert.match(section, /title=\{config\.name \? `导入「\$\{config\.name\}」` : '导入团队配置'\}/);
-  assert.match(section, /<h2 className="text-base font-semibold text-ink">配置来源<\/h2>/);
+  assert.match(section, /title=\{config\.name \? tr\(`导入「\$\{config\.name\}」`,[^)]+\) : tr\('导入团队配置', 'Import Team Config', locale\)\}/);
+  assert.match(section, /<h2 className="text-base font-semibold text-ink">\{tr\('配置来源', 'Config Source', locale\)\}<\/h2>/);
   assert.match(section, /配置 URL、ADO 文件链接或 UNC 共享 JSON 路径/);
-  assert.match(section, /aria-label="团队配置来源"/);
-  assert.match(section, /toast\.error\(err, '配置来源无效'\)/);
+  assert.match(section, /aria-label=\{tr\('团队配置来源', 'Team config source', locale\)\}/);
+  assert.match(section, /toast\.error\(err, tr\('配置来源无效', 'Invalid config source', locale\)\)/);
   assert.match(section, /直接把 ADO 仓库文件链接粘贴到上面的统一输入框里自动回填/);
 });

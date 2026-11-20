@@ -29,6 +29,7 @@ import { useCalendar, eventsForDate, isEventDone } from '../stores/calendar';
 import { useUI } from '../stores/ui';
 import { useFocus } from '../stores/focus';
 import { countsTowardUnread, totalUnread } from '../lib/unread';
+import { tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import Avatar from './Avatar';
 import UserCard from './UserCard';
@@ -58,8 +59,31 @@ const KNOWN_CORE_MODULE_IDS = new Set([
   ...WORK_MODULE_IDS,
 ]);
 
+function moduleDisplayLabel(key: string, fallback: string, locale: UiLocale): string {
+  if (locale === 'zh') return fallback;
+  switch (key) {
+    case 'messages':
+      return 'Messages';
+    case 'butler-view':
+      return 'Butler';
+    case 'todos':
+      return 'Tasks';
+    case 'calendar':
+      return 'Calendar';
+    case 'downloads':
+      return 'Downloads';
+    case 'workbench':
+      return 'Workbench';
+    case 'contacts':
+      return 'Contacts';
+    default:
+      return fallback;
+  }
+}
+
 /** 飞书网页版式深色导航栏：头像 + 发起会话 + 全局搜索 + 模块列表（支持 60px 紧凑/210px 展开切换） */
 export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => void }) {
+  const locale = useUiLocale();
   const user = useAuth((s) => s.user);
   const localMode = useAuth((s) => s.localMode);
   const exitLocalMode = useAuth((s) => s.exitLocalMode);
@@ -73,11 +97,11 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
 
   const registeredModules = useKernelContributions('nav.module');
   const modules = [
-    { key: 'messages', owner: 'core', ...MODULE_META.messages },
+    { key: 'messages', owner: 'core', ...MODULE_META.messages, label: moduleDisplayLabel('messages', MODULE_META.messages.label, locale) },
     ...registeredModules.map((module) => ({
       key: module.id,
       owner: kernelRegistry.ownerOf('nav.module', module),
-      label: module.label,
+      label: moduleDisplayLabel(module.id, module.label, locale),
       icon: module.icon ?? MODULE_META[module.id]?.icon ?? Blocks,
     })),
   ];
@@ -89,27 +113,27 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const moduleSections = [
     {
       id: 'primary',
-      ariaLabel: '个人事务',
+      ariaLabel: tr('个人事务', 'Personal', locale),
       modules: visibleModules.filter((module) => PRIMARY_MODULE_IDS.has(module.key)),
     },
     {
       id: 'butler',
-      ariaLabel: '管家',
+      ariaLabel: tr('管家', 'Butler', locale),
       modules: visibleModules.filter((module) => BUTLER_MODULE_IDS.has(module.key)),
     },
     {
       id: 'work',
-      ariaLabel: '工作区',
+      ariaLabel: tr('工作区', 'Workspace', locale),
       modules: visibleModules.filter((module) => WORK_MODULE_IDS.has(module.key)),
     },
     {
       id: 'core',
-      ariaLabel: '其他工具',
+      ariaLabel: tr('其他工具', 'Tools', locale),
       modules: visibleModules.filter((module) => module.owner === 'core' && !KNOWN_CORE_MODULE_IDS.has(module.key)),
     },
     {
       id: 'apps',
-      ariaLabel: '应用',
+      ariaLabel: tr('应用', 'Apps', locale),
       modules: visibleModules.filter((module) => module.owner !== 'core'),
     },
   ].filter((section) => section.modules.length > 0);
@@ -195,7 +219,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
         >
           <MessageCirclePlus size={14} className="text-ink-2" />
-          发起聊天
+          {tr('发起聊天', 'Start Chat', locale)}
         </button>
         <button
           onClick={() => {
@@ -205,7 +229,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
         >
           <UsersRound size={14} className="text-ink-2" />
-          创建群组
+          {tr('创建群组', 'Create Group', locale)}
         </button>
         <button
           onClick={() => {
@@ -215,7 +239,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
         >
           <Users size={14} className="text-ink-2" />
-          创建团队
+          {tr('创建团队', 'Create Team', locale)}
         </button>
         {/* Rocket.Chat 允许不选消息直接开讨论；服务端关掉讨论后不给入口 */}
         {discussionsEnabled && (
@@ -227,7 +251,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
             className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
           >
             <MessagesSquare size={14} className="text-ink-2" />
-            创建讨论
+            {tr('创建讨论', 'New Discussion', locale)}
           </button>
         )}
         <div className="my-1 h-px bg-line" />
@@ -239,7 +263,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
         >
           <Hash size={14} className="text-ink-2" />
-          加入频道
+          {tr('加入频道', 'Join Channel', locale)}
         </button>
         <button
           onClick={() => {
@@ -249,7 +273,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs text-ink hover:bg-fill-hover"
         >
           <Smile size={14} className="text-ink-2" />
-          设置状态
+          {tr('设置状态', 'Set Status', locale)}
         </button>
       </div>
     </>
@@ -257,35 +281,35 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
 
   return (
     <nav
-      aria-label="RocketX 主导航"
+      aria-label={tr('RocketX 主导航', 'RocketX Navigation', locale)}
       className={`flex ${isCollapsed ? 'w-[56px] px-2' : 'w-[208px] px-2.5'} shrink-0 flex-col border-r border-line bg-surface-1 pb-3 text-ink transition-[width,padding] duration-150`}
     >
       {/* 头像 + 发起会话 */}
       <div className={`flex h-[52px] shrink-0 items-center ${isCollapsed ? 'justify-center' : 'justify-between gap-1.5 px-0.5'} border-b border-line-soft mb-2`}>
         <button
           onClick={() => (localMode ? setModule('settings') : setSelfCard(true))}
-          title={localMode ? '本地模式（点击打开账号设置）' : (user?.name || user?.username || '个人信息')}
+          title={localMode ? tr('本地模式（点击打开账号设置）', 'Local Mode (Click for account settings)', locale) : (user?.name || user?.username || tr('个人信息', 'Profile', locale))}
           className={`flex min-w-0 items-center rounded-xl transition hover:bg-fill-hover ${isCollapsed ? 'h-9 w-9 justify-center' : 'flex-1 gap-2.5 p-1'}`}
         >
           <div className="relative shrink-0">
             <Avatar
-              name={user?.name || user?.username || '?'}
+              name={localMode ? tr('本地模式', 'Local', locale) : (user?.name || user?.username || '?')}
               username={user?.username}
               size={32}
               status={localMode || user?.status === 'online' ? undefined : user?.status}
             />
             {localMode ? (
               <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-surface-1">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="本地工作区就绪" />
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title={tr('本地工作区就绪', 'Local workspace ready', locale)} />
               </span>
             ) : null}
           </div>
           {!isCollapsed && (
             localMode ? (
-              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-2xs font-semibold text-emerald-500">本地模式</span>
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-2xs font-semibold text-emerald-500">{tr('本地模式', 'Local Mode', locale)}</span>
             ) : (
               <span className="min-w-0 truncate text-left text-xs font-medium text-ink">
-                {user?.name || user?.username || '已登录'}
+                {user?.name || user?.username || tr('已登录', 'Signed in', locale)}
               </span>
             )
           )}
@@ -297,7 +321,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               onClick={() => {
                 setPlusMenu((v) => !v);
               }}
-              title="发起聊天 / 创建群组"
+              title={tr('发起聊天 / 创建群组', 'New Chat / Group', locale)}
               aria-haspopup="menu"
               aria-expanded={plusMenu}
               className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-2 transition hover:bg-fill-hover hover:text-ink"
@@ -316,7 +340,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
             onClick={() => {
               setPlusMenu((v) => !v);
             }}
-            title="发起聊天 / 创建群组"
+            title={tr('发起聊天 / 创建群组', 'New Chat / Group', locale)}
             aria-haspopup="menu"
             aria-expanded={plusMenu}
             className="mx-auto flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
@@ -330,7 +354,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       {/* 全局搜索（打开 Ctrl+K 快速切换） */}
       <button
         onClick={() => setSwitcherOpen(true)}
-        title="搜索 (Ctrl+K)"
+        title={tr('搜索 (Ctrl+K)', 'Search (Ctrl+K)', locale)}
         className={isCollapsed
           ? 'mx-auto mb-1 flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink'
           : 'mb-1.5 flex h-8 w-full items-center gap-2 rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-ink-3 transition hover:border-line-hover hover:text-ink-2'}
@@ -338,7 +362,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
         <Search size={isCollapsed ? 17 : 14} className="shrink-0" />
         {!isCollapsed ? (
           <>
-            <span>搜索</span>
+            <span>{tr('搜索', 'Search', locale)}</span>
             <kbd className="ml-auto rounded border border-line bg-surface-3 px-1.5 py-0.5 font-sans text-2xs font-medium text-ink-3">Ctrl+K</kbd>
           </>
         ) : null}
@@ -347,7 +371,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       {/* 专注模式入口：进行中显示倒计时（daily-loop 规格 v1） */}
       <button
         onClick={() => setFocusDialog(true)}
-        title={focusSession ? `专注中 ${formatRemaining(focusSession.endsAt, focusNow)}` : '专注模式'}
+        title={focusSession ? tr(`专注中 ${formatRemaining(focusSession.endsAt, focusNow)}`, `Focusing ${formatRemaining(focusSession.endsAt, focusNow)}`, locale) : tr('专注模式', 'Focus Mode', locale)}
         className={isCollapsed
           ? `mx-auto mb-2 flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
               focusSession
@@ -361,7 +385,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
             }`}
       >
         <Timer size={isCollapsed ? 17 : 15} className="shrink-0" />
-        {!isCollapsed ? (focusSession ? `专注中 ${formatRemaining(focusSession.endsAt, focusNow)}` : '专注') : null}
+        {!isCollapsed ? (focusSession ? tr(`专注中 ${formatRemaining(focusSession.endsAt, focusNow)}`, `Focusing ${formatRemaining(focusSession.endsAt, focusNow)}`, locale) : tr('专注', 'Focus', locale)) : null}
       </button>
 
       {/* 模块列表 */}
@@ -432,7 +456,9 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                       className={`ml-auto flex h-4.5 min-w-4.5 items-center justify-center rounded-full px-1.5 text-2xs font-medium ${
                         todoOverdue > 0 ? 'bg-danger text-white' : 'bg-fill-active text-ink-2'
                       }`}
-                      title={todoOverdue > 0 ? `${todoOverdue} 条已逾期` : `${todoOpen} 条待办`}
+                      title={todoOverdue > 0
+                        ? tr(`${todoOverdue} 条已逾期`, `${todoOverdue} overdue`, locale)
+                        : tr(`${todoOpen} 条待办`, `${todoOpen} open tasks`, locale)}
                     >
                       {todoOpen > 99 ? '99+' : todoOpen}
                     </span>
@@ -453,17 +479,17 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
       <div className="flex flex-col gap-1 border-t border-line-soft pt-2.5">
         <button
           onClick={onOpenShortcuts}
-          title="快捷键"
+          title={tr('快捷键', 'Shortcuts', locale)}
           className={isCollapsed
             ? 'mx-auto flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink'
             : 'flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink'}
         >
           <Keyboard size={isCollapsed ? 17 : 15} />
-          {!isCollapsed ? '快捷键' : null}
+          {!isCollapsed ? tr('快捷键', 'Shortcuts', locale) : null}
         </button>
         <button
           onClick={() => setModule('settings')}
-          title="设置"
+          title={tr('设置', 'Settings', locale)}
           className={isCollapsed
             ? `mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
                 active === 'settings'
@@ -477,11 +503,11 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               }`}
         >
           <Settings size={isCollapsed ? 17 : 15} />
-          {!isCollapsed ? '设置' : null}
+          {!isCollapsed ? tr('设置', 'Settings', locale) : null}
         </button>
         <button
           onClick={() => (localMode ? void exitLocalMode() : setConfirmLogout(true))}
-          title={localMode ? '连接 Rocket.Chat' : '退出登录'}
+          title={localMode ? tr('连接 Rocket.Chat', 'Connect Rocket.Chat', locale) : tr('退出登录', 'Sign out', locale)}
           className={isCollapsed
             ? `mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
                 localMode ? 'text-primary hover:bg-primary-light' : 'text-ink-3 hover:bg-fill-hover hover:text-danger'
@@ -491,29 +517,29 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
               }`}
         >
           {localMode ? <LogIn size={isCollapsed ? 17 : 15} /> : <LogOut size={isCollapsed ? 17 : 15} />}
-          {!isCollapsed ? (localMode ? '连接 Rocket.Chat' : '退出登录') : null}
+          {!isCollapsed ? (localMode ? tr('连接 Rocket.Chat', 'Connect Rocket.Chat', locale) : tr('退出登录', 'Sign out', locale)) : null}
         </button>
 
         {/* 展开/折叠切换按钮 */}
         <button
           type="button"
           onClick={toggleCollapse}
-          title={isCollapsed ? '展开主导航' : '收起主导航'}
-          aria-label={isCollapsed ? '展开主导航' : '收起主导航'}
+          title={isCollapsed ? tr('展开主导航', 'Expand navigation', locale) : tr('收起主导航', 'Collapse navigation', locale)}
+          aria-label={isCollapsed ? tr('展开主导航', 'Expand navigation', locale) : tr('收起主导航', 'Collapse navigation', locale)}
           className={isCollapsed
             ? 'mx-auto flex h-9 w-9 items-center justify-center rounded-xl text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink'
             : 'flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink'}
         >
           <PanelLeft size={isCollapsed ? 17 : 15} />
-          {!isCollapsed ? <span>收起导航</span> : null}
+          {!isCollapsed ? <span>{tr('收起导航', 'Collapse', locale)}</span> : null}
         </button>
       </div>
 
       {confirmLogout && (
         <ConfirmDialog
-          title="退出登录"
-          message="退出后需要重新输入账号密码。未发送的草稿会保留在本机。"
-          confirmLabel="退出"
+          title={tr('退出登录', 'Sign out', locale)}
+          message={tr('退出后需要重新输入账号密码。未发送的草稿会保留在本机。', 'You will need to sign in again. Unsent drafts remain on this device.', locale)}
+          confirmLabel={tr('退出', 'Sign out', locale)}
           onConfirm={() => void logout()}
           onClose={() => setConfirmLogout(false)}
         />

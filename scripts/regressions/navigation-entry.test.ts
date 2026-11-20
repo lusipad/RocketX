@@ -23,7 +23,7 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   assert.doesNotMatch(navRail, /contributions: \{ label:/);
   assert.match(navRail, /const WORK_MODULE_IDS = new Set\(\['workbench', 'contacts'\]\);/);
   assert.match(navRail, /const BUTLER_MODULE_IDS = new Set\(\['butler-view'\]\);/);
-  assert.match(navRail, /id: 'butler',[\s\S]*ariaLabel: '管家'/);
+  assert.match(navRail, /id: 'butler',[\s\S]*ariaLabel: tr\('管家', 'Butler', locale\)/);
   assert.doesNotMatch(navRail, /管家执行引擎|taskProvider|setButlerTaskProvider/);
   assert.doesNotMatch(navRail, /['"]today['"]/);
   assert.doesNotMatch(navRail, /['"]ai-assistant['"]/);
@@ -36,9 +36,9 @@ test('全局左栏保留，管家内部工作面改由 ButlerPage/History 承载
   assert.match(page, /<ButlerPluginsPage \/>/);
   assert.match(page, /<ButlerRoutines \/>/);
 
-  assert.match(history, /aria-label="AI 协作"/);
-  assert.match(history, /aria-label="新管家对话"/);
-  assert.match(history, /aria-label="Codex 对话历史"/);
+  assert.match(history, /aria-label=\{tr\('AI 协作', 'AI Workspace', locale\)\}/);
+  assert.match(history, /aria-label=\{tr\('新管家对话', 'New Butler Chat', locale\)\}/);
+  assert.match(history, /aria-label=\{tr\('Codex 对话历史', 'Chat History', locale\)\}/);
   assert.doesNotMatch(history, /aria-label="任务"/);
   assert.match(history, /setWorkbenchTab\('prs'\)/);
   assert.match(history, /setModule\('workbench'\)/);

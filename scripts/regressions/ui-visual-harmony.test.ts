@@ -56,7 +56,7 @@ test('Butler 桌面顶栏保持 52px，窄窗对话顶栏随内容增高且无�
   assert.doesNotMatch(conversation, /\(\{workspaceRoot\}\)/);
 
   // 新建对话主按钮保持显式白色文字；导航保持精确契约且不含禁用旧词
-  assert.match(history, /<span className="text-white">新管家对话<\/span>/);
-  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label="AI 协作">/);
+  assert.match(history, /<span className="text-white">\{tr\('新管家对话', 'New Butler Chat', locale\)\}<\/span>/);
+  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label=\{tr\('AI 协作', 'AI Workspace', locale\)\}>/);
   assert.doesNotMatch(history, /\b(today|memory|paper|manage)\b/i);
 });

@@ -1,6 +1,6 @@
 {
   "name": "@rcx/desktop",
-  "version": "0.50.0",
+  "version": "0.50.1",
   "private": true,
   "scripts": {
     "dev": "tauri dev",
@@ -9,6 +9,6 @@
     "typecheck": "node -e \"process.exit(0)\""
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.12.6"
   }
 }

@@ -6,6 +6,7 @@ import {
   activateAiRuntimeProvider,
   persistAiRuntimeProvider,
 } from '../lib/runtimeMode';
+import { tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import {
   writePiConfig,
   type PiProviderPreset,
@@ -25,80 +26,84 @@ interface PresetConfig {
   placeholderKey: string;
 }
 
-const PRESETS: PresetConfig[] = [
-  {
-    id: 'deepseek',
-    title: 'DeepSeek 官方',
-    desc: '最新 V4 Flash / Pro 与 R1 推理',
-    icon: Sparkles,
-    baseUrl: 'https://api.deepseek.com/v1',
-    defaultModel: 'deepseek-v4-flash',
-    keyRequired: true,
-    placeholderKey: 'sk-...',
-  },
-  {
-    id: 'anthropic',
-    title: 'Claude 官方',
-    desc: 'Claude 5.5 / 3.7 混合深度推理',
-    icon: Bot,
-    baseUrl: 'https://api.anthropic.com',
-    defaultModel: 'claude-sonnet-5.5',
-    keyRequired: true,
-    placeholderKey: 'sk-ant-...',
-  },
-  {
-    id: 'openai',
-    title: 'OpenAI 官方',
-    desc: 'GPT-6.1 Sol / o3-mini 高速推理',
-    icon: Globe,
-    baseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-6.1-sol',
-    keyRequired: true,
-    placeholderKey: 'sk-...',
-  },
-  {
-    id: 'ollama',
-    title: 'Ollama 本地',
-    desc: 'Qwen 3 Coder / DeepSeek R1 离线免密',
-    icon: Terminal,
-    baseUrl: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'qwen3-coder',
-    keyRequired: false,
-    placeholderKey: '免密，留空即可',
-  },
-  {
-    id: 'google',
-    title: 'Google 官方',
-    desc: 'Gemini 4 Argon / 3.8 Flash 超大上下文',
-    icon: Globe,
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-4-argon',
-    keyRequired: true,
-    placeholderKey: 'AIzaSy...',
-  },
-  {
-    id: 'custom-openai',
-    title: '企业 / 兼容网关',
-    desc: '自建 vLLM / OneAPI / LiteLLM',
-    icon: Server,
-    baseUrl: 'http://127.0.0.1:8000/v1',
-    defaultModel: 'deepseek-v4-flash',
-    keyRequired: false,
-    placeholderKey: '如网关免密可留空',
-  },
-  {
-    id: 'openrouter',
-    title: 'OpenRouter',
-    desc: '聚合全球主流旗舰大模型',
-    icon: Globe,
-    baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'deepseek/deepseek-v4-flash',
-    keyRequired: true,
-    placeholderKey: 'sk-or-...',
-  },
-];
+function getPresets(locale: UiLocale): PresetConfig[] {
+  return [
+    {
+      id: 'deepseek',
+      title: tr('DeepSeek 官方', 'DeepSeek', locale),
+      desc: tr('最新 V4 Flash / Pro 与 R1 推理', 'V4 Flash / Pro & R1 Reasoning', locale),
+      icon: Sparkles,
+      baseUrl: 'https://api.deepseek.com/v1',
+      defaultModel: 'deepseek-v4-flash',
+      keyRequired: true,
+      placeholderKey: 'sk-...',
+    },
+    {
+      id: 'anthropic',
+      title: tr('Claude 官方', 'Anthropic Claude', locale),
+      desc: tr('Claude 5.5 / 3.7 混合深度推理', 'Claude 5.5 / 3.7 Deep Reasoning', locale),
+      icon: Bot,
+      baseUrl: 'https://api.anthropic.com',
+      defaultModel: 'claude-sonnet-5.5',
+      keyRequired: true,
+      placeholderKey: 'sk-ant-...',
+    },
+    {
+      id: 'openai',
+      title: tr('OpenAI 官方', 'OpenAI', locale),
+      desc: tr('GPT-6.1 Sol / o3-mini 高速推理', 'GPT-6.1 Sol / o3-mini Reasoning', locale),
+      icon: Globe,
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-6.1-sol',
+      keyRequired: true,
+      placeholderKey: 'sk-...',
+    },
+    {
+      id: 'ollama',
+      title: tr('Ollama 本地', 'Ollama Local', locale),
+      desc: tr('Qwen 3 Coder / DeepSeek R1 离线免密', 'Local offline models (no key needed)', locale),
+      icon: Terminal,
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      defaultModel: 'qwen3-coder',
+      keyRequired: false,
+      placeholderKey: tr('免密，留空即可', 'Optional (no key needed)', locale),
+    },
+    {
+      id: 'google',
+      title: tr('Google 官方', 'Google Gemini', locale),
+      desc: tr('Gemini 4 Argon / 3.8 Flash 超大上下文', 'Gemini 4 Argon / 3.8 Flash', locale),
+      icon: Globe,
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      defaultModel: 'gemini-4-argon',
+      keyRequired: true,
+      placeholderKey: 'AIzaSy...',
+    },
+    {
+      id: 'custom-openai',
+      title: tr('企业 / 兼容网关', 'Custom OpenAI API', locale),
+      desc: tr('自建 vLLM / OneAPI / LiteLLM', 'vLLM / OneAPI / LiteLLM Endpoint', locale),
+      icon: Server,
+      baseUrl: 'http://127.0.0.1:8000/v1',
+      defaultModel: 'deepseek-v4-flash',
+      keyRequired: false,
+      placeholderKey: tr('如网关免密可留空', 'Optional if endpoint requires no key', locale),
+    },
+    {
+      id: 'openrouter',
+      title: 'OpenRouter',
+      desc: tr('聚合全球主流旗舰大模型', 'Unified access to flagship models', locale),
+      icon: Globe,
+      baseUrl: 'https://openrouter.ai/api/v1',
+      defaultModel: 'deepseek/deepseek-v4-flash',
+      keyRequired: true,
+      placeholderKey: 'sk-or-...',
+    },
+  ];
+}
 
 export default function PiQuickOnboardingCard() {
+  const locale = useUiLocale();
+  const presets = getPresets(locale);
   const [selectedPresetId, setSelectedPresetId] = useState<PiProviderPreset>('deepseek');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com/v1');
@@ -106,7 +111,7 @@ export default function PiQuickOnboardingCard() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  const currentPreset = PRESETS.find((p) => p.id === selectedPresetId) ?? PRESETS[0];
+  const currentPreset = presets.find((p) => p.id === selectedPresetId) ?? presets[0];
 
   const handleSelectPreset = (preset: PresetConfig) => {
     setSelectedPresetId(preset.id);
@@ -116,12 +121,12 @@ export default function PiQuickOnboardingCard() {
 
   const handleActivate = async () => {
     if (!isTauriRuntime()) {
-      toast.error('网页版不支持本地 Pi 进程，请使用 RocketX 桌面端');
+      toast.error(tr('网页版不支持本地 Pi 进程，请使用 RocketX 桌面端', 'Local Pi runtime requires RocketX Desktop', locale));
       return;
     }
     const trimmedKey = apiKey.trim();
     if (currentPreset.keyRequired && !trimmedKey) {
-      toast.error('请输入 API Key');
+      toast.error(tr('请输入 API Key', 'Please enter an API Key', locale));
       return;
     }
 
@@ -159,9 +164,9 @@ export default function PiQuickOnboardingCard() {
 
       await useCodexWorkspace.getState().reconnectRuntime();
 
-      toast.success('AI 引擎就绪，开始对话吧！');
+      toast.success(tr('AI 引擎就绪，开始对话吧！', 'AI engine ready. Start chatting!', locale));
     } catch (err) {
-      toast.error(err, '启用失败，请检查配置');
+      toast.error(err, tr('启用失败，请检查配置', 'Could not enable engine. Please check settings.', locale));
     } finally {
       setSaving(false);
     }
@@ -174,9 +179,9 @@ export default function PiQuickOnboardingCard() {
           <Bot size={24} />
         </div>
         <div>
-          <h2 className="text-base font-semibold text-ink">快速启用 AI 管家</h2>
+          <h2 className="text-base font-semibold text-ink">{tr('快速启用 AI 管家', 'Quick-Start AI Butler', locale)}</h2>
           <p className="text-xs text-ink-3">
-            RocketX 已内置本地 Pi 运行时与动态工具桥，配置好模型即可开启离线/私有任务。
+            {tr('RocketX 已内置本地 Pi 运行时与动态工具桥，配置好模型即可开启离线/私有任务。', 'RocketX includes a built-in Pi runtime and tool bridge. Configure a model to start local tasks.', locale)}
           </p>
         </div>
       </div>
@@ -184,9 +189,9 @@ export default function PiQuickOnboardingCard() {
       <div className="mt-5 space-y-4">
         {/* Preset Selector */}
         <div>
-          <label className="mb-2 block text-xs font-medium text-ink-2">选择模型来源</label>
+          <label className="mb-2 block text-xs font-medium text-ink-2">{tr('选择模型来源', 'Choose Model Provider', locale)}</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {PRESETS.map((preset) => {
+            {presets.map((preset) => {
               const active = preset.id === selectedPresetId;
               const Icon = preset.icon;
               return (
@@ -216,7 +221,7 @@ export default function PiQuickOnboardingCard() {
         <div>
           <div className="flex items-center justify-between">
             <label className="mb-1.5 block text-xs font-medium text-ink-2">
-              API Key {currentPreset.keyRequired ? <span className="text-danger">*</span> : <span className="text-ink-4">（选填）</span>}
+              API Key {currentPreset.keyRequired ? <span className="text-danger">*</span> : <span className="text-ink-4">{tr('（选填）', ' (Optional)', locale)}</span>}
             </label>
             {selectedPresetId === 'deepseek' ? (
               <a
@@ -225,7 +230,7 @@ export default function PiQuickOnboardingCard() {
                 rel="noreferrer"
                 className="text-xs text-primary hover:underline flex items-center gap-0.5"
               >
-                获取 Key <Globe size={11} />
+                {tr('获取 Key', 'Get API Key', locale)} <Globe size={11} />
               </a>
             ) : null}
           </div>
@@ -250,7 +255,9 @@ export default function PiQuickOnboardingCard() {
             onClick={() => setShowAdvanced((prev) => !prev)}
             className="text-xs text-ink-3 hover:text-ink font-medium"
           >
-            {showAdvanced ? '收起自定义端点与模型' : '展开自定义端点与模型 (Base URL / Model)'}
+            {showAdvanced
+              ? tr('收起自定义端点与模型', 'Hide custom endpoint & model', locale)
+              : tr('展开自定义端点与模型 (Base URL / Model)', 'Custom endpoint & model (Base URL / Model)', locale)}
           </button>
 
           {showAdvanced ? (
@@ -266,7 +273,7 @@ export default function PiQuickOnboardingCard() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-ink-2">模型名称</label>
+                <label className="mb-1 block text-xs font-medium text-ink-2">{tr('模型名称', 'Model Name', locale)}</label>
                 <input
                   type="text"
                   value={model}
@@ -290,12 +297,12 @@ export default function PiQuickOnboardingCard() {
             {saving ? (
               <>
                 <Loader2 size={15} className="animate-spin motion-reduce:animate-none" />
-                正在初始化引擎…
+                {tr('正在初始化引擎…', 'Initializing engine…', locale)}
               </>
             ) : (
               <>
                 <Sparkles size={15} />
-                立即启用并开始对话
+                {tr('立即启用并开始对话', 'Enable & Start Chatting', locale)}
               </>
             )}
           </button>

@@ -2,7 +2,7 @@
 
 > Document status: **current release procedure**. Release history belongs in [`CHANGELOG.md`](../../CHANGELOG.md); feature availability belongs in the [functional specifications](../specs/README.md).
 
-The current release target is `v0.50.0`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
+The current release target is `v0.50.1`. A `0.x` release must pass the version, changelog, trusted-tag, build, artifact, checksum, and explicit publication controls below, but it does not claim 1.0 maturity. npm publication is an independent package-delivery step and does not block a verified desktop/GitHub Release. Real product visuals and two external developer runs become mandatory only when the major version is 1 or higher.
 
 `v0.50.0` combines chat navigation, notification and attachment fixes with the local AI workspace. Desktop packages include the Pi SDK and Node. The release checks must exercise the packaged runtime outside a source checkout. Model service credentials remain a user setting.
 

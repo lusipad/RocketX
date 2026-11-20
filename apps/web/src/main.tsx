@@ -5,6 +5,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { initializeStartupAiRuntimeProvider } from './lib/aiRuntimeBootstrap';
 import { getServerBase, installContextMenuGuard, installLinkInterceptor } from './lib/client';
 import { applyRuntimeModeDocumentState, runtimeFeatures } from './lib/runtimeMode';
+import { applyUiLocaleDocumentState } from './lib/uiLocale';
 import { autostartAvailable } from './lib/autostart';
 import { hasExistingRocketXUserState, prepareDesktopDefaultsRecord, resetFirstRun } from './lib/firstRun';
 import { initTheme } from './lib/theme';
@@ -132,8 +133,9 @@ function createCoordinator(
 }
 
 async function bootstrapOnce(): Promise<void> {
-  // 运行模式和主题必须先落到 document，避免首屏闪烁并让后续启动门禁读到正确模式。
+  // 运行模式、语言与主题必须先落到 document，避免首屏闪烁并让后续启动门禁读到正确模式。
   applyRuntimeModeDocumentState();
+  applyUiLocaleDocumentState();
   initTheme();
   if (isTauri) {
     // 恢复无账号会创建本地 owner；设备是否首次安装必须提前判定。

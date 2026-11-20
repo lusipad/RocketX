@@ -20,6 +20,7 @@ export default defineConfig({
   reporter: process.env.CI ? 'github' : 'line',
   use: {
     baseURL,
+    locale: 'zh-CN',
     serviceWorkers: 'block',
     timezoneId: 'Asia/Shanghai',
     trace: 'retain-on-failure',

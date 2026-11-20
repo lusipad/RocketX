@@ -12,7 +12,7 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(page, /piRuntime && activeView === 'plugins' \? \(/);
   assert.match(page, /<ButlerRoutines \/>/);
   assert.match(page, /<ButlerPluginsPage \/>/);
-  assert.match(page, /<section aria-label="任务" className="butler-task-surface">/);
+  assert.match(page, /<section aria-label=\{tr\('任务', 'Tasks', locale\)\} className="butler-task-surface">/);
   assert.match(page, /const aiRuntimeProvider = useUI\(\(state\) => state\.aiRuntimeProvider\)/);
   assert.doesNotMatch(page, /butler-task-provider-mobile|管家执行引擎/);
   assert.doesNotMatch(page, /任务执行视图|role="tab"/);
@@ -20,7 +20,7 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(page, /<ButlerConversation embedded workBrief=\{workBrief\} \/>/);
   assert.doesNotMatch(page, /ButlerSessionSwitcher|ButlerIdentityPage|ButlerConnectionsPanel|Today/);
 
-  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label="AI 协作">/);
+  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label=\{tr\('AI 协作', 'AI Workspace', locale\)\}>/);
   assert.match(history, /setButlerView\('conversation'\)/);
   assert.match(history, /setButlerView\('routines'\)/);
   assert.match(history, /setButlerView\('plugins'\)/);
@@ -28,11 +28,11 @@ test('管家首页由 ButlerPage 承载 Codex 式三工作面，任务面由原�
   assert.match(history, /void resumeThread\(thread\.id\)/);
   assert.match(history, /选择工作区/);
   assert.match(history, /const workspaceRoots = useCodexWorkspace\(\(state\) => state\.workspaceRoots\)/);
-  assert.match(history, /aria-label="添加托管项目"/);
+  assert.match(history, /aria-label=\{tr\('添加托管项目', 'Add project folder', locale\)\}/);
   assert.match(history, /const butlerWorkspaceRoot = useCodexWorkspace/);
-  assert.match(history, /label: systemDefault \? '临时会话' : systemButler \? '管家会话'/);
-  assert.match(history, /aria-label="工作项目"/);
-  assert.match(history, />个人项目</);
+  assert.match(history, /label:\s*systemDefault\s*\?\s*tr\('临时会话',\s*'Scratchpad',\s*locale\)\s*:\s*systemButler\s*\?\s*tr\('管家会话',\s*'Butler Workspace',\s*locale\)/);
+  assert.match(history, /aria-label=\{tr\('工作项目', 'Projects', locale\)\}/);
+  assert.match(history, />\{tr\('个人项目', 'Projects', locale\)\}</);
   assert.match(history, /const butlerRoot = useCodexWorkspace\.getState\(\)\.butlerWorkspaceRoot/);
   assert.match(history, /await setWorkspaceRoot\(butlerRoot\)/);
   assert.match(history, /aria-expanded=\{expanded\}/);

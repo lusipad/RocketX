@@ -10,6 +10,7 @@ import ButlerPluginsPage from '../components/ButlerPluginsPage';
 import ButlerRoutines from '../components/ButlerRoutines';
 import WorkKanbanBoard from '../components/WorkKanbanBoard';
 import { getAiRuntimeStartupResolution } from '../lib/aiRuntimeBootstrap';
+import { localizeRuntimeText, tr, useUiLocale } from '../lib/uiLocale';
 import { useSharedAgent } from '../stores/sharedAgent';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
@@ -18,6 +19,7 @@ import { resolveButlerAccountScope } from '../stores/butlerMemory';
 import { subscribeButlerAccountSelection } from '../platform/butlerAccountReady';
 
 function ManagedSurface({ children }: { children: ReactNode }) {
+  const locale = useUiLocale();
   const activeView = useUI((state) => state.butlerView);
   const butlerSidebarCollapsed = useUI((state) => state.butlerSidebarCollapsed);
   const toggleButlerSidebarCollapsed = useUI((state) => state.toggleButlerSidebarCollapsed);
@@ -56,8 +58,8 @@ function ManagedSurface({ children }: { children: ReactNode }) {
           <button
             type="button"
             onClick={toggleButlerSidebarCollapsed}
-            title="展开会话列表 (Ctrl+B)"
-            aria-label="展开会话列表"
+            title={tr('展开会话列表 (Ctrl+B)', 'Expand chat list (Ctrl+B)', locale)}
+            aria-label={tr('展开会话列表', 'Expand chat list', locale)}
             className="hidden lg:flex absolute left-3 top-2.5 z-20 h-7 w-7 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
           >
             <PanelLeft size={16} />
@@ -65,18 +67,18 @@ function ManagedSurface({ children }: { children: ReactNode }) {
         ) : null}
         <div className={activeView === 'kanban' ? 'butler-board-switcher' : undefined}>
         {activeView === 'kanban' && <button type="button" onClick={() => useUI.getState().setButlerView('conversation')} className="butler-board-return">
-          <ArrowLeft size={15} aria-hidden="true" />返回管家
+          <ArrowLeft size={15} aria-hidden="true" />{tr('返回管家', 'Back to Butler', locale)}
         </button>}
         <button
           ref={triggerRef}
           type="button"
-          aria-label="打开任务列表"
+          aria-label={tr('打开任务列表', 'Open task list', locale)}
           aria-expanded={navigationOpen}
           onClick={() => setNavigationOpen(true)}
           className="butler-surface-mobile-nav"
         >
           <PanelLeft size={16} aria-hidden="true" />
-          任务列表
+          {tr('任务列表', 'Tasks', locale)}
         </button>
         </div>
         {children}
@@ -86,15 +88,15 @@ function ManagedSurface({ children }: { children: ReactNode }) {
           <button
             type="button"
             tabIndex={-1}
-            aria-label="关闭任务列表"
+            aria-label={tr('关闭任务列表', 'Close task list', locale)}
             className="butler-conversation-mobile-backdrop"
             onClick={closeNavigation}
           />
-          <div ref={drawerRef} role="dialog" aria-modal="true" aria-label="任务列表" className="butler-conversation-mobile-panel">
+          <div ref={drawerRef} role="dialog" aria-modal="true" aria-label={tr('任务列表', 'Tasks', locale)} className="butler-conversation-mobile-panel">
             <button
               ref={closeRef}
               type="button"
-              aria-label="关闭任务列表"
+              aria-label={tr('关闭任务列表', 'Close task list', locale)}
               className="butler-conversation-mobile-close"
               onClick={closeNavigation}
             >
@@ -111,20 +113,24 @@ function ManagedSurface({ children }: { children: ReactNode }) {
 }
 
 function AiDisabledSurface() {
+  const locale = useUiLocale();
   const startupResolution = getAiRuntimeStartupResolution();
   const unavailableSelection = startupResolution.source === 'explicit-unavailable'
     ? startupResolution.configured
     : undefined;
+  const reasonSuffix = localizeRuntimeText(startupResolution.reason, '', locale);
   return (
-    <section className="flex h-full items-center justify-center bg-surface" aria-label="普通对话">
+    <section className="flex h-full items-center justify-center bg-surface" aria-label={tr('普通对话', 'Chat', locale)}>
       <div className="max-w-sm rounded-xl border border-line bg-surface-3 p-6 text-center">
         <div className="text-sm font-medium text-ink">
-          {unavailableSelection ? '所选 AI 执行引擎当前不可用' : '当前未启用 AI 执行引擎'}
+          {unavailableSelection
+            ? tr('所选 AI 执行引擎当前不可用', 'Selected AI engine is currently offline', locale)
+            : tr('当前未启用 AI 执行引擎', 'AI engine is turned off', locale)}
         </div>
         <p className="mt-2 text-xs leading-5 text-ink-3">
           {unavailableSelection
-            ? `已保留 Pi 选择，本次没有切换到其他引擎。${startupResolution.reason ? ` ${startupResolution.reason}` : ''}`
-            : '普通对话暂不可发送；已有托管记录仍可在托管状态里查看和结束。'}</p><div className="mt-4 flex flex-wrap items-center justify-center gap-2"><button type="button" onClick={() => useUI.getState().setModule('settings')} className="h-8 rounded-md bg-primary px-3 text-xs font-medium text-white transition hover:bg-primary-hover">前往设置配置引擎</button><button type="button" onClick={() => useUI.getState().setButlerView('kanban')} className="h-8 rounded-md border border-line bg-surface-2 px-3 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink">打开统一看板</button></div><p className="hidden">
+            ? `${tr('已保留 Pi 选择，本次没有切换到其他引擎。', 'Pi selection is preserved without switching engines.', locale)}${reasonSuffix ? ` ${reasonSuffix}` : ''}`
+            : tr('普通对话暂不可发送；已有托管记录仍可在托管状态里查看和结束。', 'Direct chat is paused; existing hosted sessions remain viewable.', locale)}</p><div className="mt-4 flex flex-wrap items-center justify-center gap-2"><button type="button" onClick={() => useUI.getState().setModule('settings')} className="h-8 rounded-md bg-primary px-3 text-xs font-medium text-white transition hover:bg-primary-hover">{tr('前往设置配置引擎', 'Configure Engine in Settings', locale)}</button><button type="button" onClick={() => useUI.getState().setButlerView('kanban')} className="h-8 rounded-md border border-line bg-surface-2 px-3 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink">{tr('打开统一看板', 'Open Work Board', locale)}</button></div><p className="hidden">
         </p>
       </div>
     </section>
@@ -133,6 +139,7 @@ function AiDisabledSurface() {
 
 /** 固定展示单一原生会话面；provider 只决定具体执行引擎。 */
 export default function ButlerPage() {
+  const locale = useUiLocale();
   const activeView = useUI((state) => state.butlerView);
   const scope = useAuth(() => resolveButlerAccountScope());
   const [initialWork, setInitialWork] = useState<(ConversationWorkTarget & { scope: string }) | null>(null);
@@ -197,7 +204,7 @@ export default function ButlerPage() {
         ) : aiRuntimeProvider === 'none' ? (
           <ManagedSurface>{workBrief}<AiDisabledSurface /></ManagedSurface>
         ) : (
-          <section aria-label="任务" className="butler-task-surface">
+          <section aria-label={tr('任务', 'Tasks', locale)} className="butler-task-surface">
             <div className="butler-task-content">
               <ButlerConversation embedded workBrief={workBrief} />
             </div>

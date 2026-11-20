@@ -54,6 +54,13 @@ import {
 } from '../lib/autostart';
 import { exportDiagnostics } from '../lib/diagnostics';
 import { saveTextFile } from '../lib/exportText';
+import {
+  readUiLocalePreference,
+  saveUiLocalePreference,
+  tr,
+  useUiLocale,
+  type UiLocalePreference,
+} from '../lib/uiLocale';
 import { loadWorkbenchConfig, loadWorkbenchConfigIssue, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
@@ -139,6 +146,21 @@ const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
   { key: 'apps', label: '应用', icon: Blocks },
   { key: 'about', label: '关于', icon: Info },
 ];
+
+const SECTION_LABEL_EN: Record<Section, string> = {
+  account: 'Account & Status',
+  workspace: 'Team Config',
+  appearance: 'Appearance',
+  sidebar: 'Sidebar',
+  message: 'Messages',
+  notification: 'Notifications',
+  desktop: 'Desktop',
+  shortcuts: 'Shortcuts',
+  workbench: 'Workbench',
+  ai: 'AI',
+  apps: 'Apps',
+  about: 'About',
+};
 
 const inputCls =
   'h-9 w-full max-w-md rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary';
@@ -649,38 +671,98 @@ const THEMES: { key: ThemeMode; label: string; icon: typeof Sun; desc: string }[
   { key: 'system', label: '跟随系统', icon: Monitor, desc: '自动切换' },
 ];
 
-/** 外观：主题 */
+const THEMES_EN: Record<ThemeMode, { label: string; desc: string }> = {
+  light: { label: 'Light', desc: 'Bright & crisp' },
+  dark: { label: 'Dark', desc: 'Easy on eyes at night' },
+  system: { label: 'System', desc: 'Follow OS theme' },
+};
+
+/** 外观：主题与界面语言 */
 function AppearanceSection() {
+  const locale = useUiLocale();
   const [theme, setTheme] = useState<ThemeMode>(loadTheme);
+  const [localePreference, setLocalePreference] = useState<UiLocalePreference>(
+    () => readUiLocalePreference(),
+  );
 
   return (
-    <Row label="主题" hint="整体配色立即切换；「跟随系统」会随系统的浅色/深色模式变化">
-      <div className="flex gap-3">
-        {THEMES.map(({ key, label, icon: Icon, desc }) => {
-          const active = theme === key;
-          return (
-            <button
-              key={key}
-              onClick={() => {
-                setTheme(key);
-                saveTheme(key);
-              }}
-              className={`flex w-32 flex-col items-center gap-2 rounded-2xl border-2 p-4 shadow-raise transition ${
-                active
-                  ? 'border-primary bg-primary-light/80'
-                  : 'border-line bg-surface-3 hover:border-line-strong hover:bg-fill-hover'
-              }`}
-            >
-              <Icon size={22} className={active ? 'text-primary' : 'text-ink-2'} />
-              <span className={`text-sm font-medium ${active ? 'text-primary' : 'text-ink'}`}>
-                {label}
-              </span>
-              <span className="text-xs text-ink-3">{desc}</span>
-            </button>
-          );
-        })}
-      </div>
-    </Row>
+    <>
+      <Row
+        label={tr('主题', 'Theme', locale)}
+        hint={tr(
+          '整体配色立即切换；「跟随系统」会随系统的浅色/深色模式变化',
+          'Switches the overall color palette immediately; “System” follows your OS appearance.',
+          locale,
+        )}
+      >
+        <div className="flex gap-3">
+          {THEMES.map(({ key, label, icon: Icon, desc }) => {
+            const active = theme === key;
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  setTheme(key);
+                  saveTheme(key);
+                }}
+                className={`flex w-32 flex-col items-center gap-2 rounded-2xl border-2 p-4 shadow-raise transition ${
+                  active
+                    ? 'border-primary bg-primary-light/80'
+                    : 'border-line bg-surface-3 hover:border-line-strong hover:bg-fill-hover'
+                }`}
+              >
+                <Icon size={22} className={active ? 'text-primary' : 'text-ink-2'} />
+                <span className={`text-sm font-medium ${active ? 'text-primary' : 'text-ink'}`}>
+                  {tr(label, THEMES_EN[key].label, locale)}
+                </span>
+                <span className="text-xs text-ink-3">{tr(desc, THEMES_EN[key].desc, locale)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </Row>
+      <Row
+        label={tr('界面语言', 'Interface Language', locale)}
+        hint={tr(
+          '自动模式在中文系统使用简体中文，在非中文系统（如 English / C）使用英文',
+          'Auto uses Simplified Chinese on Chinese locales and English elsewhere (including C/POSIX).',
+          locale,
+        )}
+      >
+        <RadioGroup
+          value={localePreference}
+          onChange={(next) => {
+            if (next === localePreference) return;
+            const resolved = saveUiLocalePreference(next);
+            setLocalePreference(next);
+            toast.success(
+              resolved === 'en' ? 'Interface language switched to English' : '界面语言已切换为简体中文',
+            );
+          }}
+          options={[
+            {
+              key: 'auto',
+              label: tr('跟随系统', 'System Default', locale),
+              hint: tr(
+                '中文环境显示简体中文，其余环境显示 English',
+                'Chinese on zh locales, English otherwise',
+                locale,
+              ),
+            },
+            {
+              key: 'zh',
+              label: '简体中文',
+              hint: 'Simplified Chinese',
+            },
+            {
+              key: 'en',
+              label: 'English',
+              hint: 'English UI',
+            },
+          ]}
+        />
+      </Row>
+    </>
   );
 }
 
@@ -743,6 +825,7 @@ function ShortcutSection() {
 
 /** 操作系统级桌面偏好，不跟随 Rocket.Chat 账号同步。 */
 function DesktopSection() {
+  const locale = useUiLocale();
   const [mode, setMode] = useState<RuntimeMode>(getRuntimeMode);
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(autostartAvailable);
@@ -790,27 +873,27 @@ function DesktopSection() {
     try {
       const actual = await updateAutostartEnabled(next);
       setEnabled(actual);
-      if (actual !== next) throw new Error('系统没有保存该设置，请重试');
-      toast.success(next ? '已开启开机自启' : '已关闭开机自启');
+      if (actual !== next) throw new Error(tr('系统没有保存该设置，请重试', 'OS did not save the setting, retry', locale));
+      toast.success(next ? tr('已开启开机自启', 'Launch at login enabled', locale) : tr('已关闭开机自启', 'Launch at login disabled', locale));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      toast.error(err, '开机自启设置失败');
+      toast.error(err, tr('开机自启设置失败', 'Issue updating launch at login', locale));
     } finally {
       setLoading(false);
     }
   };
 
   const statusText = !isTauri
-    ? '仅桌面客户端支持，网页版不会修改系统设置'
+    ? tr('仅桌面客户端支持，网页版不会修改系统设置', 'Desktop client only; browser mode does not modify OS settings', locale)
     : !autostartAvailable
-      ? 'Debug 版依赖开发服务器，请使用正式安装版验证开机启动'
+      ? tr('Debug 版依赖开发服务器，请使用正式安装版验证开机启动', 'Dev builds depend on Vite dev server; test launch at login on release builds', locale)
     : loading
-      ? '正在读取系统设置…'
+      ? tr('正在读取系统设置…', 'Reading OS settings…', locale)
       : error
-        ? `读取或保存失败：${error}`
+        ? tr(`读取或保存失败：${error}`, `Setting issue: ${error}`, locale)
         : enabled
-          ? '已开启，登录系统后会静默启动到托盘'
-          : '已关闭';
+          ? tr('已开启，登录系统后会静默启动到托盘', 'Enabled; launches quietly to tray at login', locale)
+          : tr('已关闭', 'Disabled', locale);
 
   const changeUiScale = async (value: `${UiScale}`) => {
     const next = normalizeUiScale(Number(value));
@@ -818,9 +901,9 @@ function DesktopSection() {
     try {
       await applyDesktopUiScale(next);
       setUiScale(next);
-      toast.success(`界面缩放已设为 ${next}%`);
+      toast.success(tr(`界面缩放已设为 ${next}%`, `Interface scale set to ${next}%`, locale));
     } catch (err) {
-      toast.error(err, '界面缩放设置失败');
+      toast.error(err, tr('界面缩放设置失败', 'Issue updating interface scale', locale));
     } finally {
       setScaleChanging(false);
     }
@@ -844,9 +927,9 @@ function DesktopSection() {
         serverOrigin,
         adoConfigured: Boolean(ado?.adoBase),
       });
-      if (saved) toast.success('诊断日志已导出');
+      if (saved) toast.success(tr('诊断日志已导出', 'Diagnostic logs exported', locale));
     } catch (err) {
-      toast.error(err, '诊断日志导出失败');
+      toast.error(err, tr('诊断日志导出失败', 'Issue exporting diagnostic logs', locale));
     } finally {
       setExporting(false);
     }
@@ -855,8 +938,12 @@ function DesktopSection() {
   return (
     <>
       <Row
-        label="运行模式"
-        hint="精简模式不加载 AI、管家、托管、轮询与 OCR，并减少动画；切换后会立即刷新当前页面"
+        label={tr('运行模式', 'Runtime Mode', locale)}
+        hint={tr(
+          '精简模式不加载 AI、管家、托管、轮询与 OCR，并减少动画；切换后会立即刷新当前页面',
+          'Lite mode skips AI, Butler, hosted sessions, polling, and OCR with reduced motion; reloads right away.',
+          locale,
+        )}
       >
         <RadioGroup
           value={mode}
@@ -867,18 +954,22 @@ function DesktopSection() {
             window.location.reload();
           }}
           options={[
-            { key: 'standard', label: '标准模式', hint: '默认体验，保留全部能力' },
+            {
+              key: 'standard',
+              label: tr('标准模式', 'Standard', locale),
+              hint: tr('默认体验，保留全部能力', 'Default experience with all capabilities', locale),
+            },
             {
               key: 'performance',
-              label: '精简模式',
-              hint: '不加载 AI，仅保留常规 Rocket.Chat 功能',
+              label: tr('精简模式', 'Lite Mode', locale),
+              hint: tr('不加载 AI，仅保留常规 Rocket.Chat 功能', 'Skips AI; keeps core Rocket.Chat messaging', locale),
             },
           ]}
         />
       </Row>
       <Row
-        label="开机时启动 RocketX"
-        hint="由操作系统管理，设置保存在本机，不跟随账号同步"
+        label={tr('开机时启动 RocketX', 'Launch RocketX at Login', locale)}
+        hint={tr('由操作系统管理，设置保存在本机，不跟随账号同步', 'Managed by your OS locally, not synced across devices', locale)}
         inline
       >
         <div className="flex min-w-0 flex-col items-end gap-1.5">
@@ -897,10 +988,14 @@ function DesktopSection() {
       </Row>
       {isTauri && (
         <Row
-          label="界面缩放"
-          hint="默认 100%，保存在本机；也可使用 Ctrl/Cmd +、Ctrl/Cmd - 与 Ctrl/Cmd 0 快速调整"
+          label={tr('界面缩放', 'Interface Scale', locale)}
+          hint={tr(
+            '默认 100%，保存在本机；也可使用 Ctrl/Cmd +、Ctrl/Cmd - 与 Ctrl/Cmd 0 快速调整',
+            'Defaults to 100% locally; also adjustable with Ctrl/Cmd +, -, and 0.',
+            locale,
+          )}
         >
-          <div role="radiogroup" aria-label="界面缩放" className="flex flex-wrap gap-3">
+          <div role="radiogroup" aria-label={tr('界面缩放', 'Interface Scale', locale)} className="flex flex-wrap gap-3">
             {UI_SCALE_OPTIONS.map((scale) => {
               const selected = scale === uiScale;
               return (
@@ -925,18 +1020,28 @@ function DesktopSection() {
         </Row>
       )}
       <Row
-        label="局域网 P2P 直传"
-        hint="仅从聊天输入区的 P2P 图标手动发起；普通消息和普通附件始终走 Rocket.Chat"
+        label={tr('局域网 P2P 直传', 'LAN Direct Transfer', locale)}
+        hint={tr(
+          '仅从聊天输入区的 P2P 图标手动发起；普通消息和普通附件始终走 Rocket.Chat',
+          'Triggered manually from chat composer P2P icon; standard messages and attachments always go via Rocket.Chat.',
+          locale,
+        )}
       >
         <div className="max-w-md text-sm text-ink-2">
           {!isTauri ? (
-            '网页版不启用原生 LAN socket，文件继续走 Rocket.Chat。'
+            tr('网页版不启用原生 LAN socket，文件继续走 Rocket.Chat。', 'Browser mode skips native LAN sockets; files go via Rocket.Chat.', locale)
           ) : (
             <>
               <div>
-                在线候选 {lanStatus.peers} 台，其中可信 {lanStatus.trusted} 台。
+                {tr(
+                  `在线候选 ${lanStatus.peers} 台，其中可信 ${lanStatus.trusted} 台。`,
+                  `${lanStatus.peers} peer(s) online, ${lanStatus.trusted} trusted.`,
+                  locale,
+                )}
               </div>
-              <div className="mt-1 text-xs text-ink-3">P2P 仅在输入区手动触发。</div>
+              <div className="mt-1 text-xs text-ink-3">
+                {tr('P2P 仅在输入区手动触发。', 'P2P only runs when triggered in the composer.', locale)}
+              </div>
             </>
           )}
         </div>
@@ -2401,6 +2506,7 @@ function AboutSection() {
 }
 
 export default function SettingsPage({ initialSection = 'account' }: { initialSection?: Section }) {
+  const locale = useUiLocale();
   const [section, setSection] = useState<Section>(initialSection);
   const loaded = usePrefs((s) => s.loaded);
   const prefsError = usePrefs((s) => s.error);
@@ -2429,7 +2535,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
-        <div className="px-2.5 py-2 text-base font-semibold text-ink">设置</div>
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">{tr('设置', 'Settings', locale)}</div>
         <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
           {visibleSections.map(({ key, label, icon: Icon }) => (
             <button
@@ -2443,7 +2549,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               }`}
             >
               <Icon size={16} className={section === key ? 'text-primary' : ''} />
-              <span className="truncate">{label}</span>
+              <span className="truncate">{tr(label, SECTION_LABEL_EN[key], locale)}</span>
             </button>
           ))}
         </div>
@@ -2453,12 +2559,12 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
           <div className="flex items-center gap-2.5">
             {activeSectionMeta && <activeSectionMeta.icon size={18} className="text-primary" />}
             <h1 className="text-base font-semibold text-ink">
-              {activeSectionMeta?.label}
+              {activeSectionMeta ? tr(activeSectionMeta.label, SECTION_LABEL_EN[activeSectionMeta.key], locale) : ''}
             </h1>
           </div>
           {needsPrefs && (
             <span className="rounded-full border border-line-soft bg-surface-2 px-3 py-1 text-xs text-ink-3">
-              保存在 Rocket.Chat 服务器，跨设备同步
+              {tr('保存在 Rocket.Chat 服务器，跨设备同步', 'Synced across devices via Rocket.Chat', locale)}
             </span>
           )}
         </header>
@@ -2473,20 +2579,20 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
                   onClick={() => void loadPrefs()}
                   className="h-8 rounded-xl border border-line bg-surface-3 px-4 text-sm text-ink shadow-raise transition hover:bg-fill-hover"
                 >
-                  重试
+                  {tr('重试', 'Retry', locale)}
                 </button>
               </div>
             ) : needsPrefs && !loaded ? (
               <div className="flex items-center justify-center gap-2 rounded-2xl border border-line bg-surface-4 py-12 text-sm text-ink-3 shadow-card">
                 <Loader2 size={14} className="animate-spin" />
-                加载设置中…
+                {tr('加载设置中…', 'Loading settings…', locale)}
               </div>
             ) : section === 'ai' && aiSettingsVisible ? (
               <Suspense
                 fallback={
                   <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface-4 px-6 py-10 text-sm text-ink-3 shadow-card">
                     <Loader2 size={14} className="animate-spin" />
-                    加载 AI 设置中…
+                    {tr('加载 AI 设置中…', 'Loading AI settings…', locale)}
                   </div>
                 }
               >

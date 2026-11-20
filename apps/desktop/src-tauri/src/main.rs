@@ -56,6 +56,7 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::io::AsyncRead;
 
 const MAIN_TRAY_ID: &str = "main";
+static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
 const AUTOSTART_ARG: &str = "--autostart";
 const PACKAGE_PROFILE_FILE: &str = "rocketx-package-profile";
 const AUTOSTART_PREFERENCE_FILE: &str = "autostart-preference";
@@ -782,6 +783,85 @@ fn set_window_webview_memory_usage(window: &tauri::Window, usage: WebviewMemoryU
     }
 }
 
+fn locale_tag_prefers_chinese(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let first = trimmed.split(':').next().unwrap_or(trimmed).trim();
+    let lang = first.split(['.', '@', '_', '-']).next().unwrap_or(first);
+    lang.eq_ignore_ascii_case("zh")
+}
+
+fn system_prefers_chinese_from_env<F>(get_env: F) -> Option<bool>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    for key in ["LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"] {
+        if let Some(value) = get_env(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(locale_tag_prefers_chinese(trimmed));
+            }
+        }
+    }
+    None
+}
+
+fn system_prefers_chinese() -> bool {
+    if let Some(prefers_zh) = system_prefers_chinese_from_env(|key| std::env::var(key).ok()) {
+        return prefers_zh;
+    }
+    #[cfg(windows)]
+    {
+        // LANG_CHINESE primary language ID is 0x04.
+        let lang_id = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
+        (lang_id & 0x3ff) == 0x04
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
+    let (show_label, quit_label) = if system_prefers_chinese() {
+        ("显示 RocketX", "退出")
+    } else {
+        ("Show RocketX", "Quit")
+    };
+    let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .ok_or_else(|| tauri::Error::Io(std::io::Error::other("missing default window icon")))?
+        .clone();
+    TrayIconBuilder::with_id(MAIN_TRAY_ID)
+        .icon(icon)
+        .tooltip("RocketX")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            // 左键单击托盘图标 → 显示主窗口
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 /// 显示并聚焦主窗口（从托盘点回来）
 fn show_main(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -1051,13 +1131,45 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
 mod tray_icon_tests {
     use super::{
         autostart_registration_allowed, dim_tray_icon, is_autostart_launch,
-        launch_opens_main_window, native_media_confirm_body, native_media_response,
-        native_media_url, normalize_desktop_distribution_profile, normalize_http_origin,
-        refresh_autostart_registration_with, resolve_download_history_path, resolve_unc_path,
-        validate_external_url,
+        launch_opens_main_window, locale_tag_prefers_chinese, native_media_confirm_body,
+        native_media_response, native_media_url, normalize_desktop_distribution_profile,
+        normalize_http_origin, refresh_autostart_registration_with, resolve_download_history_path,
+        resolve_unc_path, system_prefers_chinese_from_env, validate_external_url,
     };
     use std::{cell::Cell, path::Path};
     use tauri::image::Image;
+
+    #[test]
+    fn locale_detection_prefers_chinese_only_for_zh_tags() {
+        assert!(locale_tag_prefers_chinese("zh"));
+        assert!(locale_tag_prefers_chinese("zh_CN.UTF-8"));
+        assert!(locale_tag_prefers_chinese("zh-TW"));
+        assert!(locale_tag_prefers_chinese("zh_HK:en_US"));
+        assert!(!locale_tag_prefers_chinese("C"));
+        assert!(!locale_tag_prefers_chinese("C.UTF-8"));
+        assert!(!locale_tag_prefers_chinese("POSIX"));
+        assert!(!locale_tag_prefers_chinese("en_US.UTF-8"));
+        assert!(!locale_tag_prefers_chinese("ja_JP.UTF-8"));
+        assert!(!locale_tag_prefers_chinese(""));
+
+        assert_eq!(
+            system_prefers_chinese_from_env(|key| match key {
+                "LC_ALL" => Some("C".to_string()),
+                "LANG" => Some("zh_CN.UTF-8".to_string()),
+                _ => None,
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            system_prefers_chinese_from_env(|key| match key {
+                "LC_ALL" => Some("   ".to_string()),
+                "LANG" => Some("zh_CN.UTF-8".to_string()),
+                _ => None,
+            }),
+            Some(true)
+        );
+        assert_eq!(system_prefers_chinese_from_env(|_| None), None);
+    }
 
     #[test]
     fn dim_frame_keeps_alpha_channel() {
@@ -1500,42 +1612,28 @@ fn main() {
             let db = butler_db::init_db(data_dir).map_err(std::io::Error::other)?;
             app.manage(db);
 
-            // 系统托盘：显示 / 退出（issue #3）
-            let show = MenuItem::with_id(app, "show", "显示 RocketX", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
-            TrayIconBuilder::with_id(MAIN_TRAY_ID)
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("RocketX")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => show_main(app),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    // 左键单击托盘图标 → 显示主窗口
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_main(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+            // 系统托盘：显示 / 退出（issue #3）；无托盘环境（如极简 X11 / Xvfb）降级为直接关闭退出，不阻断启动。
+            match setup_system_tray(app) {
+                Ok(()) => TRAY_AVAILABLE.store(true, Ordering::Relaxed),
+                Err(error) => {
+                    TRAY_AVAILABLE.store(false, Ordering::Relaxed);
+                    log::warn!(
+                        "failed to initialize system tray, continuing without tray: {error}"
+                    );
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| match event {
             // 点关闭按钮 = 隐藏到托盘，不退出进程（issue #3）。
-            // 真正退出走托盘菜单的「退出」。
+            // 真正退出走托盘菜单的「退出」；无托盘时允许直接退出。
             WindowEvent::CloseRequested { api, .. } => {
-                api.prevent_close();
-                let _ = window.hide();
-                #[cfg(windows)]
-                set_window_webview_memory_usage(window, WebviewMemoryUsage::Low);
+                if TRAY_AVAILABLE.load(Ordering::Relaxed) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    #[cfg(windows)]
+                    set_window_webview_memory_usage(window, WebviewMemoryUsage::Low);
+                }
             }
             WindowEvent::Resized(_) =>
             {

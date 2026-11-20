@@ -1,6 +1,6 @@
 [package]
 name = "rocketx"
-version = "0.50.0"
+version = "0.50.1"
 description = "RocketX 桌面客户端 - 飞书体验的 Rocket.Chat 客户端"
 authors = ["lusipad"]
 edition = "2021"
@@ -83,6 +83,7 @@ windows = { version = "0.61", features = [
   "Media_Ocr",
   "Storage_Streams",
   "Win32_Foundation",
+  "Win32_Globalization",
   "Win32_NetworkManagement_IpHelper",
   "Win32_NetworkManagement_Ndis",
   "Win32_NetworkManagement_WindowsFirewall",

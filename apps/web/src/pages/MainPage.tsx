@@ -6,6 +6,7 @@ import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import { shortcutKeyOf } from '../lib/shortcutKey';
+import { tr, useUiLocale } from '../lib/uiLocale';
 import {
   clearTrayAttention,
   formatTrayTooltip,
@@ -60,6 +61,7 @@ const COLLAPSED_GROUP_WIDTH = 48;
 const RESIZER_WIDTH = 6;
 
 export default function MainPage() {
+  const locale = useUiLocale();
   const connection = useChat((s) => s.connection);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
@@ -393,13 +395,13 @@ export default function MainPage() {
             <ConversationList width={conversationWidth} />
             <div
               role="separator"
-              aria-label="调整会话列表宽度"
+              aria-label={tr('调整会话列表宽度', 'Resize conversation list', locale)}
               aria-orientation="vertical"
               aria-valuemin={MIN_CONVERSATION_WIDTH}
               aria-valuemax={maxConversationWidth}
               aria-valuenow={Math.round(conversationWidth)}
               tabIndex={0}
-              title="拖动调整会话列表宽度，双击恢复默认"
+              title={tr('拖动调整会话列表宽度，双击恢复默认', 'Drag to resize conversation list, double-click to reset', locale)}
               onDoubleClick={() => {
                 clearConversationPanelNarrowing();
                 resetConversationWidth();
@@ -430,12 +432,14 @@ export default function MainPage() {
           </>)) : module === 'settings' ? <SettingsPage /> : ActiveModule ? (
           <ActiveModule />
         ) : (
-          <div className="flex flex-1 items-center justify-center bg-surface-3 text-sm text-ink-3">正在准备本地工作区…</div>
+          <div className="flex flex-1 items-center justify-center bg-surface-3 text-sm text-ink-3">
+            {tr('正在准备本地工作区…', 'Preparing local workspace…', locale)}
+          </div>
         )}
       </div>
       {(connection === 'reconnecting' || connection === 'connecting') && (
         <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-surface-4/95 px-4 py-1.5 text-xs text-ink shadow-pop backdrop-blur-xs">
-          连接中，消息推送可能延迟…
+          {tr('连接中，消息推送可能延迟…', 'Reconnecting…', locale)}
         </div>
       )}
       {switcher && (

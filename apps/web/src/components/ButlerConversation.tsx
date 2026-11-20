@@ -30,6 +30,7 @@ import { openDesktopDialog } from '../platform/desktopDialog';
 import { revealDesktopPath } from '../platform/desktopOpener';
 import { renderMarkdownDoc, StableStreamingMarkdown, type MarkdownLinkRenderer } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
+import { localizeDynamicText, tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import { resolvePortalWorkContext } from '../lib/workContext';
 import { useCodexStreamingView } from '../lib/useCodexStreamingText';
 import type { CodexHostInput } from '../agent/codexHostInput';
@@ -78,25 +79,26 @@ function approvalSummary(request: CodexPendingRequest): string {
 }
 
 function ApprovalCard({ request }: { request: CodexPendingRequest }) {
+  const locale = useUiLocale();
   const resolve = useCodexWorkspace((state) => state.resolveRequest);
   const decide = (action: 'accept' | 'accept-session' | 'decline'): void => {
     try {
       resolve(request.id, { action });
     } catch (reason) {
-      toast.error(reason, '无法提交审批');
+      toast.error(reason, tr('无法提交审批', 'Could not submit approval', locale));
     }
   };
   return (
-    <section className="codex-native-request" aria-label="Codex 请求审批">
+    <section className="codex-native-request" aria-label={tr('Codex 请求审批', 'Approval Request', locale)}>
       <header>
         <CircleAlert size={15} aria-hidden="true" />
-        <strong>Codex 请求执行操作</strong>
+        <strong>{tr('Codex 请求执行操作', 'Codex requests permission to run an action', locale)}</strong>
       </header>
       <pre>{approvalSummary(request)}</pre>
       <footer>
-        <button type="button" onClick={() => decide('decline')}>拒绝</button>
-        <button type="button" onClick={() => decide('accept-session')}>本次任务允许</button>
-        <button type="button" className="is-primary" onClick={() => decide('accept')}>允许一次</button>
+        <button type="button" onClick={() => decide('decline')}>{tr('拒绝', 'Decline', locale)}</button>
+        <button type="button" onClick={() => decide('accept-session')}>{tr('本次任务允许', 'Allow for session', locale)}</button>
+        <button type="button" className="is-primary" onClick={() => decide('accept')}>{tr('允许一次', 'Allow once', locale)}</button>
       </footer>
     </section>
   );
@@ -183,7 +185,7 @@ function ComposerMenu({
         <span>{label}</span>
         <ChevronDown size={12} aria-hidden="true" />
       </summary>
-      <div role="menu" aria-label={`${ariaLabel}选项`}>
+      <div role="menu" aria-label={tr(`${ariaLabel}选项`, `${ariaLabel} options`, useUiLocale())}>
         {choices.map((choice) => (
           <button
             key={choice.id}
@@ -257,6 +259,7 @@ function ConversationMessage({
   progressive?: boolean;
   streaming?: boolean;
 }) {
+  const locale = useUiLocale();
   const isAssistant = entry.role === 'assistant';
   const engineName = 'Pi';
   return (
@@ -270,7 +273,7 @@ function ConversationMessage({
             <span>{engineName}</span>
           </>
         ) : (
-          <span>你</span>
+          <span>{tr('你', 'You', locale)}</span>
         )}
       </div>
       <div className="butler-conversation-markdown">
@@ -288,39 +291,43 @@ function ConversationMessage({
   );
 }
 
-const PERMISSION_CHOICES: readonly ComposerChoice[] = [
-  {
-    id: 'ask',
-    label: '询问审批',
-    description: '修改工作区外文件或使用网络时总是询问',
-  },
-  {
-    id: 'auto',
-    label: '替我审批',
-    description: '只在检测到潜在危险时询问',
-  },
-  {
-    id: 'full',
-    label: '完全访问',
-    description: '可访问网络与电脑上的任意文件',
-  },
-];
+function getPermissionChoices(locale: UiLocale): readonly ComposerChoice[] {
+  return [
+    {
+      id: 'ask',
+      label: tr('询问审批', 'Ask Approval', locale),
+      description: tr('修改工作区外文件或使用网络时总是询问', 'Always ask before editing outside workspace or accessing network', locale),
+    },
+    {
+      id: 'auto',
+      label: tr('替我审批', 'Auto Approve', locale),
+      description: tr('只在检测到潜在危险时询问', 'Only ask for potentially risky actions', locale),
+    },
+    {
+      id: 'full',
+      label: tr('完全访问', 'Full Access', locale),
+      description: tr('可访问网络与电脑上的任意文件', 'Allow network and full filesystem access', locale),
+    },
+  ];
+}
 
-const FOLLOW_UP_CHOICES: readonly ComposerChoice[] = [
-  { id: 'steer', label: '立即调整', description: '将消息加入当前任务' },
-  { id: 'queue', label: '排队', description: '当前任务完成后发送' },
-];
+function getFollowUpChoices(locale: UiLocale): readonly ComposerChoice[] {
+  return [
+    { id: 'steer', label: tr('立即调整', 'Steer', locale), description: tr('将消息加入当前任务', 'Send into current task right away', locale) },
+    { id: 'queue', label: tr('排队', 'Queue', locale), description: tr('当前任务完成后发送', 'Send after current task finishes', locale) },
+  ];
+}
 
-function effortLabel(effort: string): string {
+function effortLabel(effort: string, locale: UiLocale = 'zh'): string {
   const map: Record<string, string> = {
-    low: '低',
-    medium: '中',
-    high: '高',
-    xhigh: '超高',
-    minimal: '极简',
-    ultra: '极致',
-    none: '关闭',
-    off: '关闭',
+    low: tr('低', 'Low', locale),
+    medium: tr('中', 'Medium', locale),
+    high: tr('高', 'High', locale),
+    xhigh: tr('超高', 'Extra High', locale),
+    minimal: tr('极简', 'Minimal', locale),
+    ultra: tr('极致', 'Ultra', locale),
+    none: tr('关闭', 'Off', locale),
+    off: tr('关闭', 'Off', locale),
   };
   return map[effort.toLowerCase()] ?? effort;
 }
@@ -365,15 +372,35 @@ const MODERN_MODEL_LABELS: Record<string, string> = {
   'deepseek-r1:8b': 'DeepSeek R1 8B',
 };
 
-function formatModelLabel(id: string, defaultName?: string): string {
-  if (MODERN_MODEL_LABELS[id]) return MODERN_MODEL_LABELS[id];
+function translateModelTag(text: string, locale: UiLocale): string {
+  if (locale === 'zh') return text;
+  return text
+    .replace(/\(深度推理\)/g, '(Deep Reasoning)')
+    .replace(/\(兼容推理\)/g, '(Compatible Reasoning)')
+    .replace(/\(高速推理\)/g, '(Fast Reasoning)')
+    .replace(/\(推理\)/g, '(Reasoning)')
+    .replace(/\(兼容\)/g, '(Compatible)')
+    .replace(/\(工程\/代码\)/g, '(Coding)')
+    .replace(/\(多智能体\)/g, '(Multi-Agent)')
+    .replace(/\(极速\)/g, '(Fast)')
+    .replace(/\(本地编码\)/g, '(Local Coding)')
+    .replace(/DeepSeek 官方/g, 'DeepSeek')
+    .replace(/Ollama 本地/g, 'Ollama Local')
+    .replace(/兼容网关/g, 'Compatible Gateway');
+}
+
+function formatModelLabel(id: string, defaultName?: string, locale: UiLocale = 'zh'): string {
+  if (MODERN_MODEL_LABELS[id]) return translateModelTag(MODERN_MODEL_LABELS[id], locale);
   const stripped = id.replace(/^(deepseek|anthropic|openai|google|ollama)\//i, '');
-  if (MODERN_MODEL_LABELS[stripped]) return MODERN_MODEL_LABELS[stripped];
-  if (defaultName && defaultName !== id) return defaultName;
+  if (MODERN_MODEL_LABELS[stripped]) return translateModelTag(MODERN_MODEL_LABELS[stripped], locale);
+  if (defaultName && defaultName !== id) return translateModelTag(defaultName, locale);
   return stripped;
 }
 
 export default function ButlerConversation({ embedded = false, workBrief }: { embedded?: boolean; workBrief?: React.ReactNode }) {
+  const locale = useUiLocale();
+  const permissionChoices = useMemo(() => getPermissionChoices(locale), [locale]);
+  const followUpChoices = useMemo(() => getFollowUpChoices(locale), [locale]);
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
   const scope = useCodexWorkspace((state) => state.scope);
   const aiRuntimeProvider = useUI((state) => state.aiRuntimeProvider);
@@ -469,38 +496,44 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
     ? { id: 'active-assistant', role: 'assistant', text: streamingText, pending: true }
     : completedMessage;
   const activityStatus = running
-    ? '正在工作'
+    ? tr('正在工作', 'Working', locale)
     : status === 'interrupted' || error === 'Pi 本轮已中断' || error === 'Codex 本轮已中断'
-      ? '已中断'
+      ? tr('已中断', 'Paused', locale)
       : events.some((event) => event.status === 'failed')
-        ? '未完成'
-        : '已完成';
+        ? tr('未完成', 'Incomplete', locale)
+        : tr('已完成', 'Completed', locale);
   const desktopRuntime = isTauriRuntime();
   let hasSavedPiConfig = false;
   try { hasSavedPiConfig = localStorage.getItem(PI_CONFIGURED_STORAGE_KEY) === '1'; } catch { /* Storage may be unavailable. */ }
   const canCompose = desktopRuntime
     && Boolean(workspaceRoot)
     && !['idle', 'connecting', 'interrupted', 'external', 'unavailable'].includes(status);
-  const refreshLabel = status === 'external' ? '在 RocketX 继续' : '同步会话状态';
+  const refreshLabel = status === 'external'
+    ? tr('在 RocketX 继续', 'Continue in RocketX', locale)
+    : tr('同步会话状态', 'Sync session', locale);
   const composerPlaceholder = status === 'external'
-    ? '点击上方“在 RocketX 继续”'
+    ? tr('点击上方“在 RocketX 继续”', 'Click "Continue in RocketX" above', locale)
     : running
-      ? (followUpMode === 'steer' ? '输入指令，立即调整当前任务' : '输入后续消息，将在当前任务后执行')
-      : activeThreadId ? '补充要求，或说说下一步想做什么…' : '告诉我你想完成什么，也可以粘贴资料或添加图片…';
-  const title = activeThread?.name?.trim() || activeThread?.preview.trim() || '新事情';
+      ? (followUpMode === 'steer'
+        ? tr('输入指令，立即调整当前任务', 'Send instructions to steer the active task', locale)
+        : tr('输入后续消息，将在当前任务后执行', 'Queue a follow-up message after the active task', locale))
+      : activeThreadId
+        ? tr('补充要求，或说说下一步想做什么…', 'Add follow-up details or describe the next step…', locale)
+        : tr('告诉我你想完成什么，也可以粘贴资料或添加图片…', 'Describe what you want to get done, paste notes, or attach images…', locale);
+  const title = activeThread?.name?.trim() || activeThread?.preview.trim() || tr('新事情', 'New Task', locale);
   const modelChoices = useMemo<ComposerChoice[]>(() => models.map((model) => ({
     id: model.model,
-    label: formatModelLabel(model.model, model.displayName),
-    description: model.description,
-  })), [models]);
+    label: formatModelLabel(model.model, model.displayName, locale),
+    description: translateModelTag(model.description ?? '', locale),
+  })), [locale, models]);
   const effortChoices = useMemo<ComposerChoice[]>(() => (
     activeModel?.supportedReasoningEfforts.map((effort) => ({
       id: effort.reasoningEffort,
-      label: effortLabel(effort.reasoningEffort),
+      label: effortLabel(effort.reasoningEffort, locale),
       description: effort.description,
     })) ?? []
-  ), [activeModel]);
-  const permissionLabel = PERMISSION_CHOICES.find((choice) => choice.id === permissionPreset)?.label ?? '权限';
+  ), [activeModel, locale]);
+  const permissionLabel = permissionChoices.find((choice) => choice.id === permissionPreset)?.label ?? tr('权限', 'Permissions', locale);
 
   const renderArtifactLink = useCallback<MarkdownLinkRenderer>((label, href) => {
     const artifact = codexArtifactFromLink(label, href, workspaceRoot);
@@ -691,19 +724,31 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
   };
 
   const suggestions = useMemo(() => [
-    { title: '梳理一件事', description: '从目标到下一步', prompt: '帮我梳理这件事的目标、已有信息和下一步：' },
-    { title: '检查项目改动', description: '看清改了什么、哪里有问题', prompt: '检查当前项目的改动，说明已经完成什么、还有哪些问题需要处理。' },
-    { title: '整理一份资料', description: '提炼重点，形成可用内容', prompt: '帮我整理下面的资料，提炼重点和需要跟进的事项：' },
-  ], []);
+    {
+      title: tr('梳理一件事', 'Plan a task', locale),
+      description: tr('从目标到下一步', 'From goal to next steps', locale),
+      prompt: tr('帮我梳理这件事的目标、已有信息和下一步：', 'Help me clarify the goal, current context, and next steps for: ', locale),
+    },
+    {
+      title: tr('检查项目改动', 'Review project changes', locale),
+      description: tr('看清改了什么、哪里有问题', 'See what changed and what needs attention', locale),
+      prompt: tr('检查当前项目的改动，说明已经完成什么、还有哪些问题需要处理。', 'Review the current project changes, summarize what is done, and note any remaining issues.', locale),
+    },
+    {
+      title: tr('整理一份资料', 'Summarize notes', locale),
+      description: tr('提炼重点，形成可用内容', 'Extract key points and action items', locale),
+      prompt: tr('帮我整理下面的资料，提炼重点和需要跟进的事项：', 'Summarize the following notes and highlight key takeaways and follow-ups: ', locale),
+    },
+  ], [locale]);
 
   return (
     <div className={`butler-conversation-layout codex-native-workspace${butlerSidebarCollapsed ? ' sidebar-collapsed' : ''}${portalOpen ? ' has-portal' : ''} ${embedded ? 'bg-transparent' : 'bg-surface'}`}>
       {!butlerSidebarCollapsed ? <ButlerConversationHistory /> : null}
       {historyOpen ? (
         <div className="butler-conversation-mobile-drawer">
-          <button type="button" tabIndex={-1} aria-label="关闭任务列表" className="butler-conversation-mobile-backdrop" onClick={closeHistory} />
-          <div ref={historyPanelRef} role="dialog" aria-modal="true" aria-label="任务列表" className="butler-conversation-mobile-panel">
-            <button ref={historyCloseRef} type="button" aria-label="关闭任务列表" className="butler-conversation-mobile-close" onClick={closeHistory}>
+          <button type="button" tabIndex={-1} aria-label={tr('关闭任务列表', 'Close task list', locale)} className="butler-conversation-mobile-backdrop" onClick={closeHistory} />
+          <div ref={historyPanelRef} role="dialog" aria-modal="true" aria-label={tr('任务列表', 'Tasks', locale)} className="butler-conversation-mobile-panel">
+            <button ref={historyCloseRef} type="button" aria-label={tr('关闭任务列表', 'Close task list', locale)} className="butler-conversation-mobile-close" onClick={closeHistory}>
               <X size={17} aria-hidden="true" />
             </button>
             <div className="h-full">
@@ -713,15 +758,15 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
         </div>
       ) : null}
 
-      <section className="butler-conversation-pane" aria-label="Codex 任务">
+      <section className="butler-conversation-pane" aria-label={tr('Codex 任务', 'Butler Tasks', locale)}>
         <header className="butler-conversation-header work-first-conversation-header rcx-glass-header bg-surface-3">
           <div className="flex items-center gap-2 min-w-0">
             {butlerSidebarCollapsed ? (
               <button
                 type="button"
                 onClick={toggleButlerSidebarCollapsed}
-                title="展开会话列表 (Ctrl+B)"
-                aria-label="展开会话列表"
+                title={tr('展开会话列表 (Ctrl+B)', 'Expand chat list (Ctrl+B)', locale)}
+                aria-label={tr('展开会话列表', 'Expand chat list', locale)}
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
               >
                 <PanelLeft size={16} />
@@ -736,32 +781,32 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                   setPortalOpen(true);
                 }}
                 className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary-light px-2 py-0.5 text-2xs font-medium text-primary hover:bg-primary/20 transition-colors shrink-0"
-                title="查看这件工作的详情与成果"
+                title={tr('查看这件工作的详情与成果', 'View work details and artifacts', locale)}
               >
-                <span>关联工作</span>
+                <span>{tr('关联工作', 'Linked Work', locale)}</span>
               </button>
             ) : null}
           </div>
           <div className="butler-conversation-header-actions">
-            <button type="button" className="codex-native-open-app" onClick={() => setButlerView('kanban')}>工作看板 <ArrowUpRight size={14} aria-hidden="true" /></button>
+            <button type="button" className="codex-native-open-app" onClick={() => setButlerView('kanban')}>{tr('工作看板', 'Work Board', locale)} <ArrowUpRight size={14} aria-hidden="true" /></button>
             <button
               ref={historyButtonRef}
               type="button"
-              aria-label="打开任务列表"
+              aria-label={tr('打开任务列表', 'Open task list', locale)}
               aria-expanded={historyOpen}
               onClick={() => setHistoryOpen(true)}
               className="butler-conversation-mobile-switcher"
             >
               <PanelLeft size={15} aria-hidden="true" />
-              任务
+              {tr('任务', 'Tasks', locale)}
             </button>
             {activeThreadId && status === 'external' ? (
               <button
                 type="button"
                 aria-label={refreshLabel}
                 title={running
-                  ? '任务运行中，完成后再刷新'
-                  : '保留 Codex App 原任务，并从最新内容创建可编辑分支'}
+                  ? tr('任务运行中，完成后再刷新', 'Task is running; sync after completion', locale)
+                  : tr('保留 Codex App 原任务，并从最新内容创建可编辑分支', 'Keep Codex App session and branch from latest updates', locale)}
                 disabled={!desktopRuntime || running || refreshingFromCodex}
                 onClick={() => void refreshCodexThread()}
                 className="codex-native-refresh"
@@ -769,13 +814,13 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                 {refreshingFromCodex
                   ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                   : <RefreshCw size={14} aria-hidden="true" />}
-                {refreshingFromCodex ? '刷新中' : refreshLabel}
+                {refreshingFromCodex ? tr('刷新中', 'Syncing', locale) : refreshLabel}
               </button>
             ) : null}
             <details className="work-first-conversation-actions">
-              <summary aria-label="更多对话操作"><MoreHorizontal size={16} aria-hidden="true" /></summary>
+              <summary aria-label={tr('更多对话操作', 'More chat actions', locale)}><MoreHorizontal size={16} aria-hidden="true" /></summary>
               <div>
-              {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot === defaultWorkspaceRoot || workspaceRoot === butlerWorkspaceRoot ? '管家会话' : workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1)}</p> : null}
+              {workspaceRoot ? <p title={workspaceRoot}>{workspaceRoot === defaultWorkspaceRoot || workspaceRoot === butlerWorkspaceRoot ? tr('管家会话', 'Butler Workspace', locale) : workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1)}</p> : null}
               {linkedBranch ? <p title={linkedBranch}><GitBranch size={12} aria-hidden="true" />{linkedBranch}</p> : null}
               {activeThreadId && status !== 'external' ? (
                 <button
@@ -794,19 +839,19 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
               className="codex-native-open-app"
             >
               <ArrowUpRight size={14} aria-hidden="true" />
-              {isPi ? '打开目录' : (status === 'external' ? '已交给 Codex' : '在 Codex 中打开')}
+              {isPi ? tr('打开目录', 'Open Folder', locale) : (status === 'external' ? tr('已交给 Codex', 'Handed off to Codex', locale) : tr('在 Codex 中打开', 'Open in Codex', locale))}
             </button>
               </div>
             </details>
             <button
               type="button"
-              aria-label={portalOpen ? '收起任务工作台' : '打开任务工作台'}
+              aria-label={portalOpen ? tr('收起任务工作台', 'Close task workspace', locale) : tr('打开任务工作台', 'Open task workspace', locale)}
               aria-pressed={portalOpen}
               onClick={() => setPortalOpen((current) => !current)}
               className="codex-native-open-app"
             >
               <PanelRight size={14} aria-hidden="true" />
-              详情与成果
+              {tr('详情与成果', 'Details & Results', locale)}
             </button>
           </div>
         </header>
@@ -816,42 +861,44 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
           {!desktopRuntime ? (
             <div className="codex-native-landing">
               <span><Bot size={24} aria-hidden="true" /></span>
-              <h1>在桌面端向管家交代事情</h1>
-              <p>这里可以查看消息和已有工作。要处理本机文件、运行任务，请打开 RocketX 桌面端。</p>
+              <h1>{tr('在桌面端向管家交代事情', 'Run Butler tasks on Desktop', locale)}</h1>
+              <p>{tr('这里可以查看消息和已有工作。要处理本机文件、运行任务，请打开 RocketX 桌面端。', 'View messages and existing work here. Open RocketX Desktop to access local files and run tasks.', locale)}</p>
             </div>
           ) : !workspaceRoot ? (
             <div className="codex-native-landing">
               <span><FolderOpen size={24} aria-hidden="true" /></span>
-              <h1>先选择要处理的项目</h1>
-              <p>选择文件夹后，管家才能查看和处理其中的文件。</p>
-              <button type="button" onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, '无法打开工作区'))}>
+              <h1>{tr('先选择要处理的项目', 'Choose a project folder', locale)}</h1>
+              <p>{tr('选择文件夹后，管家才能查看和处理其中的文件。', 'Select a folder so Butler can inspect and work on your files.', locale)}</p>
+              <button type="button" onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, tr('无法打开工作区', 'Could not open workspace', locale)))}>
                 <FolderOpen size={15} aria-hidden="true" />
-                选择文件夹
+                {tr('选择文件夹', 'Choose Folder', locale)}
               </button>
             </div>
           ) : status === 'idle' && messages.length === 0 ? (
             <div className="codex-native-landing">
-              <h1>尚未连接 {engineName}</h1>
-              <p>连接后可读取会话与执行状态。</p>
-              <button type="button" onClick={() => void connect().catch((reason) => toast.error(reason, '连接执行器失败'))}>连接执行器</button>
+              <h1>{tr(`尚未连接 ${engineName}`, `${engineName} is ready to connect`, locale)}</h1>
+              <p>{tr('连接后可读取会话与执行状态。', 'Connect to load your conversations and runtime status.', locale)}</p>
+              <button type="button" onClick={() => void connect().catch((reason) => toast.error(reason, tr('连接执行器失败', 'Engine connection did not complete', locale)))}>{tr('连接执行器', 'Connect Engine', locale)}</button>
             </div>
           ) : status === 'connecting' && messages.length === 0 ? (
             <div className="codex-native-landing">
               <Loader2 size={24} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              <h1>正在连接 {engineName}</h1>
-              <p>正在启动本地引擎并加载模型。</p>
-              <button type="button" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, '重新连接失败'))}>重新连接</button>
+              <h1>{tr(`正在连接 ${engineName}`, `Connecting to ${engineName}`, locale)}</h1>
+              <p>{tr('正在启动本地引擎并加载模型。', 'Starting local engine and loading models.', locale)}</p>
+              <button type="button" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, tr('重新连接失败', 'Reconnect did not complete', locale)))}>{tr('重新连接', 'Reconnect', locale)}</button>
             </div>
           ) : status === 'unavailable' && messages.length === 0 ? (
             <div className="flex h-full items-start justify-center overflow-y-auto p-6">
               <div className="w-full max-w-xl space-y-4">
                 <section className="space-y-3 rounded-xl border border-line bg-surface-4 p-4">
-                  <h1 className="font-semibold text-ink">{engineName} 连接未成功</h1>
-                  <p role="alert" className="whitespace-pre-wrap break-words text-sm text-ink-2">{error || '本地引擎未能完成连接，请重试。'}</p>
-                  <button type="button" className="rounded-lg bg-primary px-3 py-2 text-sm text-white" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, '重新连接失败'))}>使用已保存配置重试</button>
+                  <h1 className="font-semibold text-ink">{tr(`${engineName} 连接未成功`, `${engineName} is not connected yet`, locale)}</h1>
+                  <p role="alert" className="whitespace-pre-wrap break-words text-sm text-ink-2">
+                    {localizeDynamicText(error, 'Local engine connection did not complete. Please retry.', locale) || tr('本地引擎未能完成连接，请重试。', 'Local engine connection did not complete. Please retry.', locale)}
+                  </p>
+                  <button type="button" className="rounded-lg bg-primary px-3 py-2 text-sm text-white" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, tr('重新连接失败', 'Reconnect did not complete', locale)))}>{tr('使用已保存配置重试', 'Retry with saved settings', locale)}</button>
                 </section>
                 {hasSavedPiConfig ? <details className="rounded-xl border border-line p-3">
-                  <summary className="cursor-pointer text-sm text-ink-2">修改模型配置</summary>
+                  <summary className="cursor-pointer text-sm text-ink-2">{tr('修改模型配置', 'Edit model settings', locale)}</summary>
                   <div className="mt-3"><PiQuickOnboardingCard /></div>
                 </details> : <PiQuickOnboardingCard />}
               </div>
@@ -859,7 +906,7 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
           ) : messages.length === 0 && !running && status !== 'external' && status !== 'interrupted' ? (
             <div className="codex-native-landing work-first-welcome">
               <span><Bot size={22} aria-hidden="true" /></span>
-              <h1>有什么事交给我？</h1>
+              <h1>{tr('有什么事交给我？', 'How can I help today?', locale)}</h1>
               <div className="codex-native-suggestions work-first-suggestions">
                 {suggestions.map((suggestion) => (
                   <button key={suggestion.title} type="button" disabled={!canCompose || !draft.loaded || Boolean(draft.pending)} onClick={() => {
@@ -876,15 +923,17 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
             <div className="codex-native-transcript-inner space-y-4 py-6">
               {status === 'connecting' || status === 'idle' || status === 'unavailable' ? (
                 <div role={status === 'unavailable' ? 'alert' : 'status'} className="rounded-lg border border-line bg-surface-2 p-3 text-xs text-ink-2">
-                  {status === 'connecting' ? '正在连接执行器，当前保留已读取的历史记录。' : '执行器尚未连接，当前显示已读取的记录，最新状态未确认。'}
-                  {status !== 'connecting' ? <button type="button" className="ml-2 text-primary hover:underline" onClick={() => void connect().catch((reason) => toast.error(reason, '重新连接失败'))}>重新连接执行器</button> : null}
+                  {status === 'connecting'
+                    ? tr('正在连接执行器，当前保留已读取的历史记录。', 'Connecting to local engine. Loaded history remains visible.', locale)
+                    : tr('执行器尚未连接，当前显示已读取的记录，最新状态未确认。', 'Engine offline. Showing loaded history; live status pending.', locale)}
+                  {status !== 'connecting' ? <button type="button" className="ml-2 text-primary hover:underline" onClick={() => void connect().catch((reason) => toast.error(reason, tr('重新连接失败', 'Reconnect did not complete', locale)))}>{tr('重新连接执行器', 'Reconnect Engine', locale)}</button> : null}
                 </div>
               ) : null}
               {status === 'interrupted' ? (
-                <section className="codex-native-interruption" role="alert" aria-label="Pi 本轮已中断">
+                <section className="codex-native-interruption" role="alert" aria-label={tr('Pi 本轮已中断', 'Pi turn paused', locale)}>
                   <div>
-                    <h2>Pi 本轮已中断</h2>
-                    <p>{error || '本地 Pi Runtime 已退出。已保留收到的部分结果。'}</p>
+                    <h2>{tr('Pi 本轮已中断', 'Pi turn paused', locale)}</h2>
+                    <p>{localizeDynamicText(error, 'Local Pi runtime stopped. Partial output is preserved.', locale) || tr('本地 Pi Runtime 已退出。已保留收到的部分结果。', 'Local Pi runtime stopped. Partial output is preserved.', locale)}</p>
                   </div>
                   <button
                     type="button"
@@ -894,15 +943,15 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                     {refreshingFromCodex
                       ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                       : <RefreshCw size={14} aria-hidden="true" />}
-                    {refreshingFromCodex ? '刷新中' : refreshLabel}
+                    {refreshingFromCodex ? tr('刷新中', 'Syncing', locale) : refreshLabel}
                   </button>
                 </section>
               ) : null}
               {status === 'external' ? (
-                <section className="codex-native-interruption is-external" aria-label="会话已交给 Codex App">
+                <section className="codex-native-interruption is-external" aria-label={tr('会话已交给 Codex App', 'Session handed off to Codex App', locale)}>
                   <div>
-                    <h2>会话已在 Codex App 中打开</h2>
-                    <p>可从最新内容创建 RocketX 继续分支，不需要退出 Codex App；之后两边独立继续。</p>
+                    <h2>{tr('会话已在 Codex App 中打开', 'Session open in Codex App', locale)}</h2>
+                    <p>{tr('可从最新内容创建 RocketX 继续分支，不需要退出 Codex App；之后两边独立继续。', 'Create a RocketX branch from the latest updates without leaving Codex App; both continue independently.', locale)}</p>
                   </div>
                   <button
                     type="button"
@@ -912,18 +961,18 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                     {refreshingFromCodex
                       ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                       : <RefreshCw size={14} aria-hidden="true" />}
-                    {refreshingFromCodex ? '刷新中' : refreshLabel}
+                    {refreshingFromCodex ? tr('刷新中', 'Syncing', locale) : refreshLabel}
                   </button>
                 </section>
               ) : null}
               {visibleMessages.map((entry) => <ConversationMessage key={entry.id} entry={entry} renderLink={renderArtifactLink} />)}
 
               {events.length > 0 ? (
-                <details className="codex-native-activities" aria-label="任务过程">
+                <details className="codex-native-activities" aria-label={tr('任务过程', 'Task Activity', locale)}>
                   <summary>
                     <span>{activityStatus}</span>
                     <small className="codex-native-activity-latest">{latestActivity?.title}</small>
-                    <small className="codex-native-activity-count">{events.length} 项活动</small>
+                    <small className="codex-native-activity-count">{tr(`${events.length} 项活动`, `${events.length} activities`, locale)}</small>
                     <ChevronDown size={13} aria-hidden="true" />
                   </summary>
                   <div>
@@ -948,14 +997,14 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
 
               {queuedMessages.length > 0 ? (
                 <div className="codex-native-queue">
-                  <strong>已排队 {queuedMessages.length} 条</strong>
+                  <strong>{tr(`已排队 ${queuedMessages.length} 条`, `${queuedMessages.length} queued`, locale)}</strong>
                   {queuedMessages.map((entry) => (
-                    <span key={entry.id}>{entry.text || `${entry.images.length} 张图片`}</span>
+                    <span key={entry.id}>{entry.text || tr(`${entry.images.length} 张图片`, `${entry.images.length} image(s)`, locale)}</span>
                   ))}
                 </div>
               ) : null}
               {error && status !== 'interrupted'
-                ? <div className="codex-native-inline-error" role="alert">{error}</div>
+                ? <div className="codex-native-inline-error" role="alert">{localizeDynamicText(error, 'Action did not complete. Please check settings or retry.', locale)}</div>
                 : null}
             </div>
           )}
@@ -963,13 +1012,13 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
 
         <footer className="butler-conversation-footer codex-native-footer">
           <div className="codex-native-composer work-first-composer">
-            <div className="work-first-composer-target" id="butler-composer-target"><Bot size={13} aria-hidden="true" /><span>发给管家</span><span aria-hidden="true">·</span><strong>{activeThreadId ? linkedCard?.title || title : '新事情'}</strong></div>
+            <div className="work-first-composer-target" id="butler-composer-target"><Bot size={13} aria-hidden="true" /><span>{tr('发给管家', 'To Butler', locale)}</span><span aria-hidden="true">·</span><strong>{activeThreadId ? linkedCard?.title || title : tr('新事情', 'New Task', locale)}</strong></div>
             <AgentComposerFeedback draft={draft} onRetry={retryRequest} />
-            {readingImages ? <p role="status" className="text-xs text-ink-3">正在读取图片，读取完成后可发送。</p> : null}
+            {readingImages ? <p role="status" className="text-xs text-ink-3">{tr('正在读取图片，读取完成后可发送。', 'Reading images… ready to send shortly.', locale)}</p> : null}
             {status === 'external' ? (
               <div id="codex-external-composer-notice" className="codex-native-composer-notice" role="status">
                 <CircleAlert size={14} aria-hidden="true" />
-                <span>Codex App 保留原任务；点击上方“在 RocketX 继续”会创建可编辑分支。</span>
+                <span>{tr('Codex App 保留原任务；点击上方“在 RocketX 继续”会创建可编辑分支。', 'Codex App holds the original thread; click "Continue in RocketX" above to branch.', locale)}</span>
               </div>
             ) : null}
             <fieldset disabled={readingImages} className="m-0 border-0 p-0"><CodexImagePreviews images={images} onChange={setImages} /></fieldset>
@@ -999,7 +1048,7 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                 void submit();
               }}
               disabled={!canCompose}
-              aria-label="给管家的要求"
+              aria-label={tr('给管家的要求', 'Message to Butler', locale)}
               aria-describedby={`butler-composer-target${status === 'external' ? ' codex-external-composer-notice' : ''}`}
               placeholder={composerPlaceholder}
               rows={1}
@@ -1008,25 +1057,25 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
               <div>
                 <CodexImagePicker key={composerKey} images={images} onChange={setImages} disabled={!canCompose || readingImages} onReadingChange={setReadingImages} />
                 <details className="work-first-composer-settings">
-                  <summary><Settings size={14} aria-hidden="true" />对话设置</summary>
+                  <summary><Settings size={14} aria-hidden="true" />{tr('对话设置', 'Chat settings', locale)}</summary>
                   <div className="work-first-composer-settings-content">
                 <ComposerMenu
-                  ariaLabel="模型"
-                  label={formatModelLabel(selectedModel, activeModel?.displayName ?? (selectedModel || '模型'))}
+                  ariaLabel={tr('模型', 'Model', locale)}
+                  label={formatModelLabel(selectedModel, activeModel?.displayName ?? (selectedModel || tr('模型', 'Model', locale)), locale)}
                   value={selectedModel}
                   choices={modelChoices}
                   disabled={!canCompose}
                   onChange={(model) => void setModel(model).catch((reason) => toast.error(reason))}
                   footerAction={{
-                    label: '配置模型与 API Key…',
+                    label: tr('配置模型与 API Key…', 'Configure models & API Key…', locale),
                     icon: <Settings size={13} aria-hidden="true" />,
                     onClick: () => setModule('settings'),
                   }}
                 />
                 {activeModel && activeModel.supportedReasoningEfforts && activeModel.supportedReasoningEfforts.length > 0 ? (
                   <ComposerMenu
-                    ariaLabel="推理强度"
-                    label={selectedEffort ? `思考: ${effortLabel(selectedEffort)}` : '思考'}
+                    ariaLabel={tr('推理强度', 'Reasoning effort', locale)}
+                    label={selectedEffort ? `${tr('思考', 'Reasoning')}: ${effortLabel(selectedEffort, locale)}` : tr('思考', 'Reasoning', locale)}
                     value={selectedEffort ?? ''}
                     choices={effortChoices}
                     disabled={!canCompose}
@@ -1034,17 +1083,17 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                   />
                 ) : null}
                 <ComposerMenu
-                  ariaLabel="权限"
+                  ariaLabel={tr('权限', 'Permissions', locale)}
                   label={permissionLabel}
                   value={permissionPreset}
-                  choices={PERMISSION_CHOICES}
+                  choices={permissionChoices}
                   disabled={!canCompose}
                   onChange={(preset) => void setPermissionPreset(preset as 'ask' | 'auto' | 'full').catch((reason) => toast.error(reason))}
                 />
                   </div>
                 </details>
                 <details className="work-first-composer-voice" onToggle={(event) => setVoicePanelOpen(event.currentTarget.open)}>
-                  <summary><Mic size={14} aria-hidden="true" /><span>语音</span></summary>
+                  <summary><Mic size={14} aria-hidden="true" /><span>{tr('语音', 'Voice', locale)}</span></summary>
                   <div>
                     {voicePanelOpen && <LocalVoiceControls
                       targetKey={composerKey}
@@ -1059,29 +1108,31 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                 </details>
                 {running ? (
                   <ComposerMenu
-                    ariaLabel="后续消息处理方式"
-                    label={followUpMode === 'steer' ? '立即调整' : '排队'}
+                    ariaLabel={tr('后续消息处理方式', 'Follow-up mode', locale)}
+                    label={followUpMode === 'steer' ? tr('立即调整', 'Steer', locale) : tr('排队', 'Queue', locale)}
                     value={followUpMode}
-                    choices={FOLLOW_UP_CHOICES}
+                    choices={followUpChoices}
                     onChange={(mode) => setFollowUpMode(mode as CodexFollowUpMode)}
                   />
                 ) : null}
               </div>
               <div>
                 {running ? (
-                  <button type="button" aria-label="停止任务" className="codex-native-stop" onClick={() => void interrupt()}>
+                  <button type="button" aria-label={tr('停止任务', 'Stop task', locale)} className="codex-native-stop" onClick={() => void interrupt()}>
                     <Square size={13} fill="currentColor" aria-hidden="true" />
                   </button>
                 ) : null}
                 <button
                   type="button"
-                  aria-label={running ? '发送后续消息' : '发送'}
-                  title={running ? 'Enter 发送；Ctrl+Shift+Enter 使用另一种后续方式' : 'Enter 发送；Shift+Enter 换行'}
+                  aria-label={running ? tr('发送后续消息', 'Send follow-up', locale) : tr('发送', 'Send', locale)}
+                  title={running
+                    ? tr('Enter 发送；Ctrl+Shift+Enter 使用另一种后续方式', 'Enter to send; Ctrl+Shift+Enter for alternate follow-up mode', locale)
+                    : tr('Enter 发送；Shift+Enter 换行', 'Enter to send; Shift+Enter for new line', locale)}
                   disabled={!canCompose || !draft.loaded || readingImages || Boolean(draft.pending) || (!input.trim() && images.length === 0)}
                   onClick={() => void submit()}
                 >
                   <Send size={14} aria-hidden="true" />
-                  <span>{running ? (followUpMode === 'steer' ? '立即调整' : '加入队列') : '发送'}</span>
+                  <span>{running ? (followUpMode === 'steer' ? tr('立即调整', 'Steer', locale) : tr('加入队列', 'Queue', locale)) : tr('发送', 'Send', locale)}</span>
                 </button>
               </div>
             </div>

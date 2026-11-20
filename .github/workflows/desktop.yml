@@ -72,7 +72,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev libarchive-tools
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev libarchive-tools \
+            squashfs-tools xvfb xdotool x11-utils imagemagick \
+            tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim
 
       - uses: pnpm/action-setup@v5
 
@@ -113,6 +115,10 @@ jobs:
           cargo check --locked --manifest-path plugins/intranet-link/native/Cargo.toml
           cargo test --locked --manifest-path plugins/intranet-link/native/Cargo.toml
 
+      - name: 确保缓存中的 Linux AppRun 具备跨用户可执行权限
+        if: matrix.platform == 'ubuntu-22.04'
+        run: chmod 755 "${XDG_CACHE_HOME:-$HOME/.cache}"/tauri/AppRun-* 2>/dev/null || true
+
       - name: 构建桌面客户端
         uses: tauri-apps/tauri-action@v0
         env:
@@ -142,6 +148,136 @@ jobs:
 
       - name: 核对各正式安装包内的 Pi 运行时和桥接脚本
         run: python scripts/verify-pi-installers.py
+
+      - name: 验证 AppImage 跨用户离线无托盘启动与英文首屏
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          set -euo pipefail
+          APPIMAGE="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name 'RocketX_*_amd64.AppImage' | head -n 1)"
+          test -n "$APPIMAGE"
+          APPIMAGE="$(realpath "$APPIMAGE")"
+          CLEAN_HOME="$(mktemp -d)"
+          APID=""
+          cleanup() {
+            if [ -n "$APID" ]; then
+              kill "$APID" 2>/dev/null || true
+              sleep 1
+              kill -9 "$APID" 2>/dev/null || true
+            fi
+            sudo rm -rf /tmp/rcx-root-appdir || true
+            rm -rf "$CLEAN_HOME" /tmp/rcx-appimage.log /tmp/rcx-appimage-screen.png /tmp/rcx-ocr.tsv /tmp/rcx-ocr-eng.txt || true
+          }
+          trap cleanup EXIT
+
+          sudo rm -rf /tmp/rcx-root-appdir
+          sudo mkdir -p /tmp/rcx-root-appdir
+          (cd /tmp/rcx-root-appdir && sudo "$APPIMAGE" --appimage-extract >/dev/null)
+          test -x /tmp/rcx-root-appdir/squashfs-root/AppRun
+          test -x /tmp/rcx-root-appdir/squashfs-root/AppRun.wrapped
+
+          xvfb-run -a -s "-screen 0 1280x800x24" bash -euo pipefail -c '
+            export HOME="'"$CLEAN_HOME"'"
+            export XDG_CONFIG_HOME="'"$CLEAN_HOME"'/.config"
+            export XDG_DATA_HOME="'"$CLEAN_HOME"'/.local/share"
+            export LANG=C
+            export LC_ALL=C
+            export WEBKIT_DISABLE_DMABUF_RENDERER=1
+            export WEBKIT_DISABLE_COMPOSITING_MODE=1
+            /tmp/rcx-root-appdir/squashfs-root/AppRun >/tmp/rcx-appimage.log 2>&1 &
+            APID=$!
+            trap "kill $APID 2>/dev/null || true; pkill -9 -f /tmp/rcx-root-appdir 2>/dev/null || true" EXIT
+
+            VISIBLE=""
+            for _ in $(seq 1 25); do
+              if ! kill -0 "$APID" 2>/dev/null; then
+                echo "AppImage exited unexpectedly during startup:" >&2
+                cat /tmp/rcx-appimage.log >&2 || true
+                exit 1
+              fi
+              if xdotool search --onlyvisible --name "." >/dev/null 2>&1; then
+                VISIBLE=1
+                break
+              fi
+              sleep 1
+            done
+            if [ -z "$VISIBLE" ]; then
+              echo "Timed out waiting for visible AppImage window:" >&2
+              cat /tmp/rcx-appimage.log >&2 || true
+              exit 1
+            fi
+
+            sleep 4
+            if ! kill -0 "$APID" 2>/dev/null; then
+              echo "AppImage exited right after showing window:" >&2
+              cat /tmp/rcx-appimage.log >&2 || true
+              exit 1
+            fi
+            import -window root /tmp/rcx-appimage-screen.png
+            kill "$APID" 2>/dev/null || true
+            wait "$APID" 2>/dev/null || true
+            pkill -9 -f "/tmp/rcx-root-appdir" 2>/dev/null || true
+          '
+
+          convert /tmp/rcx-appimage-screen.png -resize 200% -colorspace Gray png:- \
+            | OMP_THREAD_LIMIT=1 tesseract stdin stdout -l eng --psm 11 >/tmp/rcx-ocr-eng.txt 2>/dev/null
+          convert /tmp/rcx-appimage-screen.png -resize 200% -colorspace Gray png:- \
+            | OMP_THREAD_LIMIT=1 tesseract stdin stdout -l eng+chi_sim --psm 11 tsv >/tmp/rcx-ocr.tsv 2>/dev/null
+
+          python3 - <<'PY'
+          import re
+          import subprocess
+
+          stddev = float(subprocess.check_output(
+              ["convert", "/tmp/rcx-appimage-screen.png", "-format", "%[fx:standard_deviation]", "info:"],
+              text=True,
+          ).strip())
+          assert stddev > 0, f"Screenshot appears blank (standard_deviation={stddev})"
+
+          with open("/tmp/rcx-ocr-eng.txt", encoding="utf-8", errors="replace") as f:
+              eng_text = re.sub(r"\s+", " ", f.read()).strip()
+
+          hard_re = re.compile(
+              r"traceback|exception|segmentation fault|fatal|error while loading|glibc|not installed|"
+              r"cannot open display|permission denied|no such file|"
+              r"could not (?:load|find|open|start|initiali)|"
+              r"failed to (?:load|start|open|initiali|create)|"
+              r"cannot (?:load|find|open|execute|configure)|"
+              r"unable to (?:load|find|open|start)|"
+              r"command not found|core dumped",
+              re.IGNORECASE,
+          )
+          soft_re = re.compile(
+              r"error|failed|failure|could not|cannot|unable to|not found",
+              re.IGNORECASE,
+          )
+          hard_match = hard_re.search(eng_text)
+          assert not hard_match, f"OCR matched hard error pattern {hard_match.group(0)!r} in: {eng_text}"
+          soft_match = soft_re.search(eng_text)
+          assert not soft_match, f"OCR matched soft error pattern {soft_match.group(0)!r} in: {eng_text}"
+
+          latin = 0
+          han = 0
+          with open("/tmp/rcx-ocr.tsv", encoding="utf-8", errors="replace") as f:
+              lines = f.read().splitlines()[1:]
+          for line in lines:
+              parts = line.split("\t")
+              if len(parts) < 12 or not parts[11].strip():
+                  continue
+              try:
+                  conf = float(parts[10])
+              except ValueError:
+                  continue
+              if conf < 80:
+                  continue
+              word = parts[11]
+              latin += len(re.findall(r"[A-Za-z\u00c0-\u024f]", word))
+              han += len(re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uac00-\ud7af]", word))
+
+          print(f"AppImage OCR check: stddev={stddev:.4f}, latin={latin}, han={han}")
+          print(f"AppImage OCR text sample: {eng_text[:400]}")
+          assert latin >= 15, f"Too few high-confidence Latin letters ({latin}); text: {eng_text}"
+          assert 3 * han <= latin, f"Screenshot appears predominantly non-English (han={han}, latin={latin}); text: {eng_text}"
+          PY
 
       - name: 上传 full 安装包到 Release
         if: github.ref_type == 'tag' && matrix.platform == 'windows-latest'
