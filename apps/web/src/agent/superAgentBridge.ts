@@ -14,6 +14,7 @@ import { getServerBase, rest } from '../lib/client';
 import { desktopNotify } from '../lib/notify';
 import { workContextPathKey } from '../lib/workContext';
 import { isNativeHostAction, isNativeHostSession, isNativeHostWork, NATIVE_HOST_CONTROL_REASON } from '../lib/nativeWorkOwnership';
+import { tr } from '../lib/uiLocale';
 import { isTauri } from '../lib/http';
 import { captureButlerRuntimeAccountContext } from '../platform/butlerAccountReady';
 import {
@@ -1820,7 +1821,7 @@ async function startWorkSupervision(): Promise<() => void> {
   const current = () => active && currentSupervisorScope() === scope;
   const reportError = (error: unknown) => {
     if (!current()) return;
-    const reason = `后台跟进需要检查：${error instanceof Error ? error.message : String(error)}`;
+    const reason = `${tr('后台跟进需要检查：', 'Background check notice: ')}${error instanceof Error ? error.message : String(error)}`;
     useWorkLedger.setState({ lastError: reason });
     if (!reportedErrors.has(reason)) {
       reportedErrors.add(reason);

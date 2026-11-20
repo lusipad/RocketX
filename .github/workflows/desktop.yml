@@ -156,7 +156,10 @@ jobs:
           APPIMAGE="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name 'RocketX_*_amd64.AppImage' | head -n 1)"
           test -n "$APPIMAGE"
           APPIMAGE="$(realpath "$APPIMAGE")"
+          OFFSET="$("$APPIMAGE" --appimage-offset)"
           CLEAN_HOME="$(mktemp -d)"
+          mkdir -p "$CLEAN_HOME/.local/share/appimagekit"
+          touch "$CLEAN_HOME/.local/share/appimagekit/no_desktopintegration"
           APID=""
           cleanup() {
             if [ -n "$APID" ]; then
@@ -170,10 +173,14 @@ jobs:
           trap cleanup EXIT
 
           sudo rm -rf /tmp/rcx-root-appdir
-          sudo mkdir -p /tmp/rcx-root-appdir
-          (cd /tmp/rcx-root-appdir && sudo "$APPIMAGE" --appimage-extract >/dev/null)
-          test -x /tmp/rcx-root-appdir/squashfs-root/AppRun
-          test -x /tmp/rcx-root-appdir/squashfs-root/AppRun.wrapped
+          sudo mkdir -p -m 0755 /tmp/rcx-root-appdir
+          sudo unsquashfs -o "$OFFSET" -d /tmp/rcx-root-appdir/squashfs-root "$APPIMAGE" >/dev/null
+          ls -ld /tmp/rcx-root-appdir/squashfs-root /tmp/rcx-root-appdir/squashfs-root/AppRun /tmp/rcx-root-appdir/squashfs-root/AppRun.wrapped
+          if [ ! -x /tmp/rcx-root-appdir/squashfs-root/AppRun ] || [ ! -x /tmp/rcx-root-appdir/squashfs-root/AppRun.wrapped ]; then
+            echo "AppRun or AppRun.wrapped is not executable by non-root user:" >&2
+            ls -la /tmp/rcx-root-appdir /tmp/rcx-root-appdir/squashfs-root >&2 || true
+            exit 1
+          fi
 
           xvfb-run -a -s "-screen 0 1280x800x24" bash -euo pipefail -c '
             export HOME="'"$CLEAN_HOME"'"
@@ -187,6 +194,7 @@ jobs:
             APID=$!
             trap "kill $APID 2>/dev/null || true; pkill -9 -f /tmp/rcx-root-appdir 2>/dev/null || true" EXIT
 
+            sleep 6
             VISIBLE=""
             for _ in $(seq 1 25); do
               if ! kill -0 "$APID" 2>/dev/null; then
@@ -194,7 +202,7 @@ jobs:
                 cat /tmp/rcx-appimage.log >&2 || true
                 exit 1
               fi
-              if xdotool search --onlyvisible --name "." >/dev/null 2>&1; then
+              if timeout 5 xdotool search --onlyvisible --name "." >/dev/null 2>&1; then
                 VISIBLE=1
                 break
               fi
@@ -206,13 +214,13 @@ jobs:
               exit 1
             fi
 
-            sleep 4
+            sleep 5
             if ! kill -0 "$APID" 2>/dev/null; then
               echo "AppImage exited right after showing window:" >&2
               cat /tmp/rcx-appimage.log >&2 || true
               exit 1
             fi
-            import -window root /tmp/rcx-appimage-screen.png
+            timeout 30 import -window root /tmp/rcx-appimage-screen.png
             kill "$APID" 2>/dev/null || true
             wait "$APID" 2>/dev/null || true
             pkill -9 -f "/tmp/rcx-root-appdir" 2>/dev/null || true
