@@ -1,3 +1,5 @@
+import { t, type MessageKey } from '../i18n';
+
 export const RRULE_PREFIX = 'RRULE:';
 
 export const RRULE_FREQUENCIES = [
@@ -95,29 +97,29 @@ const JS_DAY_TO_RRULE: Record<number, RruleWeekday> = {
 };
 
 export function parseRrule(input: string): ParsedRrule {
-  if (typeof input !== 'string') throw new Error('RRULE 必须是字符串');
+  if (typeof input !== 'string') throw new Error(t('butler.schedule.error.mustBeString'));
   const trimmed = input.trim();
-  if (!trimmed) throw new Error('RRULE 不能为空');
+  if (!trimmed) throw new Error(t('butler.schedule.error.cannotBeEmpty'));
   if (!trimmed.toUpperCase().startsWith(RRULE_PREFIX)) {
-    throw new Error(`RRULE 必须以 ${RRULE_PREFIX} 开头`);
+    throw new Error(t('butler.schedule.error.mustStartWithPrefix', { prefix: RRULE_PREFIX }));
   }
 
   const body = trimmed.slice(trimmed.indexOf(':') + 1).trim();
-  if (!body) throw new Error('RRULE 缺少规则内容');
+  if (!body) throw new Error(t('butler.schedule.error.missingBody'));
 
   const parts = body.split(';');
   const values = new Map<RruleKey, string>();
   for (const part of parts) {
     const segment = part.trim();
-    if (!segment) throw new Error('RRULE 片段不能为空');
+    if (!segment) throw new Error(t('butler.schedule.error.emptySegment'));
     const eqIndex = segment.indexOf('=');
     if (eqIndex <= 0 || eqIndex === segment.length - 1 || segment.indexOf('=', eqIndex + 1) >= 0) {
-      throw new Error(`RRULE 片段格式无效：${segment}`);
+      throw new Error(t('butler.schedule.error.invalidSegment', { segment }));
     }
     const key = segment.slice(0, eqIndex).trim().toUpperCase();
     const value = segment.slice(eqIndex + 1).trim();
-    if (!RRULE_KEY_SET.has(key as RruleKey)) throw new Error(`不支持的 RRULE 字段：${key}`);
-    if (values.has(key as RruleKey)) throw new Error(`RRULE 字段重复：${key}`);
+    if (!RRULE_KEY_SET.has(key as RruleKey)) throw new Error(t('butler.schedule.error.unsupportedField', { key }));
+    if (values.has(key as RruleKey)) throw new Error(t('butler.schedule.error.duplicateField', { key }));
     values.set(key as RruleKey, value);
   }
 
@@ -172,7 +174,11 @@ export function describeRrule(input: RruleLike): string {
   const intervalWindow = intervalWindowFromParsed(rule);
 
   if (intervalWindow) {
-    return `每天 ${intervalWindow.start}–${intervalWindow.end}，每 ${intervalWindow.everyMinutes} 分钟`;
+    return t('butler.routines.triggerWindowInterval', {
+      start: intervalWindow.start,
+      end: intervalWindow.end,
+      minutes: intervalWindow.everyMinutes,
+    });
   }
 
   if (
@@ -183,7 +189,7 @@ export function describeRrule(input: RruleLike): string {
     && !rule.byMonthDay?.length
     && !rule.byMonth?.length
   ) {
-    return interval === 1 ? '每分钟' : `每 ${interval} 分钟`;
+    return interval === 1 ? t('butler.schedule.everyMinute') : t('butler.schedule.everyMinutes', { interval });
   }
 
   if (
@@ -194,47 +200,81 @@ export function describeRrule(input: RruleLike): string {
     && !rule.byMonthDay?.length
     && !rule.byMonth?.length
   ) {
-    return interval === 1 ? '每小时' : `每 ${interval} 小时`;
+    return interval === 1 ? t('butler.schedule.everyHour') : t('butler.schedule.everyHours', { interval });
   }
 
   if (rule.freq === 'HOURLY' && !rule.byHour?.length && rule.byMinute?.length === 1) {
+    const minute = pad2(rule.byMinute![0]);
     return interval === 1
-      ? `每小时的 ${pad2(rule.byMinute![0])} 分`
-      : `每 ${interval} 小时的 ${pad2(rule.byMinute![0])} 分`;
+      ? t('butler.schedule.hourlyAtMinute', { minute })
+      : t('butler.schedule.everyHoursAtMinute', { interval, minute });
   }
 
   if (rule.freq === 'DAILY') {
-    if (isWorkday(rule.byDay)) return `每个工作日 ${timeText}`;
-    if (!rule.byDay?.length) return interval === 1 ? `每天 ${timeText}` : `每 ${interval} 天 ${timeText}`;
-    return `${interval === 1 ? '' : `每 ${interval} 天内的`}每${describeWeekdays(rule.byDay)} ${timeText}`;
+    if (isWorkday(rule.byDay)) return t('butler.schedule.everyWorkday', { time: timeText });
+    if (!rule.byDay?.length) {
+      return interval === 1
+        ? t('butler.schedule.everyDayAt', { time: timeText })
+        : t('butler.schedule.everyNDaysAt', { interval, time: timeText });
+    }
+    const days = describeWeekdays(rule.byDay);
+    return interval === 1
+      ? t('butler.schedule.dailyDays', { days, time: timeText })
+      : t('butler.schedule.dailyIntervalDays', { interval, days, time: timeText });
   }
 
   if (rule.freq === 'WEEKLY') {
-    if (isWorkday(rule.byDay)) return interval === 1 ? `每个工作日 ${timeText}` : `每 ${interval} 周的工作日 ${timeText}`;
-    const days = rule.byDay?.length ? describeWeekdays(rule.byDay) : '每周';
-    return interval === 1 ? `每${days} ${timeText}` : `每 ${interval} 周的${days} ${timeText}`;
+    if (isWorkday(rule.byDay)) {
+      return interval === 1
+        ? t('butler.schedule.weeklyWorkday', { time: timeText })
+        : t('butler.schedule.weeklyIntervalWorkday', { interval, time: timeText });
+    }
+    const days = rule.byDay?.length ? describeWeekdays(rule.byDay) : t('butler.schedule.weeklyFallback');
+    return interval === 1
+      ? t('butler.schedule.weeklyDays', { days, time: timeText })
+      : t('butler.schedule.weeklyIntervalDays', { interval, days, time: timeText });
   }
 
   if (rule.freq === 'MONTHLY') {
-    const dayText = rule.byMonthDay?.length ? rule.byMonthDay.map((day) => `${day} 日`).join('、') : '当月当天';
-    return interval === 1 ? `每月 ${dayText} ${timeText}` : `每 ${interval} 个月的 ${dayText} ${timeText}`;
+    const dayText = rule.byMonthDay?.length
+      ? rule.byMonthDay.map((day) => t('butler.schedule.monthDayItem', { day })).join(t('butler.listSeparator'))
+      : t('butler.schedule.sameDayOfMonth');
+    return interval === 1
+      ? t('butler.schedule.monthly', { days: dayText, time: timeText })
+      : t('butler.schedule.monthlyInterval', { interval, days: dayText, time: timeText });
   }
 
   if (rule.freq === 'YEARLY') {
-    const monthText = rule.byMonth?.length ? rule.byMonth.join('、') : '每年';
-    const dayText = rule.byMonthDay?.length ? rule.byMonthDay.map((day) => `${day} 日`).join('、') : '';
-    return interval === 1
-      ? `每年 ${monthText} 月 ${dayText} ${timeText}`.replace(/\s+/g, ' ').trim()
-      : `每 ${interval} 年的 ${monthText} 月 ${dayText} ${timeText}`.replace(/\s+/g, ' ').trim();
+    const monthText = rule.byMonth?.length
+      ? t('butler.schedule.yearlyMonthGroup', {
+          months: rule.byMonth.map((month) => t(`butler.schedule.monthShort.${month}` as MessageKey)).join(t('butler.listSeparator')),
+        })
+      : t('butler.schedule.everyYear');
+    const dayText = rule.byMonthDay?.length
+      ? rule.byMonthDay.map((day) => t('butler.schedule.monthDayItem', { day })).join(t('butler.listSeparator'))
+      : '';
+    return (interval === 1
+      ? t('butler.schedule.yearly', { months: monthText, days: dayText, time: timeText })
+      : t('butler.schedule.yearlyInterval', { interval, months: monthText, days: dayText, time: timeText })
+    ).replace(/\s+/g, ' ').trim();
   }
 
   const constraints = [
-    rule.byMonth?.length ? `${rule.byMonth.join('、')} 月` : '',
-    rule.byMonthDay?.length ? `${rule.byMonthDay.join('、')} 日` : '',
+    rule.byMonth?.length
+      ? t('butler.schedule.yearlyMonthGroup', {
+          months: rule.byMonth.map((month) => t(`butler.schedule.monthShort.${month}` as MessageKey)).join(t('butler.listSeparator')),
+        })
+      : '',
+    rule.byMonthDay?.length
+      ? rule.byMonthDay.map((day) => t('butler.schedule.monthDayItem', { day })).join(t('butler.listSeparator'))
+      : '',
     rule.byDay?.length ? describeWeekdays(rule.byDay) : '',
     timeText,
   ].filter(Boolean);
-  const head = interval === 1 ? freqLabel(rule.freq) : `每 ${interval} 个${freqLabel(rule.freq)}`;
+  const unit = freqLabel(rule.freq);
+  const head = interval === 1
+    ? t('butler.schedule.fallbackHead', { unit })
+    : t('butler.schedule.fallbackIntervalHead', { interval, unit });
   return `${head} ${constraints.join(' ')}`.trim();
 }
 
@@ -258,19 +298,19 @@ export function dailyTriggerToRrule(time: string, days?: readonly number[]): str
 
 export function intervalTriggerToRrule(everyMinutes: number, window?: IntervalWindow): string {
   if (!Number.isInteger(everyMinutes) || everyMinutes <= 0) {
-    throw new Error('everyMinutes 必须是正整数');
+    throw new Error(t('butler.schedule.error.everyMinutesPositive'));
   }
   if (window) {
     const start = parseTime(window.start);
     const end = parseTime(window.end);
     if (start.minute !== 0 || end.minute !== 0) {
-      throw new Error('时间窗的开始和结束时间必须是整点');
+      throw new Error(t('butler.schedule.error.windowHourlyBoundary'));
     }
     if (end.hour <= start.hour) {
-      throw new Error('时间窗的结束时间必须晚于开始时间');
+      throw new Error(t('butler.schedule.error.windowEndAfterStart'));
     }
     if (60 % everyMinutes !== 0) {
-      throw new Error('时间窗间隔必须能整除 60 分钟');
+      throw new Error(t('butler.schedule.error.windowDivides60'));
     }
     return normalizeRrule({
       freq: 'DAILY',
@@ -342,7 +382,7 @@ export function structuredCustomScheduleToRrule(schedule: StructuredCustomSchedu
 }
 
 function normalizeParsed(input: ParsedRrule): ParsedRrule {
-  if (!input || typeof input !== 'object') throw new Error('RRULE 对象无效');
+  if (!input || typeof input !== 'object') throw new Error(t('butler.schedule.error.invalidObject'));
   const freq = parseFrequency(String(input.freq ?? ''));
   const interval = input.interval == null ? undefined : parsePositiveInteger('INTERVAL', String(input.interval));
   const byMinute = normalizeNumberArray('BYMINUTE', input.byMinute, 0, 59);
@@ -351,10 +391,10 @@ function normalizeParsed(input: ParsedRrule): ParsedRrule {
   const byMonthDay = normalizeNumberArray('BYMONTHDAY', input.byMonthDay, 1, 31);
   const byMonth = normalizeNumberArray('BYMONTH', input.byMonth, 1, 12);
 
-  if (freq === 'WEEKLY' && !byDay?.length) throw new Error('WEEKLY 规则必须提供 BYDAY');
-  if (freq === 'MONTHLY' && !byMonthDay?.length) throw new Error('MONTHLY 规则必须提供 BYMONTHDAY');
+  if (freq === 'WEEKLY' && !byDay?.length) throw new Error(t('butler.schedule.error.weeklyNeedsByDay'));
+  if (freq === 'MONTHLY' && !byMonthDay?.length) throw new Error(t('butler.schedule.error.monthlyNeedsByMonthDay'));
   if (freq === 'YEARLY' && (!byMonth?.length || !byMonthDay?.length)) {
-    throw new Error('YEARLY 规则必须提供 BYMONTH 和 BYMONTHDAY');
+    throw new Error(t('butler.schedule.error.yearlyNeedsMonthAndDay'));
   }
 
   return {
@@ -401,31 +441,31 @@ function intervalWindowFromParsed(rule: ParsedRrule): IntervalWindowSchedule | u
 
 function requiredValue(values: Map<RruleKey, string>, key: RruleKey): string {
   const value = values.get(key);
-  if (!value) throw new Error(`RRULE 缺少 ${key}`);
+  if (!value) throw new Error(t('butler.schedule.error.missingField', { key }));
   return value;
 }
 
 function parseFrequency(value: string): RruleFrequency {
   const freq = value.trim().toUpperCase() as RruleFrequency;
-  if (!RRULE_FREQUENCY_SET.has(freq)) throw new Error(`不支持的 FREQ：${value}`);
+  if (!RRULE_FREQUENCY_SET.has(freq)) throw new Error(t('butler.schedule.error.unsupportedFreq', { value }));
   return freq;
 }
 
 function parsePositiveInteger(name: string, value: string): number {
-  if (!/^\d+$/.test(value)) throw new Error(`${name} 必须是正整数`);
+  if (!/^\d+$/.test(value)) throw new Error(t('butler.schedule.error.mustBePositiveInt', { name }));
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} 必须是正整数`);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(t('butler.schedule.error.mustBePositiveInt', { name }));
   return parsed;
 }
 
 function parseIntegerList(name: string, value: string, min: number, max: number): number[] {
   const parts = value.split(',').map((item) => item.trim());
-  if (!parts.length || parts.some((item) => !item)) throw new Error(`${name} 不能为空`);
+  if (!parts.length || parts.some((item) => !item)) throw new Error(t('butler.schedule.error.listCannotBeEmpty', { name }));
   const out = parts.map((item) => {
-    if (!/^\d+$/.test(item)) throw new Error(`${name} 必须是 ${min}-${max} 的整数`);
+    if (!/^\d+$/.test(item)) throw new Error(t('butler.schedule.error.intRange', { name, min, max }));
     const parsed = Number(item);
     if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-      throw new Error(`${name} 必须是 ${min}-${max} 的整数`);
+      throw new Error(t('butler.schedule.error.intRange', { name, min, max }));
     }
     return parsed;
   });
@@ -434,9 +474,9 @@ function parseIntegerList(name: string, value: string, min: number, max: number)
 
 function parseDayList(value: string): RruleWeekday[] {
   const parts = value.split(',').map((item) => item.trim().toUpperCase());
-  if (!parts.length || parts.some((item) => !item)) throw new Error('BYDAY 不能为空');
+  if (!parts.length || parts.some((item) => !item)) throw new Error(t('butler.schedule.error.byDayEmpty'));
   const out = parts.map((item) => {
-    if (!RRULE_WEEKDAY_SET.has(item as RruleWeekday)) throw new Error(`不支持的 BYDAY 值：${item}`);
+    if (!RRULE_WEEKDAY_SET.has(item as RruleWeekday)) throw new Error(t('butler.schedule.error.unsupportedByDay', { value: item }));
     return item as RruleWeekday;
   });
   return sortUniqueWeekdays(out);
@@ -449,10 +489,10 @@ function normalizeNumberArray(
   max: number,
 ): number[] | undefined {
   if (value == null) return undefined;
-  if (!Array.isArray(value) || value.length === 0) throw new Error(`${name} 必须是非空数组`);
+  if (!Array.isArray(value) || value.length === 0) throw new Error(t('butler.schedule.error.nonEmptyArray', { name }));
   return sortUniqueNumbers(name, value.map((item) => {
     if (!Number.isInteger(item) || item < min || item > max) {
-      throw new Error(`${name} 必须是 ${min}-${max} 的整数`);
+      throw new Error(t('butler.schedule.error.intRange', { name, min, max }));
     }
     return item;
   }));
@@ -460,10 +500,10 @@ function normalizeNumberArray(
 
 function normalizeWeekdayArray(value: readonly RruleWeekday[] | undefined): RruleWeekday[] | undefined {
   if (value == null) return undefined;
-  if (!Array.isArray(value) || value.length === 0) throw new Error('BYDAY 必须是非空数组');
+  if (!Array.isArray(value) || value.length === 0) throw new Error(t('butler.schedule.error.byDayNonEmptyArray'));
   return sortUniqueWeekdays(value.map((item) => {
     const normalized = String(item).toUpperCase();
-    if (!RRULE_WEEKDAY_SET.has(normalized as RruleWeekday)) throw new Error(`不支持的 BYDAY 值：${item}`);
+    if (!RRULE_WEEKDAY_SET.has(normalized as RruleWeekday)) throw new Error(t('butler.schedule.error.unsupportedByDay', { value: String(item) }));
     return normalized as RruleWeekday;
   }));
 }
@@ -471,7 +511,7 @@ function normalizeWeekdayArray(value: readonly RruleWeekday[] | undefined): Rrul
 function sortUniqueNumbers(name: string, values: readonly number[]): number[] {
   const out = [...values].sort((left, right) => left - right);
   for (let index = 1; index < out.length; index += 1) {
-    if (out[index] === out[index - 1]) throw new Error(`${name} 不能重复`);
+    if (out[index] === out[index - 1]) throw new Error(t('butler.schedule.error.noDuplicate', { name }));
   }
   return out;
 }
@@ -479,25 +519,25 @@ function sortUniqueNumbers(name: string, values: readonly number[]): number[] {
 function sortUniqueWeekdays(values: readonly RruleWeekday[]): RruleWeekday[] {
   const out = [...values].sort((left, right) => (WEEKDAY_ORDER.get(left) ?? 0) - (WEEKDAY_ORDER.get(right) ?? 0));
   for (let index = 1; index < out.length; index += 1) {
-    if (out[index] === out[index - 1]) throw new Error('BYDAY 不能重复');
+    if (out[index] === out[index - 1]) throw new Error(t('butler.schedule.error.byDayNoDuplicate'));
   }
   return out;
 }
 
 function parseTime(value: string): { hour: number; minute: number } {
   const match = /^(\d{2}):(\d{2})$/.exec(value.trim());
-  if (!match) throw new Error('time 必须是 HH:MM');
+  if (!match) throw new Error(t('butler.schedule.error.timeFormat'));
   const hour = Number(match[1]);
   const minute = Number(match[2]);
-  if (hour > 23 || minute > 59) throw new Error('time 必须是 HH:MM');
+  if (hour > 23 || minute > 59) throw new Error(t('butler.schedule.error.timeFormat'));
   return { hour, minute };
 }
 
 function normalizeJsDays(days?: readonly number[]): RruleWeekday[] | undefined {
   if (days == null) return undefined;
-  if (!Array.isArray(days) || days.length === 0) throw new Error('days 必须是 0-6 的非空数组');
+  if (!Array.isArray(days) || days.length === 0) throw new Error(t('butler.schedule.error.daysNonEmptyArray'));
   const mapped = days.map((day) => {
-    if (!Number.isInteger(day) || day < 0 || day > 6) throw new Error('days 必须是 0-6 的整数');
+    if (!Number.isInteger(day) || day < 0 || day > 6) throw new Error(t('butler.schedule.error.daysRange'));
     return JS_DAY_TO_RRULE[day];
   });
   return sortUniqueWeekdays(mapped);
@@ -531,19 +571,19 @@ function effectiveMinutes(rule: ParsedRrule): readonly number[] | undefined {
 function describeTime(rule: ParsedRrule): string {
   const hours = effectiveHours(rule);
   const minutes = effectiveMinutes(rule);
-  if (!hours && !minutes) return '任意时刻';
-  if (!hours && minutes?.length === 1) return `每小时 ${pad2(minutes[0])} 分`;
-  if (hours?.length === 1 && !minutes) return `${pad2(hours[0])}:每分钟`;
-  if (!hours || !minutes) return '自定义时间';
+  if (!hours && !minutes) return t('butler.schedule.anyTime');
+  if (!hours && minutes?.length === 1) return t('butler.schedule.hourlyMinuteTime', { minute: pad2(minutes[0]) });
+  if (hours?.length === 1 && !minutes) return t('butler.schedule.hourEveryMinuteTime', { hour: pad2(hours[0]) });
+  if (!hours || !minutes) return t('butler.schedule.customTime');
 
   const pairs: string[] = [];
   for (const hour of hours) {
     for (const minute of minutes) {
       pairs.push(`${pad2(hour)}:${pad2(minute)}`);
-      if (pairs.length > 6) return '多个时间点';
+      if (pairs.length > 6) return t('butler.schedule.multipleTimes');
     }
   }
-  return pairs.join('、');
+  return pairs.join(t('butler.listSeparator'));
 }
 
 function isWorkday(days?: readonly RruleWeekday[]): boolean {
@@ -551,49 +591,21 @@ function isWorkday(days?: readonly RruleWeekday[]): boolean {
 }
 
 function describeWeekdays(days: readonly RruleWeekday[]): string {
-  return days.map((day) => weekdayLabel(day)).join('、');
+  return days.map((day) => weekdayLabel(day)).join(t('butler.listSeparator'));
 }
 
 function weekdayLabel(day: RruleWeekday): string {
-  switch (day) {
-    case 'MO':
-      return '周一';
-    case 'TU':
-      return '周二';
-    case 'WE':
-      return '周三';
-    case 'TH':
-      return '周四';
-    case 'FR':
-      return '周五';
-    case 'SA':
-      return '周六';
-    case 'SU':
-      return '周日';
-  }
+  return t(`butler.schedule.weekday.${day}` as MessageKey);
 }
 
 function freqLabel(freq: RruleFrequency): string {
-  switch (freq) {
-    case 'MINUTELY':
-      return '分钟';
-    case 'HOURLY':
-      return '小时';
-    case 'DAILY':
-      return '天';
-    case 'WEEKLY':
-      return '周';
-    case 'MONTHLY':
-      return '月';
-    case 'YEARLY':
-      return '年';
-  }
+  return t(`butler.schedule.freqUnit.${freq}` as MessageKey);
 }
 
 function asDate(name: string, value: number): Date {
-  if (!Number.isFinite(value)) throw new Error(`${name} 必须是有效时间戳`);
+  if (!Number.isFinite(value)) throw new Error(t('butler.schedule.error.validTimestamp', { name }));
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) throw new Error(`${name} 必须是有效时间戳`);
+  if (Number.isNaN(date.getTime())) throw new Error(t('butler.schedule.error.validTimestamp', { name }));
   return date;
 }
 

@@ -3,7 +3,6 @@ import { FileUp, Globe, Loader2 } from 'lucide-react';
 import Dialog from './Dialog';
 import { toast } from '../stores/toast';
 import { getServerBase, setServerBase } from '../lib/client';
-import { tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import { ADO_WEB_KEY, adoWebBase, loadWorkbenchConfig } from '../lib/ado';
 import { useWorkbench } from '../stores/workbench';
 import { useWiTemplates } from '../stores/wiTemplates';
@@ -30,30 +29,26 @@ import {
   type WorkspaceCurrentValues,
   type WorkspaceField,
 } from '../lib/workspaceConfig';
+import { useI18n, useT, type MessageKey } from '../i18n';
+import { formatDateTime } from '../i18n/format';
 
-function adoAuthLabel(auth: 'ntlm' | 'pat' | 'bearer' | 'none', locale: UiLocale): string {
-  switch (auth) {
-    case 'ntlm':
-      return tr('Windows 集成认证', 'Windows Integrated Auth (NTLM)', locale);
-    case 'pat':
-      return 'PAT (Basic)';
-    case 'bearer':
-      return 'Bearer Token';
-    case 'none':
-      return tr('不带凭据', 'No Credentials', locale);
-  }
-}
+const ADO_AUTH_LABEL_KEYS: Record<'ntlm' | 'pat' | 'bearer' | 'none', MessageKey> = {
+  ntlm: 'settings.workspace.adoAuth.ntlm',
+  pat: 'settings.workspace.adoAuth.pat',
+  bearer: 'settings.workspace.adoAuth.bearer',
+  none: 'settings.workspace.adoAuth.none',
+};
 
-const FIELD_LABEL_EN: Record<string, string> = {
-  'server.url': 'Rocket.Chat Server URL',
-  'ado.base': 'Azure DevOps URL',
-  'ado.auth': 'Azure DevOps Auth',
-  'ado.webUrl': 'Azure DevOps Web URL',
-  'templates.url': 'Work Item Templates URL',
-  'templates.inline': 'Inline Work Item Templates',
-  'update.source': 'Update Source',
-  'workItems.hierarchyLayout': 'Work Item Hierarchy Layout',
-  aliases: 'Shared Aliases',
+const WORKSPACE_FIELD_LABEL_KEYS: Record<string, MessageKey> = {
+  'server.url': 'settings.workspace.field.serverUrl',
+  'ado.base': 'settings.workspace.field.adoBase',
+  'ado.auth': 'settings.workspace.field.adoAuth',
+  'ado.webUrl': 'settings.workspace.field.adoWebUrl',
+  'templates.url': 'settings.workspace.field.templatesUrl',
+  'templates.inline': 'settings.workspace.field.templatesInline',
+  'update.source': 'settings.workspace.field.updateSource',
+  'workItems.hierarchyLayout': 'settings.workspace.field.hierarchyLayout',
+  aliases: 'settings.workspace.field.aliases',
 };
 
 /**
@@ -189,14 +184,16 @@ export function applyWorkspaceConfigDefaults(config: WorkspaceConfig, sourceUrl?
 function FieldRow({
   field,
   checked,
-  locale,
   onToggle,
 }: {
   field: WorkspaceField;
   checked: boolean;
-  locale: UiLocale;
   onToggle: () => void;
 }) {
+  const t = useT();
+  const labelKey = WORKSPACE_FIELD_LABEL_KEYS[field.key];
+  const fieldLabel = labelKey ? t(labelKey) : field.label;
+
   return (
     <label
       className={`flex items-start gap-3 border-b border-line px-4 py-3 last:border-b-0 ${
@@ -212,16 +209,18 @@ function FieldRow({
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm text-ink">{tr(field.label, FIELD_LABEL_EN[field.key] ?? field.label, locale)}</span>
+          <span className="text-sm text-ink">{fieldLabel}</span>
           {field.unchanged ? (
-            <span className="rounded bg-fill-2 px-1.5 py-0.5 text-xs text-ink-3">{tr('与本地一致', 'Matches local', locale)}</span>
+            <span className="rounded bg-fill-2 px-1.5 py-0.5 text-xs text-ink-3">
+              {t('settings.workspace.fieldUnchanged')}
+            </span>
           ) : field.overridden ? (
             <span className="rounded bg-warning/10 px-1.5 py-0.5 text-xs text-warning">
-              {tr('本地已修改，默认保留', 'Locally customized (kept)', locale)}
+              {t('settings.workspace.fieldOverridden')}
             </span>
           ) : (
             <span className="rounded bg-primary-light px-1.5 py-0.5 text-xs text-primary">
-              {field.current ? tr('将更新', 'Will update', locale) : tr('将写入', 'Will apply', locale)}
+              {field.current ? t('settings.workspace.fieldWillUpdate') : t('settings.workspace.fieldWillWrite')}
             </span>
           )}
         </div>
@@ -247,7 +246,7 @@ export function ImportPreviewDialog({
   onApplied: () => void;
   onClose: () => void;
 }) {
-  const locale = useUiLocale();
+  const { t, tp } = useI18n();
   const fields = useMemo(() => {
     const lastApplied = loadWorkspaceSource()?.applied ?? {};
     return planWorkspaceFields(config, collectCurrentValues(), lastApplied);
@@ -270,24 +269,20 @@ export function ImportPreviewDialog({
       const count = await applySelectedFields(config, fields, selected, source);
       toast.success(
         count > 0
-          ? tr(`已应用 ${count} 个配置字段`, `Applied ${count} configuration field(s)`, locale)
-          : tr('没有需要应用的字段', 'No fields needed updates', locale),
+          ? tp(count, 'settings.workspace.appliedOne', 'settings.workspace.appliedOther', { count })
+          : t('settings.workspace.nothingToApply'),
       );
       onApplied();
     } catch (err) {
-      toast.error(err, tr('应用配置失败', 'Issue applying workspace config', locale));
+      toast.error(err, t('settings.workspace.applyFailed'));
     }
     onClose();
   };
 
   return (
     <Dialog
-      title={config.name ? tr(`导入「${config.name}」`, `Import “${config.name}”`, locale) : tr('导入团队配置', 'Import Team Config', locale)}
-      hint={tr(
-        '勾选字段会写入本地配置；本地修改默认保留。ADO 端点变化时会清除对应 PAT，Rocket.Chat 变化时需要重新登录。',
-        'Checked fields update local config; local overrides stay untouched by default. Changing ADO endpoints clears its PAT; changing Rocket.Chat requires signing in again.',
-        locale,
-      )}
+      title={config.name ? t('settings.workspace.importNamedTitle', { name: config.name }) : t('settings.workspace.importTitle')}
+      hint={t('settings.workspace.importHint')}
       onClose={onClose}
       footer={
         <>
@@ -295,23 +290,23 @@ export function ImportPreviewDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            {tr('取消', 'Cancel', locale)}
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void apply()}
             disabled={selected.size === 0}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {tr(`应用 ${selected.size} 项`, `Apply ${selected.size}`, locale)}
+            {tp(selected.size, 'settings.workspace.applySelectedOne', 'settings.workspace.applySelectedOther', {
+              count: selected.size,
+            })}
           </button>
         </>
       }
     >
       <div className="px-5 pb-2">
         {fields.length === 0 ? (
-          <div className="py-8 text-center text-sm text-ink-3">
-            {tr('配置文件里没有可识别的字段', 'No recognized fields in config file', locale)}
-          </div>
+          <div className="py-8 text-center text-sm text-ink-3">{t('settings.workspace.noRecognizedFields')}</div>
         ) : (
           <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-line">
             {fields.map((field) => (
@@ -319,7 +314,6 @@ export function ImportPreviewDialog({
                 key={field.key}
                 field={field}
                 checked={selected.has(field.key)}
-                locale={locale}
                 onToggle={() => toggle(field.key)}
               />
             ))}
@@ -332,7 +326,7 @@ export function ImportPreviewDialog({
 
 /** 设置页「团队配置」分区：从 URL / 文件导入配置，之后可一键重新同步 */
 export function WorkspaceConfigSection() {
-  const locale = useUiLocale();
+  const t = useT();
   const [source, setSource] = useState(() => loadWorkspaceSource());
   const [sourceInput, setSourceInput] = useState(
     source?.kind === 'url' ? source.url : source?.kind === 'unc' ? source.path : '',
@@ -346,20 +340,20 @@ export function WorkspaceConfigSection() {
   const fileRef = useRef<HTMLInputElement>(null);
   const workbenchConfig = useWorkbench((state) => state.config);
   const adoConnectionLabel = workbenchConfig?.adoBase
-    ? `${workbenchConfig.adoBase} · ${adoAuthLabel(workbenchConfig.auth ?? 'pat', locale)}`
-    : tr('请先在“工作台”里配置当前 Azure DevOps 连接', 'Configure Azure DevOps connection in Workbench first', locale);
+    ? `${workbenchConfig.adoBase} · ${t(ADO_AUTH_LABEL_KEYS[workbenchConfig.auth ?? 'pat'])}`
+    : t('settings.workspace.adoNotConfigured');
   const missingAdoFields = [
-    [tr('项目', 'Project', locale), adoProject],
-    [tr('仓库', 'Repository', locale), adoRepository],
-    [tr('分支或提交', 'Branch or Commit', locale), adoRef],
-    [tr('文件路径', 'File Path', locale), adoPath],
+    [t('settings.workspace.adoProjectField'), adoProject],
+    [t('settings.workspace.adoRepositoryField'), adoRepository],
+    [t('settings.workspace.adoRefField'), adoRef],
+    [t('settings.workspace.adoPathField'), adoPath],
   ].filter(([, value]) => !value.trim()).map(([label]) => label);
 
   const importText = (text: string, remoteSource?: WorkspaceConfigRemoteSource) => {
     try {
       setPreview({ config: parseWorkspaceConfig(text), source: remoteSource });
     } catch (err) {
-      toast.error(err, tr('配置无法导入', 'Issue importing config', locale));
+      toast.error(err, t('settings.workspace.cannotImport'));
     }
   };
 
@@ -375,7 +369,7 @@ export function WorkspaceConfigSection() {
       const result = await fetchWorkspaceConfigFromSource(remoteSource);
       setPreview(result);
     } catch (err) {
-      toast.error(err, tr('拉取配置失败', 'Issue fetching config', locale));
+      toast.error(err, t('settings.workspace.fetchFailed'));
     } finally {
       setLoading(false);
     }
@@ -386,7 +380,7 @@ export function WorkspaceConfigSection() {
       const remoteSource = parseWorkspaceConfigRemoteInput(target, workbenchConfig ?? null);
       await fetchFromRemoteSource(remoteSource);
     } catch (err) {
-      toast.error(err, tr('配置来源无效', 'Invalid config source', locale));
+      toast.error(err, t('settings.workspace.invalidSource'));
     }
   };
 
@@ -397,21 +391,18 @@ export function WorkspaceConfigSection() {
 
   return (
     <>
-      <h2 className="text-base font-semibold text-ink">{tr('配置来源', 'Config Source', locale)}</h2>
+      <h2 className="text-base font-semibold text-ink">{t('settings.workspace.sourceHeading')}</h2>
       <p className="mt-1 max-w-2xl text-xs leading-relaxed text-ink-3">
-        {tr(
-          '从团队共享的 rcx.workspace.json 一次性配好服务器、ADO、模板和更新地址。配置提供默认值：你自己改过的字段会保留本地值，其余跟随配置。凭据（如 PAT）不在配置文件里，需要单独填写。',
-          'Import server, ADO, template, and update endpoints together from a shared rcx.workspace.json. Local customizations stay protected; credentials such as PATs stay separate.',
-          locale,
-        )}
+        {t('settings.workspace.sourceDescription')}
       </p>
 
       {source && (
         <div className="mt-3 max-w-2xl rounded-lg border border-line bg-fill-1 px-3 py-2.5 text-xs text-ink-2">
           <div>
-            {tr('上次导入：', 'Last imported: ', locale)}
-            {source.name || tr('未命名配置', 'Untitled config', locale)} ·{' '}
-            {new Date(source.importedAt).toLocaleString()}
+            {t('settings.workspace.lastImported', {
+              name: source.name || t('settings.workspace.unnamedConfig'),
+              time: formatDateTime(source.importedAt),
+            })}
           </div>
           {source.kind === 'url' && (
             <div className="mt-0.5 truncate font-mono text-xs text-ink-3">{source.url}</div>
@@ -439,13 +430,7 @@ export function WorkspaceConfigSection() {
                 }}
                 className="accent-[var(--color-primary,#3370ff)]"
               />
-              <span>
-                {tr(
-                  '每天自动检查团队配置更新,有变化时提醒(不会静默改你的配置)',
-                  'Check daily for team config updates and notify on changes without overwriting silently',
-                  locale,
-                )}
-              </span>
+              <span>{t('settings.workspace.autoCheckUpdates')}</span>
             </label>
           )}
           {(source.kind === 'url' || source.kind === 'ado' || source.kind === 'unc') && (
@@ -458,7 +443,7 @@ export function WorkspaceConfigSection() {
               className="mt-2 flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
             >
               {loading ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
-              {tr('重新读取当前来源', 'Reload current source', locale)}
+              {t('settings.workspace.reloadCurrentSource')}
             </button>
           )}
         </div>
@@ -466,10 +451,10 @@ export function WorkspaceConfigSection() {
 
       <div className="mt-3 flex max-w-2xl gap-2">
         <input
-          aria-label={tr('团队配置来源', 'Team config source', locale)}
+          aria-label={t('settings.workspace.sourceInputAriaLabel')}
           value={sourceInput}
           onChange={(e) => setSourceInput(e.target.value)}
-          placeholder={tr('配置 URL、ADO 文件链接或 UNC 共享 JSON 路径', 'Config URL, ADO file link, or UNC JSON path', locale)}
+          placeholder={t('settings.workspace.sourceInputPlaceholder')}
           className="h-9 flex-1 rounded-md border border-line bg-surface-4 px-3 text-sm text-ink outline-none focus:border-primary"
         />
         <button
@@ -478,14 +463,14 @@ export function WorkspaceConfigSection() {
           className="flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
-          {tr('读取', 'Load', locale)}
+          {t('settings.workspace.loadAction')}
         </button>
         <button
           onClick={() => fileRef.current?.click()}
           className="flex h-9 items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink-2 transition hover:bg-fill-hover"
         >
           <FileUp size={14} />
-          {tr('选择文件', 'Choose File', locale)}
+          {t('settings.workspace.chooseFileAction')}
         </button>
         <input
           ref={fileRef}
@@ -500,39 +485,35 @@ export function WorkspaceConfigSection() {
       </div>
 
       <div className="mt-4 max-w-2xl rounded-lg border border-line bg-surface-4 px-4 py-3">
-        <div className="text-sm font-medium text-ink">{tr('从当前 Azure DevOps 仓库读取', 'Load from Current Azure DevOps Repo', locale)}</div>
+        <div className="text-sm font-medium text-ink">{t('settings.workspace.fromAdoHeading')}</div>
         <p className="mt-1 text-xs leading-relaxed text-ink-3">
-          {tr(
-            '复用“工作台”里已配置的 ADO 地址和认证，从指定项目/仓库/ref/path 读取单个 `rcx.workspace.json` 文件。也可以直接把 ADO 仓库文件链接粘贴到上面的统一输入框里自动回填。',
-            'Reuses your Workbench ADO connection and auth to fetch `rcx.workspace.json` from a project, repo, ref, and path. You can also paste an ADO file URL above.',
-            locale,
-          )}
+          {t('settings.workspace.fromAdoDescription')}
         </p>
         <div className="mt-1 text-xs text-ink-3">{adoConnectionLabel}</div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <input
-            aria-label="ADO 项目"
+            aria-label={t('settings.workspace.adoProjectAriaLabel')}
             value={adoProject}
             onChange={(event) => setAdoProject(event.target.value)}
-            placeholder={tr('项目名，如 Road Map', 'Project name, e.g. Road Map', locale)}
+            placeholder={t('settings.workspace.adoProjectPlaceholder')}
             className="h-9 rounded-md border border-line bg-surface px-3 text-sm text-ink outline-none focus:border-primary"
           />
           <input
-            aria-label="ADO 仓库"
+            aria-label={t('settings.workspace.adoRepoAriaLabel')}
             value={adoRepository}
             onChange={(event) => setAdoRepository(event.target.value)}
-            placeholder={tr('仓库名，如 Rocket X', 'Repository name, e.g. Rocket X', locale)}
+            placeholder={t('settings.workspace.adoRepoPlaceholder')}
             className="h-9 rounded-md border border-line bg-surface px-3 text-sm text-ink outline-none focus:border-primary"
           />
           <input
-            aria-label="ADO 分支或提交"
+            aria-label={t('settings.workspace.adoRefAriaLabel')}
             value={adoRef}
             onChange={(event) => setAdoRef(event.target.value)}
             placeholder="refs/heads/main"
             className="h-9 rounded-md border border-line bg-surface px-3 text-sm text-ink outline-none focus:border-primary"
           />
           <input
-            aria-label="ADO 文件路径"
+            aria-label={t('settings.workspace.adoPathAriaLabel')}
             value={adoPath}
             onChange={(event) => setAdoPath(event.target.value)}
             placeholder="/config/rcx.workspace.json"
@@ -541,8 +522,9 @@ export function WorkspaceConfigSection() {
         </div>
         {missingAdoFields.length > 0 ? (
           <p className="mt-2 text-xs text-warning">
-            {tr('读取前请填写：', 'Required before loading: ', locale)}
-            {missingAdoFields.join(locale === 'en' ? ', ' : '、')}
+            {t('settings.workspace.missingAdoFields', {
+              fields: missingAdoFields.join(t('settings.common.listSeparator')),
+            })}
           </p>
         ) : null}
         <button
@@ -566,7 +548,7 @@ export function WorkspaceConfigSection() {
           className="mt-3 flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
         >
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
-          {tr('从 ADO 读取', 'Load from ADO', locale)}
+          {t('settings.workspace.loadFromAdoAction')}
         </button>
       </div>
 

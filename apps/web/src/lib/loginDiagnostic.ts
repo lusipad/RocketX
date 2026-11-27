@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { sanitizeDiagnosticText, writeDiagnostic } from './diagnostics';
 import { ensureHttpOrigin, httpFetch } from './http';
 
@@ -65,42 +66,32 @@ export function classifyLoginFailure(error: unknown): LoginFailureKind {
 }
 
 function summaryForFailure(kind: LoginFailureKind, stage: LoginFailureStage): string {
-  if (kind === 'invalid_address') return '服务器地址无效，请填写以 http:// 或 https:// 开头的完整地址';
-  if (kind === 'credentials') return '用户名或密码错误';
-  if (kind === 'session_expired') return '登录已失效，请重新登录';
-  if (kind === 'not_rocket_chat') return '该地址不是可用的 Rocket.Chat 服务，请检查是否填到了正确的站点根地址';
+  if (kind === 'invalid_address') return t('auth.diagnostic.summary.invalidAddress');
+  if (kind === 'credentials') return t('auth.diagnostic.summary.credentials');
+  if (kind === 'session_expired') return t('auth.diagnostic.summary.sessionExpired');
+  if (kind === 'not_rocket_chat') return t('auth.diagnostic.summary.notRocketChat');
   if (kind === 'tls') {
-    return stage === 'probe'
-      ? '无法检查服务器，请确认该 HTTPS 证书在这台机器上受信任'
-      : '登录请求失败，请确认该 HTTPS 证书在这台机器上受信任';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.tlsProbe' : 'auth.diagnostic.summary.tlsLogin');
   }
   if (kind === 'dns') {
-    return stage === 'probe'
-      ? '无法检查服务器，请确认服务器地址可解析且当前网络可访问'
-      : '登录请求失败，请确认服务器地址可解析且当前网络可访问';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.dnsProbe' : 'auth.diagnostic.summary.dnsLogin');
   }
   if (kind === 'proxy') {
-    return stage === 'probe'
-      ? '无法检查服务器，请检查代理、网关或 VPN 配置'
-      : '登录请求失败，请检查代理、网关或 VPN 配置';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.proxyProbe' : 'auth.diagnostic.summary.proxyLogin');
   }
   if (kind === 'timeout') {
-    return stage === 'probe' ? '检查服务器超时，请稍后重试' : '登录请求超时，请稍后重试';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.timeoutProbe' : 'auth.diagnostic.summary.timeoutLogin');
   }
   if (kind === 'scope') {
-    return stage === 'probe'
-      ? '桌面端当前没有权限访问该服务器，请检查跨域或网络白名单配置'
-      : '桌面端当前没有权限发起登录请求，请检查跨域或网络白名单配置';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.scopeProbe' : 'auth.diagnostic.summary.scopeLogin');
   }
   if (kind === 'http_status') {
-    return stage === 'probe' ? '服务器检查失败，请稍后重试' : '登录请求失败，请稍后重试';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.httpStatusProbe' : 'auth.diagnostic.summary.httpStatusLogin');
   }
   if (kind === 'unreachable') {
-    return stage === 'probe'
-      ? '无法检查服务器，请检查地址、网络、VPN 或桌面端访问权限'
-      : '登录请求没有成功发出，请检查地址、网络、VPN 或桌面端访问权限';
+    return t(stage === 'probe' ? 'auth.diagnostic.summary.unreachableProbe' : 'auth.diagnostic.summary.unreachableLogin');
   }
-  return stage === 'probe' ? '检查服务器失败，请查看详细原因后重试' : '登录失败，请查看详细原因后重试';
+  return t(stage === 'probe' ? 'auth.diagnostic.summary.unknownProbe' : 'auth.diagnostic.summary.unknownLogin');
 }
 
 function detailLabel(kind: LoginFailureKind, raw: string): string | null {
@@ -108,22 +99,24 @@ function detailLabel(kind: LoginFailureKind, raw: string): string | null {
   if (kind === 'invalid_address' || kind === 'credentials' || kind === 'session_expired' || kind === 'not_rocket_chat') {
     return null;
   }
-  if (kind === 'dns') return `域名解析失败：${raw}`;
-  if (kind === 'tls') return `证书/TLS 校验失败：${raw}`;
-  if (kind === 'proxy') return `代理或网关连接失败：${raw}`;
-  if (kind === 'timeout') return `请求超时：${raw}`;
-  if (kind === 'scope') return `桌面端网络权限受限：${raw}`;
+  if (kind === 'dns') return t('auth.diagnostic.detail.dns', { raw });
+  if (kind === 'tls') return t('auth.diagnostic.detail.tls', { raw });
+  if (kind === 'proxy') return t('auth.diagnostic.detail.proxy', { raw });
+  if (kind === 'timeout') return t('auth.diagnostic.detail.timeout', { raw });
+  if (kind === 'scope') return t('auth.diagnostic.detail.scope', { raw });
   if (kind === 'http_status') {
     const status = extractHttpStatus(raw);
-    return status ? `服务器返回 HTTP ${status}：${raw}` : `服务器返回异常状态：${raw}`;
+    return status
+      ? t('auth.diagnostic.detail.httpStatusWithCode', { status, raw })
+      : t('auth.diagnostic.detail.httpStatusUnknown', { raw });
   }
   if (kind === 'unreachable') {
     if (/^(?:unreachable|unreadable)$/i.test(raw)) {
-      return '桌面网络通道没有读取到可用响应；常见原因是代理或网关中断、系统证书不受信任，或服务器提前关闭连接';
+      return t('auth.diagnostic.detail.unreachableEmpty');
     }
-    return `底层网络错误：${raw}`;
+    return t('auth.diagnostic.detail.unreachableRaw', { raw });
   }
-  return `底层原因：${raw}`;
+  return t('auth.diagnostic.detail.unknown', { raw });
 }
 
 export function describeLoginFailure(

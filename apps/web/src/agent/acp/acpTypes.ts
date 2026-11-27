@@ -208,6 +208,15 @@ export interface AcpSessionSetModeResult {
   [key: string]: unknown;
 }
 
+export interface AcpSessionSetModelParams {
+  sessionId: string;
+  modelId: string;
+}
+
+export interface AcpSessionSetModelResult {
+  [key: string]: unknown;
+}
+
 export interface AcpSessionCancelParams {
   sessionId: string;
 }

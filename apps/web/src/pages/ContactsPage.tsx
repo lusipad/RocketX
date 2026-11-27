@@ -14,11 +14,18 @@ import AliasDialog from '../components/AliasDialog';
 import Avatar from '../components/Avatar';
 import UserCard, { type UserCardTarget } from '../components/UserCard';
 import { SkeletonList } from '../components/Skeleton';
+import { useI18n, useT, type MessageKey } from '../i18n';
 
 type Tab = 'members' | 'groups';
 
+const TABS: { key: Tab; labelKey: MessageKey; icon: typeof Users }[] = [
+  { key: 'members', labelKey: 'pages.contacts.tab.members', icon: Users },
+  { key: 'groups', labelKey: 'pages.contacts.tab.groups', icon: UsersRound },
+];
+
 /** 成员列表（directory 分页 + 搜索） */
 function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void }) {
+  const { t, tp } = useI18n();
   const startDM = useChat((s) => s.startDM);
   const setModule = useUI((s) => s.setModule);
   const seedUserStatus = useChat((s) => s.seedUserStatus);
@@ -134,7 +141,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
       await startDM(username);
       setModule('messages');
     } catch (err) {
-      toast.error(err, '发起会话失败');
+      toast.error(err, t('pages.contacts.startDmFailed'));
     } finally {
       setBusy(null);
     }
@@ -148,19 +155,19 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索成员，支持拼音（如 zhangsan / zs）"
+            placeholder={t('pages.contacts.searchMembersPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
         <span className="rounded-full border border-line-soft bg-surface-2 px-2.5 py-0.5 text-xs text-ink-3">
           {keyword ? (
-            `找到 ${users.length} 人`
+            tp(users.length, 'pages.contacts.foundMembersOne', 'pages.contacts.foundMembersOther')
           ) : (
             <>
-              共 {total} 人
+              {tp(total, 'pages.contacts.totalMembersOne', 'pages.contacts.totalMembersOther')}
               {total > users.length && (
                 <span className="ml-1 text-warning">
-                  （显示前 {users.length} 人，可按准确姓名或用户名继续搜索）
+                  {t('pages.contacts.partialRosterHint', { count: users.length })}
                 </span>
               )}
             </>
@@ -176,13 +183,12 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
         )}
         {!loading && error && (
           <div className="px-6 py-10 text-center">
-            <div className="text-sm text-danger">无法获取成员列表</div>
+            <div className="text-sm text-danger">{t('pages.contacts.loadMembersFailed')}</div>
             <div className="mx-auto mt-2 max-w-lg text-xs leading-relaxed break-words text-ink-3">
               {error}
             </div>
             <div className="mt-3 text-xs text-ink-3">
-              可能是账号缺少查看用户目录的权限，请联系 Rocket.Chat 管理员，
-              或在管理后台开启「用户目录」相关设置。
+              {t('pages.contacts.loadMembersPermissionHint')}
             </div>
           </div>
         )}
@@ -207,7 +213,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-ink">
                     {shownName}
-                    {u.username === me && <span className="ml-1 text-xs text-ink-3">（我）</span>}
+                    {u.username === me && <span className="ml-1 text-xs text-ink-3">{t('pages.contacts.meTag')}</span>}
                   </div>
                   <div className="truncate text-xs text-ink-3">
                     @{u.username}
@@ -221,10 +227,10 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                         setAliasFor(u);
                       }}
                       className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:text-primary"
-                      title={alias ? `当前备注：${alias}` : '给这个人起个备注名'}
+                      title={alias ? t('pages.contacts.currentAliasTitle', { alias }) : t('pages.contacts.setAliasTitle')}
                     >
                       <Tag size={14} />
-                      {alias ? '改备注' : '备注'}
+                      {t(alias ? 'pages.contacts.editAlias' : 'pages.contacts.addAlias')}
                     </button>
                     <button
                       onClick={(e) => {
@@ -234,7 +240,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
                       className="flex items-center gap-1 rounded-md border border-line px-3 py-1.5 text-xs text-ink-2 transition hover:border-primary hover:bg-primary hover:text-white"
                     >
                       <MessageCircle size={14} />
-                      {busy === u.username ? '打开中…' : '发消息'}
+                      {t(busy === u.username ? 'pages.contacts.opening' : 'pages.contacts.sendMessage')}
                     </button>
                   </div>
                 )}
@@ -242,12 +248,12 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
             );
           })}
         {!loading && !error && users.length === 0 && (
-          <div className="py-10 text-center text-sm text-ink-3">未找到匹配的成员</div>
+          <div className="py-10 text-center text-sm text-ink-3">{t('pages.contacts.noMatchingMembers')}</div>
         )}
       </div>
       {aliasFor && (
         <AliasDialog
-          title="给联系人设置备注"
+          title={t('pages.contacts.aliasDialogTitle')}
           originalName={aliasFor.name || aliasFor.username}
           current={aliases[`u:${aliasFor.username}`]}
           onSubmit={(alias) => setUserAlias(aliasFor.username, alias)}
@@ -260,6 +266,7 @@ function MembersTab({ onOpenCard }: { onOpenCard: (u: UserCardTarget) => void })
 
 /** 我的群组（来自订阅） */
 function GroupsTab() {
+  const { t, tp } = useI18n();
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const openRoom = useChat((s) => s.openRoom);
@@ -296,11 +303,13 @@ function GroupsTab() {
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索群组，支持拼音"
+            placeholder={t('pages.contacts.searchGroupsPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
-        <span className="rounded-full border border-line-soft bg-surface-2 px-2.5 py-0.5 text-xs text-ink-3">共 {groups.length} 个群组</span>
+        <span className="rounded-full border border-line-soft bg-surface-2 px-2.5 py-0.5 text-xs text-ink-3">
+          {tp(groups.length, 'pages.contacts.totalGroupsOne', 'pages.contacts.totalGroupsOther')}
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {groups.map(({ sub, room, name }) => (
@@ -320,13 +329,15 @@ function GroupsTab() {
                 <span className="truncate">{name}</span>
               </div>
               <div className="truncate text-xs text-ink-3">
-                {room?.usersCount ? `${room.usersCount} 名成员` : sub.t === 'p' ? '私有群组' : '公开频道'}
+                {room?.usersCount
+                  ? tp(room.usersCount, 'pages.contacts.groupMembersOne', 'pages.contacts.groupMembersOther')
+                  : t(sub.t === 'p' ? 'pages.contacts.privateGroup' : 'pages.contacts.publicChannel')}
               </div>
             </div>
           </div>
         ))}
         {groups.length === 0 && (
-          <div className="py-10 text-center text-sm text-ink-3">你还没加入任何群组。点左上角「发起聊天」建一个，或者让同事把你拉进去。</div>
+          <div className="py-10 text-center text-sm text-ink-3">{t('pages.contacts.emptyGroups')}</div>
         )}
       </div>
     </>
@@ -335,22 +346,18 @@ function GroupsTab() {
 
 /** 通讯录模块：成员 / 我的群组 */
 export default function ContactsPage() {
+  const t = useT();
   const [tab, setTab] = useState<Tab>('members');
   const localMode = useAuth((s) => s.localMode);
   const exitLocalMode = useAuth((s) => s.exitLocalMode);
   const [card, setCard] = useState<UserCardTarget | null>(null);
 
-  const TABS: { key: Tab; label: string; icon: typeof Users }[] = [
-    { key: 'members', label: '成员', icon: Users },
-    { key: 'groups', label: '我的群组', icon: UsersRound },
-  ];
-
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="flex w-[216px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
-        <div className="px-2.5 py-2 text-base font-semibold text-ink">通讯录</div>
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">{t('pages.contacts.title')}</div>
         <div className="flex flex-col gap-0.5">
-          {TABS.map(({ key, label, icon: Icon }) => (
+          {TABS.map(({ key, labelKey, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -361,7 +368,7 @@ export default function ContactsPage() {
               }`}
             >
               <Icon size={16} className={tab === key ? 'text-primary' : ''} />
-              {label}
+              {t(labelKey)}
             </button>
           ))}
         </div>
@@ -373,14 +380,14 @@ export default function ContactsPage() {
               <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-line bg-surface-4 text-ink-3 shadow-raise">
                 <Users size={26} />
               </span>
-              <div className="text-sm font-medium text-ink">当前处于本地使用模式</div>
-              <p className="max-w-sm text-xs leading-5 text-ink-3">连接 Rocket.Chat 服务器后即可浏览团队成员花名册与群组目录。</p>
+              <div className="text-sm font-medium text-ink">{t('pages.contacts.localModeTitle')}</div>
+              <p className="max-w-sm text-xs leading-5 text-ink-3">{t('pages.contacts.localModeHint')}</p>
               <button
                 type="button"
                 onClick={() => void exitLocalMode()}
                 className="mt-1 h-9 rounded-xl bg-primary px-4 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
               >
-                连接 Rocket.Chat
+                {t('pages.contacts.connectRocketChat')}
               </button>
             </div>
           </div>

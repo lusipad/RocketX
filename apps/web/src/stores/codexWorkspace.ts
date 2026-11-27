@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import {
   AppServerController,
   permissionSettings,
@@ -32,6 +33,7 @@ import {
 } from '../lib/codexImages';
 import type { ButlerSource } from '../lib/butlerContext';
 import { isTauriRuntime } from '../lib/client';
+import { createGitCheckpoint } from '../platform/desktopCommands';
 import { useAgentEnvironments } from './agentEnvironments';
 import {
   boundedDetail,
@@ -207,7 +209,7 @@ function id(prefix: string): string {
 }
 
 async function withControllerOperation<T>(operation: () => Promise<T>): Promise<T> {
-  if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+  if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
   const token = Symbol('controller-operation');
   controllerOperations.add(token);
   try {
@@ -244,12 +246,13 @@ function isActiveWriterError(value: unknown): boolean {
 }
 
 function isRuntimeDisconnectedError(value: unknown): boolean {
-  return /Codex Runtime 尚未连接|Codex app-server process is not active/i.test(message(value));
+  return /Codex Runtime 尚未连接|Codex Runtime is not connected|Codex app-server process is not active/i.test(message(value));
 }
 
 function continuationName(thread: Thread): string {
-  const base = thread.name?.trim() || thread.preview.trim() || 'Codex 任务';
-  return base.endsWith('· RocketX 继续') ? base : `${base} · RocketX 继续`;
+  const base = thread.name?.trim() || thread.preview.trim() || t('agent.codexWorkspace.defaultTitle');
+  const suffix = t('agent.codexWorkspace.continuationSuffix');
+  return base.endsWith('· RocketX 继续') || base.endsWith(suffix) ? base : `${base} ${suffix}`;
 }
 
 function persist(state: CodexWorkspaceState): void {
@@ -265,7 +268,7 @@ function persist(state: CodexWorkspaceState): void {
 }
 
 function selection(state = useCodexWorkspace.getState()): CodexRuntimeSelection {
-  if (!state.selectedModel) throw new Error('Codex 尚未返回可用模型');
+  if (!state.selectedModel) throw new Error(t('agent.codexWorkspace.noModelSelected'));
   return {
     model: state.selectedModel,
     effort: state.selectedEffort,
@@ -280,7 +283,7 @@ function defaultSelection(catalog: CodexCatalog, saved: CodexWorkspaceState): {
   const model = catalog.models.find((item) => (
     item.model === saved.selectedModel || item.id === saved.selectedModel
   )) ?? catalog.models.find((item) => item.isDefault) ?? catalog.models[0];
-  if (!model) throw new Error('当前 Codex Runtime 没有可用模型，请升级或检查模型配置。');
+  if (!model) throw new Error(t('agent.codexWorkspace.noModelsUpgrade'));
   const effort = saved.selectedEffort
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === saved.selectedEffort)
     ? saved.selectedEffort
@@ -337,7 +340,7 @@ function threadSelection(thread: CodexThreadState, state = useCodexWorkspace.get
 
 async function ensureControllerWorkspace(workspaceRoot: string): Promise<void> {
   if (!workspaceRoot.trim()) return;
-  if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+  if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
   if (connectRequest) await connectRequest;
   if (!controller) await useCodexWorkspace.getState().connect();
   const activeController = controller;
@@ -505,14 +508,14 @@ function onNotification(method: string, value: unknown): void {
   if (method === 'item/reasoning/summaryTextDelta' || method === 'item/reasoning/textDelta') {
     const delta = typeof params.delta === 'string' ? params.delta : '';
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-reasoning';
-    appendEventDetail(threadId, itemId, delta, { type: 'reasoning', title: '思考', status: 'running' });
+    appendEventDetail(threadId, itemId, delta, { type: 'reasoning', title: t('agent.codexWorkspace.event.reasoning'), status: 'running' });
     return;
   }
   if (method === 'item/plan/delta') {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-plan';
     appendEventDetail(threadId, itemId, typeof params.delta === 'string' ? params.delta : '', {
       type: 'plan',
-      title: '更新计划',
+      title: t('agent.codexWorkspace.event.planUpdate'),
       status: 'running',
     });
     return;
@@ -521,7 +524,7 @@ function onNotification(method: string, value: unknown): void {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-command';
     appendEventDetail(threadId, itemId, typeof params.delta === 'string' ? params.delta : '', {
       type: 'commandExecution',
-      title: '运行命令',
+      title: t('agent.codexWorkspace.event.command'),
       status: 'running',
     });
     return;
@@ -539,7 +542,7 @@ function onNotification(method: string, value: unknown): void {
           : [...thread.events, {
               id: `turn-diff-${turnId}`,
               type: 'turnDiff',
-              title: '代码改动',
+              title: t('agent.codexWorkspace.event.codeChange'),
               detail: diff,
               status: 'running',
             }],
@@ -552,9 +555,9 @@ function onNotification(method: string, value: unknown): void {
     upsertEvent(threadId, {
       id: `terminal-${itemId}`,
       type: 'terminal',
-      title: '终端交互',
+      title: t('agent.codexWorkspace.event.terminalInput'),
       summary: typeof params.processId === 'string' ? params.processId : undefined,
-      detail: '已向运行中的命令发送输入',
+      detail: t('agent.codexWorkspace.event.terminalInputDetail'),
       status: 'completed',
     });
     return;
@@ -563,7 +566,7 @@ function onNotification(method: string, value: unknown): void {
     const itemId = typeof params.itemId === 'string' ? params.itemId : 'active-mcp';
     appendEventDetail(threadId, itemId, typeof params.message === 'string' ? `${params.message}\n` : '', {
       type: 'mcpToolCall',
-      title: '调用工具',
+      title: t('agent.codexWorkspace.event.toolCall'),
       status: 'running',
     });
     return;
@@ -575,8 +578,8 @@ function onNotification(method: string, value: unknown): void {
     upsertEvent(threadId, {
       id: itemId,
       type: 'fileChange',
-      title: '修改文件',
-      summary: paths.join('、'),
+      title: t('agent.codexWorkspace.event.fileChange'),
+      summary: paths.join(t('agent.common.listSep')),
       status: 'running',
     });
     return;
@@ -592,7 +595,7 @@ function onNotification(method: string, value: unknown): void {
     upsertEvent(threadId, {
       id: `turn-plan-${turnId}`,
       type: 'plan',
-      title: '计划',
+      title: t('agent.codexWorkspace.event.plan'),
       summary: typeof params.explanation === 'string' ? params.explanation : undefined,
       detail: lines.join('\n') || undefined,
       status: 'running',
@@ -612,7 +615,7 @@ function onNotification(method: string, value: unknown): void {
     upsertEvent(threadId, {
       id: `auto-review-${itemId}`,
       type: 'autoReview',
-      title: '替我审批',
+      title: t('agent.codexWorkspace.event.approval'),
       status: method.endsWith('/started') ? 'running' : 'completed',
     });
     return;
@@ -621,7 +624,7 @@ function onNotification(method: string, value: unknown): void {
     upsertEvent(threadId, {
       id: id(method),
       type: 'warning',
-      title: method === 'error' ? '运行错误' : '运行提示',
+      title: method === 'error' ? t('agent.codexWorkspace.event.error') : t('agent.codexWorkspace.event.notice'),
       detail: JSON.stringify(params).slice(0, 1_000),
       status: method === 'error' ? 'failed' : 'completed',
     });
@@ -639,9 +642,9 @@ function onNotification(method: string, value: unknown): void {
     activeTurnId: undefined,
     streamingText: '',
     error: interrupted
-      ? 'Pi 本轮已中断'
+      ? t('agent.codexWorkspace.piInterrupted')
       : failed
-        ? ((() => { const msg = record(turn.error).message; return typeof msg === 'string' && msg.trim() ? msg.trim() : ''; })() || 'Pi 本轮未完成')
+        ? ((() => { const msg = record(turn.error).message; return typeof msg === 'string' && msg.trim() ? msg.trim() : ''; })() || t('agent.codexWorkspace.piIncomplete'))
         : null,
     events: thread.events.map((event) => event.status === 'running'
       ? { ...event, status: unsuccessful ? 'failed' as const : 'completed' as const }
@@ -650,6 +653,12 @@ function onNotification(method: string, value: unknown): void {
       ? [...thread.messages, { id: id('assistant'), role: 'assistant', text: streamed }]
       : thread.messages,
   }));
+  const turnWorkspaceRoot = currentThreadState(useCodexWorkspace.getState(), threadId).workspaceRoot
+    || useCodexWorkspace.getState().workspaceRoot;
+  if (!unsuccessful && isTauriRuntime() && turnWorkspaceRoot?.trim()) {
+    const turnId = typeof turn.id === 'string' && turn.id.trim() ? turn.id.trim() : `pi-${Date.now()}`;
+    void createGitCheckpoint(turnWorkspaceRoot, t('agent.diff.turnCheckpointLabel'), turnId).catch(() => undefined);
+  }
   void reloadThread(threadId)
     .catch(() => undefined)
     .finally(() => void useCodexWorkspace.getState().refreshThreads().catch(() => undefined))
@@ -666,27 +675,27 @@ async function onServerRequest(request: {
   const backgroundPermission = [...(backgroundAutomationPermissions.get(threadId)?.values() ?? [])].at(-1);
   if (backgroundPermission) {
     if (request.policy === 'host-input') {
-      throw new Error('该已安排任务需要用户输入，请手动运行后回答');
+      throw new Error(t('agent.codexAutomation.needsUserInput'));
     }
     if (request.method === 'item/permissions/requestApproval') {
       if (backgroundPermission === 'ask') {
-        throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+        throw new Error(t('agent.codexAutomation.needsApproval'));
       }
       return { permissions: {}, scope: 'turn', strictAutoReview: true };
     }
     if (request.policy === 'host-approval') {
       if (backgroundPermission === 'ask') {
-        throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+        throw new Error(t('agent.codexAutomation.needsApproval'));
       }
       return { decision: 'decline' };
     }
-    throw new Error(`无人值守任务不能处理 ${request.method}`);
+    throw new Error(t('agent.codexAutomation.unattendedUnsupported', { method: request.method }));
   }
   if (!threadId || !useCodexWorkspace.getState().threadStates[threadId]) {
-    throw new Error('请求不属于当前 Codex 任务');
+    throw new Error(t('agent.codexWorkspace.wrongThreadRequest'));
   }
   if (request.policy !== 'host-approval' && request.policy !== 'host-input') {
-    throw new Error(`当前 Codex 工作区不接受 ${request.method}`);
+    throw new Error(t('agent.codexWorkspace.unsupportedRequest', { method: request.method }));
   }
   const requestId = id('request');
   const kind = request.method === 'item/tool/requestUserInput'
@@ -721,7 +730,7 @@ function makeController(): AppServerController {
     },
     onServerRequest: (request) => {
       if (controller !== managedController || useCodexWorkspace.getState().scope !== scope) {
-        throw new Error('运行服务或账号已切换');
+        throw new Error(t('agent.codexWorkspace.accountSwitched'));
       }
       return onServerRequest(request);
     },
@@ -739,7 +748,7 @@ function makeController(): AppServerController {
             ? current.streamingText
             : thread.streamingText).trim();
           const interruptionError = interrupted && queuedMessages.length > 0
-            ? `${error.message}；${queuedMessages.length} 条排队消息未执行`
+            ? t('agent.codexWorkspace.queuedUnrun', { message: error.message, count: queuedMessages.length })
             : error.message;
           return [threadId, {
             ...thread,
@@ -791,7 +800,7 @@ async function sendThreadMessageUnsafe(
   const runtime = controller;
   const assertCurrentRuntime = () => {
     if (!runtime || controller !== runtime || useCodexWorkspace.getState().scope !== scope) {
-      throw new Error('运行服务或账号已切换，原请求未继续发送');
+      throw new Error(t('agent.codexWorkspace.accountSwitchedNotSent'));
     }
   };
   assertCurrentRuntime();
@@ -808,7 +817,7 @@ async function sendThreadMessageUnsafe(
       }));
       return;
     }
-    if (!thread.activeTurnId) throw new Error('Codex Turn 尚未就绪，暂时无法 Steer');
+    if (!thread.activeTurnId) throw new Error(t('agent.codexWorkspace.turnNotReadyForSteer'));
     const input: UserInput[] = [{ type: 'text', text, text_elements: [] }];
     onSubmitted?.();
     await runtime!.steerTurn(threadId, thread.activeTurnId, input);
@@ -822,7 +831,7 @@ async function sendThreadMessageUnsafe(
   let materialized = { paths: [] as string[], roots: [] as string[] };
   if (imageList.length > 0) {
     const sessionId = runtime!.currentSessionId;
-    if (!sessionId) throw new Error('Codex Runtime 尚未准备好附件目录');
+    if (!sessionId) throw new Error(t('agent.codexWorkspace.attachmentDirNotReady'));
     materialized = await materializeCodexImages(sessionId, imageList);
     assertCurrentRuntime();
   }
@@ -907,7 +916,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   hydrate: (scope) => {
     if (!scope || scope === get().scope) return;
     stopDetachedRuntime();
-    rejectPendingRequests('账号已切换');
+    rejectPendingRequests(t('agent.codexWorkspace.reject.accountSwitched'));
     const saved = readCodexWorkspaceProfile(scope);
     const workspaceRoot = typeof saved.workspaceRoot === 'string' ? saved.workspaceRoot : '';
     const workspaceRoots = Array.isArray(saved.workspaceRoots)
@@ -956,7 +965,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
     const scope = current.scope;
     defaultWorkspaceRequest ??= readCodexDefaultWorkspace()
       .then((value) => {
-        if (typeof value !== 'string' || !value.trim()) throw new Error('默认工作区路径不可用');
+        if (typeof value !== 'string' || !value.trim()) throw new Error(t('agent.codexWorkspace.defaultWorkspaceUnavailable'));
         return value;
       })
       .catch((error) => {
@@ -965,7 +974,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       });
     butlerWorkspaceRequest ??= readCodexButlerWorkspace()
       .then((value) => {
-        if (typeof value !== 'string' || !value.trim()) throw new Error('管家工作区路径不可用');
+        if (typeof value !== 'string' || !value.trim()) throw new Error(t('agent.codexWorkspace.butlerWorkspaceUnavailable'));
         return value;
       })
       .catch((error) => {
@@ -1010,7 +1019,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   setWorkspaceRoot: async (workspaceRoot) => {
-    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+    if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
     const normalized = workspaceRoot.trim();
     const current = get();
     const systemRootsReady = Boolean(current.defaultWorkspaceRoot && current.butlerWorkspaceRoot);
@@ -1075,8 +1084,8 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   connect: async (options) => {
-    if (!get().workspaceRoot) throw new Error('请先选择工作区');
-    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+    if (!get().workspaceRoot) throw new Error(t('agent.codexWorkspace.selectWorkspace'));
+    if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
     if (connectRequest) return connectRequest;
     const generation = ++connectionGeneration;
     const scope = get().scope;
@@ -1141,10 +1150,10 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       await ensureControllerWorkspace(workspaceRoot);
       const runtime = controller;
       if (!runtime || get().scope !== scope || get().workspaceRoot !== workspaceRoot) {
-        throw new Error('新任务的账号或工作区已切换');
+        throw new Error(t('agent.codexWorkspace.newTaskSwitched'));
       }
       const thread = await runtime.startThread(runtimeSelection, name, workspaceRoot);
-      if (get().scope !== scope || controller !== runtime) throw new Error('新任务的运行服务或账号已切换');
+      if (get().scope !== scope || controller !== runtime) throw new Error(t('agent.codexWorkspace.newTaskRuntimeSwitched'));
       set((state) => ({
         threadStates: {
           ...state.threadStates,
@@ -1166,14 +1175,14 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   startTask: async (text, name, target) => {
     return withControllerOperation(async () => {
       const prompt = text.trim();
-      if (!prompt) throw new Error('任务内容不能为空');
+      if (!prompt) throw new Error(t('agent.codexHandoff.emptyPrompt'));
       const workspaceRoot = target?.workspaceRoot || get().workspaceRoot;
       const scope = get().scope;
       await ensureControllerWorkspace(workspaceRoot);
       const runtimeSelection = selection();
       const runtime = controller!;
       const thread = await runtime.startThread(runtimeSelection, name, workspaceRoot);
-      if (get().scope !== scope || controller !== runtime) throw new Error('后台任务的账号或运行服务已切换');
+      if (get().scope !== scope || controller !== runtime) throw new Error(t('agent.codexWorkspace.backgroundSwitched'));
       set((state) => ({
         threadStates: {
           ...state.threadStates,
@@ -1244,7 +1253,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         if (controller === activeController) detachRuntime();
         void activeController.stop().catch(() => undefined);
         await get().connect({ refreshThreads: false });
-        if (!controller) throw new Error('Codex Runtime 重新连接失败');
+        if (!controller) throw new Error(t('agent.codexWorkspace.reconnectFailed'));
         activeController = controller;
         result = await loadThread();
       }
@@ -1312,19 +1321,19 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   refreshFromCodex: async () => {
-    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+    if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
     const current = get();
-    if (!current.workspaceRoot) throw new Error('请先选择工作区');
-    if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
+    if (!current.workspaceRoot) throw new Error(t('agent.codexWorkspace.selectWorkspace'));
+    if (!current.activeThreadId) throw new Error(t('agent.codexWorkspace.openTaskFirst'));
     const activeThread = currentThreadState(current, current.activeThreadId, current.status);
     if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
-      throw new Error('任务运行中，完成后再从 Codex 刷新');
+      throw new Error(t('agent.codexWorkspace.runningRefreshBlocked'));
     }
-    if (current.status === 'connecting') throw new Error('Codex 正在连接，请稍后刷新');
+    if (current.status === 'connecting') throw new Error(t('agent.codexWorkspace.connectingRefreshBlocked'));
 
     const threadId = current.activeThreadId;
     const knownTurnIds = new Set(activeThread.turns.map((turn) => turn.id));
-    rejectPendingRequests('正在从 Codex 刷新', threadId);
+    rejectPendingRequests(t('agent.codexWorkspace.reject.refreshing'), threadId);
     setThreadState(threadId, (thread) => ({
       ...thread,
       status: 'connecting',
@@ -1417,20 +1426,20 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   handoffToCodex: async () => {
     const current = get();
-    if (!current.activeThreadId) throw new Error('请先打开一个 Codex 任务');
-    if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+    if (!current.activeThreadId) throw new Error(t('agent.codexWorkspace.openTaskFirst'));
+    if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
     const activeThread = currentThreadState(current, current.activeThreadId, current.status);
     if (connectRequest || activeThread.status === 'connecting') {
-      throw new Error('Codex 正在连接，请稍后再切换到 Codex App');
+      throw new Error(t('agent.codexWorkspace.connectingHandoffBlocked'));
     }
     if (activeThread.activeTurnId || activeThread.status === 'running' || activeThread.status === 'waiting-input') {
-      throw new Error('任务运行中，完成或停止后再切换到 Codex App');
+      throw new Error(t('agent.codexWorkspace.runningHandoffBlocked'));
     }
     if (backgroundAutomationPermissions.size > 0) {
-      throw new Error('已安排任务正在运行，完成后再切换到 Codex App');
+      throw new Error(t('agent.codexWorkspace.automationHandoffBlocked'));
     }
     if (controllerOperations.size > 0) {
-      throw new Error('RocketX 正在处理其他 Codex 操作，完成后再切换到 Codex App');
+      throw new Error(t('agent.codexWorkspace.busyOpHandoffBlocked'));
     }
     const otherTaskRunning = Object.entries(current.threadStates).some(([threadId, thread]) =>
       threadId !== current.activeThreadId
@@ -1443,11 +1452,11 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       )
     );
     if (otherTaskRunning) {
-      throw new Error('还有其他 RocketX 任务正在运行，完成或停止后再切换到 Codex App');
+      throw new Error(t('agent.codexWorkspace.otherTasksHandoffBlocked'));
     }
     handoffInProgress = true;
     try {
-      rejectPendingRequests('会话已交给 Codex App', current.activeThreadId);
+      rejectPendingRequests(t('agent.codexWorkspace.reject.handedOff'), current.activeThreadId);
       const activeController = controller;
       await unsubscribeThreadIfSupported(activeController, current.activeThreadId).catch(() => undefined);
       if (activeController) {
@@ -1494,7 +1503,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
         await controller!.interruptTurn(threadId, thread.activeTurnId).catch(() => undefined);
       }
       await controller!.archiveThread(threadId);
-      rejectPendingRequests('任务已归档', threadId);
+      rejectPendingRequests(t('agent.codexWorkspace.reject.archived'), threadId);
       set((current) => ({
         threads: current.threads.filter((thread) => thread.id !== threadId),
         threadStates: Object.fromEntries(
@@ -1524,20 +1533,20 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       scope: get().scope,
     };
     let threadId = origin.threadId;
-    if (get().scope !== origin.scope) throw new Error('账号已切换，请回到原账号继续发送');
+    if (get().scope !== origin.scope) throw new Error(t('agent.codexWorkspace.accountSwitchedSend'));
     if (!controller) await get().connect();
-    if (get().scope !== origin.scope) throw new Error('账号已切换，请回到原账号继续发送');
+    if (get().scope !== origin.scope) throw new Error(t('agent.codexWorkspace.accountSwitchedSend'));
     if (!threadId) {
       // A new task may only be created in the workspace selected when Send was pressed.
       if (get().workspaceRoot !== origin.workspaceRoot || get().activeThreadId) {
-        throw new Error('发送目标已切换，请回到原工作区重试');
+        throw new Error(t('agent.codexWorkspace.targetSwitchedRetry'));
       }
-      threadId = await get().startThread(text.slice(0, 48) || '图片任务', origin.onThreadCreated);
+      threadId = await get().startThread(text.slice(0, 48) || t('agent.codexWorkspace.imageTaskTitle'), origin.onThreadCreated);
     }
-    if (get().scope !== origin.scope) throw new Error('账号已切换，请回到原账号继续发送');
+    if (get().scope !== origin.scope) throw new Error(t('agent.codexWorkspace.accountSwitchedSend'));
     const thread = get().threadStates[threadId];
     if (!thread || (thread.workspaceRoot && thread.workspaceRoot !== origin.workspaceRoot)) {
-      throw new Error('原会话或工作区已不可用，请核对发送目标');
+      throw new Error(t('agent.codexWorkspace.sessionOrWorkspaceUnavailable'));
     }
     await sendThreadMessage(threadId, text, imageList, modeOverride, origin.onSubmitted);
   },
@@ -1553,14 +1562,14 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   interruptThread: async (threadId) => {
     const thread = get().threadStates[threadId];
-    if (!thread) throw new Error('未找到原任务的运行状态，无法确认本轮已停止');
+    if (!thread) throw new Error(t('agent.codexWorkspace.stopStateNotFound'));
     if (thread.activeTurnId) {
-      if (!controller) throw new Error('原运行服务已断开，无法确认本轮已停止');
+      if (!controller) throw new Error(t('agent.codexWorkspace.stopDisconnected'));
       await controller.interruptTurn(threadId, thread.activeTurnId);
     } else if (thread.status === 'running' || thread.status === 'waiting-input' || thread.status === 'external') {
-      throw new Error('原任务的运行标识未知，需到原端核对是否已停止');
+      throw new Error(t('agent.codexWorkspace.stopTurnUnknown'));
     }
-    rejectPendingRequests('用户已停止当前任务', threadId);
+    rejectPendingRequests(t('agent.codexWorkspace.reject.userStopped'), threadId);
     setThreadState(threadId, (current) => ({
       ...current,
       status: 'ready',
@@ -1613,7 +1622,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
       if (accepted) {
         validateApprovalPaths(pending.params, roots);
         if (commandRequestMentionsSensitivePath(pending.params.command)) {
-          throw new Error('命令涉及敏感路径，不能批准');
+          throw new Error(t('agent.codexWorkspace.sensitivePathBlocked'));
         }
       }
       result = {
@@ -1638,7 +1647,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   setModel: async (selectedModel) => {
     const model = get().models.find((item) => item.model === selectedModel || item.id === selectedModel);
-    if (!model) throw new Error(`未知模型：${selectedModel}`);
+    if (!model) throw new Error(t('agent.codexWorkspace.unknownModel', { model: selectedModel }));
     const selectedEffort = model.supportedReasoningEfforts.some(
       (item) => item.reasoningEffort === get().selectedEffort,
     ) ? get().selectedEffort : model.defaultReasoningEffort;
@@ -1678,7 +1687,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   setPermissionPreset: async (permissionPreset) => {
     const profile = permissionSettings(permissionPreset).permissions;
     if (!get().permissionProfiles.some((item) => item.id === profile && item.allowed)) {
-      throw new Error(`当前 Codex Runtime 不允许权限档 ${profile}`);
+      throw new Error(t('agent.appServer.disallowedPermissionProfile', { profile }));
     }
     set({ permissionPreset });
     persist(get());
@@ -1720,19 +1729,19 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
 
   readFile: async (path) => {
     const workspaceRoot = get().workspaceRoot;
-    if (!workspaceRoot) throw new Error('请先选择工作区');
+    if (!workspaceRoot) throw new Error(t('agent.codexWorkspace.selectWorkspace'));
     return readCodexArtifact(workspaceRoot, path);
   },
 
   openArtifact: async (path) => {
     const workspaceRoot = get().workspaceRoot;
-    if (!workspaceRoot) throw new Error('请先选择工作区');
+    if (!workspaceRoot) throw new Error(t('agent.codexWorkspace.selectWorkspace'));
     return openCodexArtifact(workspaceRoot, path);
   },
 
   revealArtifact: async (path) => {
     const workspaceRoot = get().workspaceRoot;
-    if (!workspaceRoot) throw new Error('请先选择工作区');
+    if (!workspaceRoot) throw new Error(t('agent.codexWorkspace.selectWorkspace'));
     return revealCodexArtifact(workspaceRoot, path);
   },
 
@@ -1745,7 +1754,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   reconnectRuntime: async () => {
-    rejectPendingRequests('切换 AI 运行时');
+    rejectPendingRequests(t('agent.codexWorkspace.reject.runtimeSwitched'));
     stopDetachedRuntime();
     if (!get().scope) {
       get().hydrate('local:workspace');
@@ -1762,7 +1771,7 @@ export const useCodexWorkspace = create<CodexWorkspaceState>((set, get) => ({
   },
 
   shutdown: async () => {
-    rejectPendingRequests('Codex 工作区已关闭');
+    rejectPendingRequests(t('agent.codexWorkspace.reject.closed'));
     stopDetachedRuntime();
     set({ status: 'idle', activeThreadId: undefined, activeTurnId: undefined });
   },
@@ -1782,20 +1791,20 @@ export interface ExistingThreadAutomationOptions {
 export async function runExistingThreadAutomation(
   options: ExistingThreadAutomationOptions,
 ): Promise<{ text: string; threadId: string }> {
-  if (handoffInProgress) throw new Error('会话正在交接给 Codex App，请稍后重试');
+  if (handoffInProgress) throw new Error(t('agent.codexWorkspace.handoffInProgress'));
   const state = useCodexWorkspace.getState();
   if (state.activeThreadId === options.threadId && state.activeTurnId) {
-    throw new Error('目标会话正在运行，请等待当前任务完成');
+    throw new Error(t('agent.codexWorkspace.targetBusy'));
   }
   if (!controller) await state.connect();
   if (!controller || controller.currentWorkspaceRoot !== options.workspaceRoot) {
-    throw new Error('目标会话不属于当前 Codex 工作区');
+    throw new Error(t('agent.codexWorkspace.targetWrongWorkspace'));
   }
   const catalog = controller.currentCatalog;
   const model = catalog?.models.find((item) => item.model === options.model || item.id === options.model)
     ?? catalog?.models.find((item) => item.isDefault)
     ?? catalog?.models[0];
-  if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
+  if (!model) throw new Error(t('agent.codexAutomation.noModels'));
   const effort = options.effort
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === options.effort)
     ? options.effort
@@ -1825,23 +1834,23 @@ export async function runExistingThreadAutomation(
     const deadline = Date.now() + 60 * 60_000;
     while (Date.now() < deadline) {
       if (options.signal?.aborted) {
-        throw options.signal.reason instanceof Error ? options.signal.reason : new Error('任务已取消');
+        throw options.signal.reason instanceof Error ? options.signal.reason : new Error(t('agent.codexAutomation.canceled'));
       }
       const loaded = await activeController.readThread(options.threadId);
       const turn = loaded.turns.find((item) => item.id === turnId);
-      if (turn?.status === 'failed') throw new Error(turn.error?.message ?? 'Codex 未完成该已安排任务');
-      if (turn?.status === 'interrupted') throw new Error('Codex 已中断该已安排任务');
+      if (turn?.status === 'failed') throw new Error(turn.error?.message ?? t('agent.codexAutomation.failed'));
+      if (turn?.status === 'interrupted') throw new Error(t('agent.codexAutomation.interrupted'));
       if (turn?.status === 'completed') {
         const output = [...messagesFromTurns([turn])]
           .reverse()
           .find((item) => item.role === 'assistant')
           ?.text.trim();
-        if (!output) throw new Error('Codex 已完成，但没有返回可展示的结果');
+        if (!output) throw new Error(t('agent.codexAutomation.noOutput'));
         return { text: output, threadId: options.threadId };
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    throw new Error('已安排任务运行超时');
+    throw new Error(t('agent.codexWorkspace.automationTimeout'));
   } finally {
     const activePermissions = backgroundAutomationPermissions.get(options.threadId);
     activePermissions?.delete(automationToken);
@@ -1859,7 +1868,7 @@ export function setCodexWorkspaceControllerFactory(factory: ControllerFactory): 
 }
 
 export async function resetCodexWorkspaceForTests(): Promise<void> {
-  rejectPendingRequests('测试重置');
+  rejectPendingRequests(t('agent.codexWorkspace.reject.testReset'));
   stopDetachedRuntime();
   handoffInProgress = false;
   controllerOperations.clear();

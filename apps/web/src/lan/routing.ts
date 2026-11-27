@@ -1,3 +1,5 @@
+import { t, type MessageKey } from '../i18n';
+
 /**
  * 局域网文件直传的路由判定（纯函数，便于回归测试）。
  *
@@ -24,9 +26,9 @@ export function shouldTryLanFileTransfer(sizeBytes: number, minBytes: number): b
 
 /** 设置页可选的阈值档位（字节）。0 = 任何大小都尝试直传。 */
 export const LAN_FILE_MIN_BYTES_OPTIONS = [
-  { label: '任何文件', value: 0 },
+  { get label() { return t('nav.lanRouting.anyFile'); }, labelKey: 'nav.lanRouting.anyFile' as MessageKey, value: 0 },
   { label: '10 MB', value: 10 * 1024 * 1024 },
-  { label: '50 MB（默认）', value: DEFAULT_LAN_FILE_MIN_BYTES },
+  { get label() { return t('nav.lanRouting.default50Mb'); }, labelKey: 'nav.lanRouting.default50Mb' as MessageKey, value: DEFAULT_LAN_FILE_MIN_BYTES },
   { label: '100 MB', value: 100 * 1024 * 1024 },
   { label: '1 GB', value: 1024 * 1024 * 1024 },
 ] as const;

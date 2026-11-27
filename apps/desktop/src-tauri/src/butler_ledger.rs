@@ -2923,7 +2923,7 @@ pub(crate) fn read_work_ledger_snapshot(
 pub async fn butler_work_ledger_snapshot(
     db: tauri::State<'_, ButlerDb>,
 ) -> Result<WorkLedgerSnapshot, String> {
-    run_db(db.connection(), |connection| {
+    run_db(db.ready_connection()?, |connection| {
         read_work_ledger_snapshot(connection)
     })
     .await
@@ -2935,7 +2935,7 @@ pub async fn butler_work_card_update(
     id: String,
     patch: WorkCardPatch,
 ) -> Result<WorkCard, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         update_work_card(connection, &id, patch)
     })
     .await
@@ -2946,7 +2946,7 @@ pub async fn butler_work_card_create(
     db: tauri::State<'_, ButlerDb>,
     input: CreateWorkCardInput,
 ) -> Result<WorkCard, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         create_work_card(connection, input)
     })
     .await
@@ -2957,7 +2957,7 @@ pub async fn butler_work_link_upsert(
     db: tauri::State<'_, ButlerDb>,
     link: UpsertWorkLinkInput,
 ) -> Result<WorkLink, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         upsert_work_link(connection, link)
     })
     .await
@@ -2968,7 +2968,7 @@ pub async fn butler_work_session_upsert(
     db: tauri::State<'_, ButlerDb>,
     session: UpsertWorkSessionInput,
 ) -> Result<WorkSessionRecord, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         upsert_work_session(connection, session)
     })
     .await
@@ -2979,7 +2979,7 @@ pub async fn butler_work_evidence_add(
     db: tauri::State<'_, ButlerDb>,
     evidence: NewWorkEvidenceInput,
 ) -> Result<WorkEvidence, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         add_work_evidence(connection, evidence)
     })
     .await
@@ -2990,7 +2990,7 @@ pub async fn butler_external_event_ingest(
     db: tauri::State<'_, ButlerDb>,
     event: IngestExternalEventInput,
 ) -> Result<IngestExternalEventResult, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         ingest_external_event(connection, event)
     })
     .await
@@ -3001,7 +3001,7 @@ pub async fn butler_dispatch_action_prepare(
     db: tauri::State<'_, ButlerDb>,
     action: PrepareDispatchActionInput,
 ) -> Result<DispatchActionRecord, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         prepare_dispatch_action(connection, action)
     })
     .await
@@ -3012,7 +3012,7 @@ pub async fn butler_dispatch_action_transition(
     db: tauri::State<'_, ButlerDb>,
     transition: TransitionDispatchActionInput,
 ) -> Result<DispatchActionRecord, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         transition_dispatch_action(connection, transition)
     })
     .await

@@ -1,4 +1,6 @@
 import type { RcRoomRole, RcUser, RoomRole, RoomType } from '@rcx/rc-client';
+import { t } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 
 /**
  * 群里的权限判断。
@@ -18,9 +20,9 @@ import type { RcRoomRole, RcUser, RoomRole, RoomType } from '@rcx/rc-client';
  */
 
 export const ROLE_LABELS: Record<RoomRole, string> = {
-  owner: '群主',
-  moderator: '管理员',
-  leader: '负责人',
+  get owner() { return t('chat.role.owner'); },
+  get moderator() { return t('chat.role.moderator'); },
+  get leader() { return t('chat.role.leader'); },
 };
 
 /** 某人在这个房间里的角色。没角色就是普通成员，返回空数组 */
@@ -116,6 +118,6 @@ export function sortMembers(members: RcUser[], roomRoles: RcRoomRole[]): RcUser[
     return 3;
   };
   return [...members].sort(
-    (a, b) => rank(a) - rank(b) || (a.name || a.username).localeCompare(b.name || b.username),
+    (a, b) => rank(a) - rank(b) || compareLocaleText(a.name || a.username, b.name || b.username),
   );
 }

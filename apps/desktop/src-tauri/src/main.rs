@@ -3,19 +3,23 @@
 
 mod acp;
 mod agent_bot;
+mod browser_tool;
 mod business_mcp;
 mod butler_db;
+mod butler_policy;
 mod butler_worktree;
 mod credential_scope;
 mod diagnostics;
 mod dsh;
 mod firewall;
+mod github_connector;
 mod lan;
 #[cfg(test)]
 mod live_e2e;
 mod local_sessions;
 mod local_voice;
 mod mcp;
+mod mcp_registry;
 mod native;
 mod native_service;
 mod ocr;
@@ -89,6 +93,27 @@ fn desktop_distribution_profile() -> &'static str {
 }
 
 struct AllowedHttpOrigins(Mutex<HashSet<String>>);
+
+struct TrayMenuState {
+    show: Option<MenuItem<tauri::Wry>>,
+    quit: Option<MenuItem<tauri::Wry>>,
+}
+
+fn is_chinese_language_tag(tag: &str) -> bool {
+    let trimmed = tag.trim();
+    trimmed.eq_ignore_ascii_case("zh")
+        || trimmed.get(..3).is_some_and(|prefix| {
+            prefix.eq_ignore_ascii_case("zh-") || prefix.eq_ignore_ascii_case("zh_")
+        })
+}
+
+fn tray_labels_for_language_tag(tag: Option<&str>) -> (&'static str, &'static str) {
+    if tag.is_some_and(is_chinese_language_tag) {
+        ("显示 RocketX", "退出")
+    } else {
+        ("Show RocketX", "Quit")
+    }
+}
 
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug)]
@@ -814,7 +839,6 @@ fn system_prefers_chinese() -> bool {
     }
     #[cfg(windows)]
     {
-        // LANG_CHINESE primary language ID is 0x04.
         let lang_id = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
         (lang_id & 0x3ff) == 0x04
     }
@@ -824,11 +848,13 @@ fn system_prefers_chinese() -> bool {
     }
 }
 
-fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
+fn setup_system_tray(
+    app: &tauri::App,
+) -> tauri::Result<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)> {
     let (show_label, quit_label) = if system_prefers_chinese() {
-        ("显示 RocketX", "退出")
+        tray_labels_for_language_tag(Some("zh-CN"))
     } else {
-        ("Show RocketX", "Quit")
+        tray_labels_for_language_tag(None)
     };
     let show = MenuItem::with_id(app, "show", show_label, true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
@@ -859,7 +885,7 @@ fn setup_system_tray(app: &tauri::App) -> tauri::Result<()> {
             }
         })
         .build(app)?;
-    Ok(())
+    Ok((show, quit))
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -931,8 +957,6 @@ fn configure_linux_runtime_env() {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-        // 在无桌面会话的裸 Xvfb/X11 中断开缺失的 session bus，避免 xdg-desktop-portal 阻塞约 30s；
-        // 使用明确的地址而非移除变量，可避免 tauri-plugin-single-instance 访问空 session 地址时出错。
         if std::env::var_os("ROCKETX_KEEP_HEADLESS_DBUS").is_none() {
             std::env::set_var("DBUS_SESSION_BUS_ADDRESS", "unix:path=/dev/null");
         }
@@ -1230,15 +1254,34 @@ fn set_tray_tooltip(app: tauri::AppHandle, tooltip: String) -> Result<(), String
         .map_err(|err| err.to_string())
 }
 
+#[tauri::command]
+fn set_tray_menu_labels(
+    state: tauri::State<'_, TrayMenuState>,
+    show_label: String,
+    quit_label: String,
+) -> Result<(), String> {
+    let show = show_label.trim();
+    let quit = quit_label.trim();
+    if show.is_empty() || quit.is_empty() {
+        return Err("tray menu labels must not be empty".to_string());
+    }
+    if let (Some(show_item), Some(quit_item)) = (&state.show, &state.quit) {
+        show_item.set_text(show).map_err(|err| err.to_string())?;
+        quit_item.set_text(quit).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tray_icon_tests {
     use super::{
         autostart_registration_allowed, clamp_window_geometry_for_monitor, dim_tray_icon,
-        is_autostart_launch, launch_opens_main_window, linux_is_bare_headless_x11_from_env,
-        locale_tag_prefers_chinese, native_media_confirm_body, native_media_response,
-        native_media_url, normalize_desktop_distribution_profile, normalize_http_origin,
-        refresh_autostart_registration_with, resolve_download_history_path, resolve_unc_path,
-        system_prefers_chinese_from_env, validate_external_url,
+        is_autostart_launch, is_chinese_language_tag, launch_opens_main_window,
+        linux_is_bare_headless_x11_from_env, locale_tag_prefers_chinese, native_media_confirm_body,
+        native_media_response, native_media_url, normalize_desktop_distribution_profile,
+        normalize_http_origin, refresh_autostart_registration_with, resolve_download_history_path,
+        resolve_unc_path, system_prefers_chinese_from_env, tray_labels_for_language_tag,
+        validate_external_url,
     };
     use std::{cell::Cell, path::Path};
     use tauri::image::Image;
@@ -1324,6 +1367,23 @@ mod tray_icon_tests {
         let source = Image::new_owned(vec![100, 200, 50, 0, 200, 100, 40, 255], 2, 1);
         let dimmed = dim_tray_icon(&source);
         assert_eq!(dimmed.rgba(), &[35, 70, 17, 0, 70, 35, 14, 255]);
+    }
+
+    #[test]
+    fn tray_default_labels_follow_language_tag() {
+        assert!(is_chinese_language_tag("zh-CN"));
+        assert!(is_chinese_language_tag("zh_TW"));
+        assert!(is_chinese_language_tag("zh"));
+        assert!(!is_chinese_language_tag("en-US"));
+        assert_eq!(
+            tray_labels_for_language_tag(Some("zh-CN")),
+            ("显示 RocketX", "退出")
+        );
+        assert_eq!(
+            tray_labels_for_language_tag(Some("en-US")),
+            ("Show RocketX", "Quit")
+        );
+        assert_eq!(tray_labels_for_language_tag(None), ("Show RocketX", "Quit"));
     }
 
     #[test]
@@ -1536,9 +1596,9 @@ fn main() {
         }
         return;
     }
+    let show_main_on_launch = launch_opens_main_window(&launch_args);
     #[cfg(target_os = "linux")]
     configure_linux_runtime_env();
-    let show_main_on_launch = launch_opens_main_window(&launch_args);
     tauri::Builder::default()
         // 必须最先注册：第二实例立即退出；只有用户手动启动才把已有窗口带回前台。
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -1570,6 +1630,7 @@ fn main() {
             winauth::win_auth_request,
             set_tray_icon_normal,
             set_tray_tooltip,
+            set_tray_menu_labels,
             show_main_window,
             show_message_notification,
             take_pending_notification_navigation,
@@ -1609,9 +1670,48 @@ fn main() {
             butler_db::butler_assistant_digest_list,
             butler_db::butler_assistant_digest_save,
             butler_db::butler_assistant_digest_delete,
+            butler_db::butler_skill_list,
+            butler_db::butler_skill_upsert,
+            butler_db::butler_skill_delete,
+            butler_db::butler_skill_record_run,
+            butler_db::butler_skill_import_markdown,
+            butler_db::butler_skill_export_markdown,
+            butler_policy::butler_policy_get,
+            butler_policy::butler_policy_save,
+            butler_policy::butler_policy_evaluate,
+            mcp_registry::butler_mcp_list,
+            mcp_registry::butler_mcp_upsert,
+            mcp_registry::butler_mcp_delete,
+            mcp_registry::butler_mcp_health_check,
+            mcp_registry::butler_mcp_launch_configs,
+            github_connector::butler_github_status,
+            github_connector::butler_github_save_config,
+            github_connector::butler_github_clear_config,
+            github_connector::butler_github_test_connection,
+            github_connector::butler_github_list_prs,
+            github_connector::butler_github_list_issues,
+            github_connector::butler_github_get_issue_detail,
+            github_connector::butler_github_get_pr_diff,
+            github_connector::butler_github_create_comment,
+            github_connector::butler_github_detect_workspace_repo,
+            browser_tool::butler_browser_inspect,
             butler_worktree::butler_workspace_git_inspect,
             butler_worktree::butler_worktree_prepare,
             butler_worktree::butler_worktree_remove,
+            butler_worktree::butler_worktree_list,
+            butler_worktree::butler_git_diff_workspace,
+            butler_worktree::butler_git_checkpoint_create,
+            butler_worktree::butler_git_checkpoint_list,
+            butler_worktree::butler_git_checkpoint_diff,
+            butler_worktree::butler_git_checkpoint_revert,
+            butler_worktree::butler_git_stage_file,
+            butler_worktree::butler_git_unstage_file,
+            butler_worktree::butler_git_discard_file,
+            butler_worktree::butler_git_commit,
+            butler_worktree::butler_git_push,
+            butler_worktree::butler_git_create_pr,
+            butler_worktree::butler_git_branch_list,
+            butler_worktree::butler_git_branch_checkout,
             proc::codex_runtime_probe,
             proc::codex_app_server_start,
             proc::codex_app_server_write,
@@ -1639,6 +1739,8 @@ fn main() {
             pi::pi_runtime_probe,
             pi::pi_config_read,
             pi::pi_config_write,
+            pi::pi_endpoint_probe,
+            pi::pi_local_gateways_scan,
             pi::pi_app_server_start,
             pi::pi_app_server_write,
             pi::pi_app_server_stop,
@@ -1662,6 +1764,12 @@ fn main() {
             acp::acp_terminal_wait_for_exit,
             acp::acp_terminal_kill,
             acp::acp_terminal_release,
+            acp::butler_terminal_start,
+            acp::butler_terminal_write,
+            acp::butler_terminal_output,
+            acp::butler_terminal_kill,
+            acp::butler_terminal_release,
+            acp::butler_workspace_list_files,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
             mcp::mcp_config_disable,
@@ -1697,6 +1805,7 @@ fn main() {
         .manage(pi::PiAppServerState::default())
         .manage(acp::AcpSupervisorState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
+        .manage(mcp_registry::McpRegistryLock(Mutex::new(())))
         .manage(business_mcp::BusinessMcpConfigLock(Mutex::new(())))
         .manage(agent_bot::AgentBotLock(Mutex::new(())))
         .manage(native_service::NativeServiceState::default())
@@ -1764,9 +1873,19 @@ fn main() {
 
             // 系统托盘：显示 / 退出（issue #3）；无托盘环境（如极简 X11 / Xvfb）降级为直接关闭退出，不阻断启动。
             match setup_system_tray(app) {
-                Ok(()) => TRAY_AVAILABLE.store(true, Ordering::Relaxed),
+                Ok((show, quit)) => {
+                    TRAY_AVAILABLE.store(true, Ordering::Relaxed);
+                    app.manage(TrayMenuState {
+                        show: Some(show),
+                        quit: Some(quit),
+                    });
+                }
                 Err(error) => {
                     TRAY_AVAILABLE.store(false, Ordering::Relaxed);
+                    app.manage(TrayMenuState {
+                        show: None,
+                        quit: None,
+                    });
                     log::warn!(
                         "failed to initialize system tray, continuing without tray: {error}"
                     );
@@ -1775,8 +1894,7 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // 点关闭按钮 = 隐藏到托盘，不退出进程（issue #3）。
-            // 真正退出走托盘菜单的「退出」；无托盘时允许直接退出。
+            // 点关闭按钮 = 隐藏到托盘，不退出进程（issue #3）；无托盘时允许直接退出。
             WindowEvent::CloseRequested { api, .. } => {
                 if TRAY_AVAILABLE.load(Ordering::Relaxed) {
                     api.prevent_close();
@@ -1808,6 +1926,7 @@ fn main() {
             if matches!(event, tauri::RunEvent::Exit) {
                 pi::shutdown_all_pi_processes(app);
                 acp::shutdown_all_acp_processes(app);
+                butler_db::shutdown_native_work_runtime(app);
                 app.state::<native::host::NativeHost>().shutdown(app);
             }
         });

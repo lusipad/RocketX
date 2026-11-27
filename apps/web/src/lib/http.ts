@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 /**
  * 平台无关的 HTTP。
  *
@@ -53,7 +55,7 @@ const grantingOrigins = new Map<string, Promise<string>>();
 export async function ensureHttpOrigin(input: string | URL): Promise<string> {
   const url = new URL(input.toString());
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
-    throw new Error('只允许无凭据的 http/https 地址');
+    throw new Error(t('auth.http.credentialsNotAllowed'));
   }
   if (!isTauri) return url.origin;
   if (grantedOrigins.has(url.origin)) return url.origin;

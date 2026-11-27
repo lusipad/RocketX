@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 import type { CalendarEvent } from '../stores/calendar';
 import type { Todo } from '../stores/todos';
 import type { WorkItem } from '../stores/workbench';
@@ -62,7 +64,9 @@ export function searchWork(
     .map(({ result }) => result);
 }
 
-export const WORK_CONTEXT_SEARCH_COVERAGE = '仅检索当前账号已缓存的工作、原生会话索引、外部联系、验证成果和归档简报；不读取磁盘全文、未缓存聊天或远端 ADO 全库。未找到不表示来源中不存在。';
+export function workContextSearchCoverage(): string {
+  return t('agent.workSearch.coverage');
+}
 
 export interface WorkContextSearchInput {
   accountScope: string;
@@ -130,6 +134,6 @@ export function searchWorkContext(input: WorkContextSearchInput): WorkContextSea
     if (digest.accountScope !== input.accountScope || !digest.relatedTodoId || !scopedWorkIds.has(digest.relatedTodoId)) continue;
     add({ id: `digest:${digest.id}`, kind: 'digest', title: digest.title, snippet: digest.summaryMd, workId: digest.relatedTodoId, sourceRef: `digest:${digest.id}`, updatedAt: digest.createdAt, stale: false });
   }
-  return results.sort((a, b) => a.score - b.score || b.result.updatedAt - a.result.updatedAt || a.result.id.localeCompare(b.result.id))
+  return results.sort((a, b) => a.score - b.score || b.result.updatedAt - a.result.updatedAt || compareLocaleText(a.result.id, b.result.id))
     .slice(0, Math.max(1, Math.min(input.limit ?? 30, 100))).map(({ result }) => ({ ...result, snippet: result.snippet.slice(0, 300) }));
 }

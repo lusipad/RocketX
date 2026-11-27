@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { ensureHttpOrigin, httpFetch } from './http';
 
 /**
@@ -170,10 +171,10 @@ export function parseUpdateManifest(raw: string, currentVersion: string): Update
   try {
     manifest = JSON.parse(raw) as UpdateManifest;
   } catch {
-    throw new Error('更新清单不是有效 JSON（应为 tauri updater 的 latest.json）');
+    throw new Error(t('nav.updateSource.invalidManifestJson'));
   }
   if (!manifest.version || typeof manifest.version !== 'string') {
-    throw new Error('更新清单缺少 version 字段');
+    throw new Error(t('nav.updateSource.missingVersion'));
   }
   const windows =
     manifest.platforms?.['windows-x86_64']?.url ?? manifest.platforms?.['windows-x86_64-msi']?.url;
@@ -195,7 +196,7 @@ export async function probeHttpSource(location: string, currentVersion: string):
   const url = manifestUrlOf(location);
   await ensureHttpOrigin(url);
   const response = await httpFetch(url, { method: 'GET' });
-  if (!response.ok) throw new Error(`更新源返回 ${response.status}`);
+  if (!response.ok) throw new Error(t('nav.updateSource.httpStatus', { status: response.status }));
   return parseUpdateManifest(await response.text(), currentVersion);
 }
 
@@ -211,10 +212,10 @@ export async function probeDirSource(location: string, currentVersion: string): 
   }>('read_update_manifest_dir', { dir: location.trim() });
   const probe = parseUpdateManifest(result.manifest, currentVersion);
   if (result.version.replace(/^v/i, '') !== probe.version) {
-    throw new Error('更新清单版本与已验证安装包不一致');
+    throw new Error(t('nav.updateSource.versionMismatch'));
   }
   if (result.installerPath && (!result.sha256 || !result.installerType)) {
-    throw new Error('更新包缺少 SHA-256 或安装类型');
+    throw new Error(t('nav.updateSource.missingShaOrType'));
   }
   return {
     ...probe,
@@ -270,7 +271,7 @@ export async function probeConfiguredSource(
   config: UpdateSourceConfig,
   currentVersion: string,
 ): Promise<UpdateProbe> {
-  if (!config.location.trim()) throw new Error('请先填写更新源地址');
+  if (!config.location.trim()) throw new Error(t('nav.updateSource.missingLocation'));
   return config.kind === 'dir'
     ? probeDirSource(config.location, currentVersion)
     : probeHttpSource(config.location, currentVersion);

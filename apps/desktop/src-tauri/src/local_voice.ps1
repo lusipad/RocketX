@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -24,7 +24,12 @@ try {
             if (-not $result.available) { $result.reason = '未安装受支持的 Windows 离线识别引擎或 Microsoft Desktop 本地音库。' }
         } finally { $synth.Dispose() }
     } elseif ($request.operation -eq 'transcribe') {
-        $info = $recognizers | Where-Object { $_.Culture.Name -eq $request.language } | Select-Object -First 1
+        $reqLang = [string]$request.language
+        $reqPrefix = ($reqLang -split '[-_]')[0]
+        $info = $recognizers | Where-Object { $_.Culture.Name -ieq $reqLang } | Select-Object -First 1
+        if ($null -eq $info -and $reqPrefix) {
+            $info = $recognizers | Where-Object { $_.Culture.TwoLetterISOLanguageName -ieq $reqPrefix } | Select-Object -First 1
+        }
         if ($null -eq $info) { throw 'LOCAL_VOICE_UNSUPPORTED: 此语言未安装受支持的 Windows 离线识别引擎。' }
         $recognizer = New-Object System.Speech.Recognition.SpeechRecognitionEngine($info)
         $stream = New-Object System.IO.MemoryStream(, [Convert]::FromBase64String($request.audioBase64))
@@ -55,9 +60,17 @@ try {
         $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
         $stream = New-Object System.IO.MemoryStream
         try {
-            $voice = $synth.GetInstalledVoices() | Where-Object {
-                $_.Enabled -and $_.VoiceInfo.Name -match '^Microsoft .+ Desktop$' -and $(if ($request.voiceId) { $_.VoiceInfo.Name -eq $request.voiceId } else { $_.VoiceInfo.Culture.Name -eq $request.language })
-            } | Select-Object -First 1
+            $reqLang = [string]$request.language
+            $reqPrefix = ($reqLang -split '[-_]')[0]
+            $enabledVoices = @($synth.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Name -match '^Microsoft .+ Desktop$' })
+            if ($request.voiceId) {
+                $voice = $enabledVoices | Where-Object { $_.VoiceInfo.Name -eq $request.voiceId } | Select-Object -First 1
+            } else {
+                $voice = $enabledVoices | Where-Object { $_.VoiceInfo.Culture.Name -ieq $reqLang } | Select-Object -First 1
+                if ($null -eq $voice -and $reqPrefix) {
+                    $voice = $enabledVoices | Where-Object { $_.VoiceInfo.Culture.TwoLetterISOLanguageName -ieq $reqPrefix } | Select-Object -First 1
+                }
+            }
             if ($null -eq $voice) { throw 'LOCAL_VOICE_UNSUPPORTED: 未安装所选语言或声音的 Microsoft Desktop 本地音库。' }
             $synth.SelectVoice($voice.VoiceInfo.Name)
             $format = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)

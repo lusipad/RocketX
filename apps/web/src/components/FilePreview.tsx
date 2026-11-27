@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Download, Loader2, X } from 'lucide-react';
 import { normalizeAssetPath, rest } from '../lib/client';
+import { useT } from '../i18n';
 import { renderMarkdownDoc } from '../lib/markdown';
 import PdfView from './PdfView';
 import { toast } from '../stores/toast';
@@ -109,6 +110,7 @@ export default function FilePreview({
   source?: DownloadSourceV1;
   onClose: () => void;
 }) {
+  const t = useT();
   const [text, setText] = useState<string | null>(null);
   const [pdfData, setPdfData] = useState<ArrayBuffer | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -140,7 +142,7 @@ export default function FilePreview({
 
     const isText = kind === 'text' || kind === 'markdown' || kind === 'html';
     const limit = kind === 'html' ? MAX_HTML_PREVIEW_BYTES : MAX_TEXT_BYTES;
-    const sizeError = `文件超过 ${limit / 1024 / 1024} MiB，请下载后查看`;
+    const sizeError = t('chat.preview.fileTooLarge', { limit: limit / 1024 / 1024 });
     if (isText && size !== undefined && size > limit) {
       setError(sizeError);
       return;
@@ -189,7 +191,7 @@ export default function FilePreview({
         const raw = err instanceof Error ? err.message : String(err);
         setError(
           /failed to fetch|networkerror|load failed/i.test(raw)
-            ? '无法读取文件。请检查网络连接；网页版跨域访问还需要文件服务允许跨域，或通过同源代理访问。'
+            ? t('chat.preview.networkError')
             : raw,
         );
       });
@@ -199,7 +201,7 @@ export default function FilePreview({
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, kind, contentType, size, fileName]);
+  }, [path, kind, contentType, size, fileName, t]);
 
   const sandboxHtml = useMemo(() => kind === 'html' && text !== null ? sandboxArtifactHtml(text) : null, [kind, text]);
 
@@ -208,7 +210,7 @@ export default function FilePreview({
     try {
       await saveFile(path, fileName, source);
     } catch (err) {
-      toast.error(err, '下载失败');
+      toast.error(err, t('chat.preview.downloadFailed'));
     } finally {
       setSaving(false);
     }
@@ -232,12 +234,12 @@ export default function FilePreview({
             className="flex h-8 items-center gap-1.5 rounded-md bg-white/10 px-3 text-xs transition hover:bg-white/20 disabled:opacity-50"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-            {saving ? '保存中…' : '下载'}
+            {saving ? t('chat.preview.saving') : t('chat.preview.download')}
           </button>
           <button
             onClick={onClose}
             className="flex h-8 w-8 items-center justify-center rounded-md transition hover:bg-white/20"
-            title="关闭（Esc）"
+            title={t('chat.preview.closeEsc')}
           >
             <X size={16} />
           </button>
@@ -248,19 +250,21 @@ export default function FilePreview({
         {loading && (
           <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-3">
             <Loader2 size={16} className="animate-spin" />
-            {kind === 'video' && videoPercent !== null ? `正在读取视频 ${videoPercent}%` : '加载中…'}
+            {kind === 'video' && videoPercent !== null
+              ? t('chat.preview.loadingVideo', { percent: videoPercent })
+              : t('chat.common.loadingShort')}
           </div>
         )}
 
         {error && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-            <div className="text-sm text-danger">无法预览</div>
+            <div className="text-sm text-danger">{t('chat.preview.cannotPreview')}</div>
             <div className="max-w-md text-xs break-words text-ink-3">{error}</div>
             <button
               onClick={() => void download()}
               className="mt-2 h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
             >
-              直接下载
+              {t('chat.preview.downloadDirectly')}
             </button>
           </div>
         )}
@@ -272,14 +276,14 @@ export default function FilePreview({
         ) : (
           <video className="min-h-0 w-full flex-1" controls src={mediaUrl} onError={() => setMediaFailed(true)} />
         ))}
-        {mediaFailed && <p className="p-3 text-center text-sm text-ink-2">当前设备无法解码此文件，可下载后用本地播放器打开。</p>}
+        {mediaFailed && <p className="p-3 text-center text-sm text-ink-2">{t('chat.preview.mediaDecodeFailed')}</p>}
 
         {sandboxHtml && text && /<script\b/i.test(text) && (
-          <p className="shrink-0 px-4 py-2 text-xs text-ink-2">此网页含脚本。交互内容可下载后在浏览器中查看。</p>
+          <p className="shrink-0 px-4 py-2 text-xs text-ink-2">{t('chat.preview.htmlScriptsNote')}</p>
         )}
         {sandboxHtml && (
           <iframe
-            title="网页预览"
+            title={t('chat.preview.htmlIframeTitle')}
             className="min-h-0 w-full flex-1 bg-white"
             sandbox=""
             srcDoc={sandboxHtml}

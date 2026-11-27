@@ -267,7 +267,7 @@ pub fn contains_sensitive_secret(text: &str) -> bool {
     false
 }
 
-fn validate_account_scope(scope: &str) -> Result<String, String> {
+pub(crate) fn validate_account_scope(scope: &str) -> Result<String, String> {
     let trimmed = scope.trim();
     if trimmed.is_empty() {
         return Err("accountScope 不能为空".to_string());
@@ -635,15 +635,20 @@ fn upsert_memory_inner(
     Ok(entry)
 }
 
-pub(crate) fn delete_memory(connection: &Connection, id: &str) -> Result<bool, String> {
+pub(crate) fn delete_memory(
+    connection: &Connection,
+    id: &str,
+    account_scope: &str,
+) -> Result<bool, String> {
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return Ok(false);
     }
+    let scope = validate_account_scope(account_scope)?;
     let changed = connection
         .execute(
-            "DELETE FROM butler_memories WHERE id = ?1",
-            params![trimmed],
+            "DELETE FROM butler_memories WHERE id = ?1 AND account_scope = ?2",
+            params![trimmed, scope],
         )
         .map_err(|error| format!("无法删除长期记忆：{error}"))?;
     Ok(changed > 0)
@@ -652,7 +657,9 @@ pub(crate) fn delete_memory(connection: &Connection, id: &str) -> Result<bool, S
 pub(crate) fn mark_memories_recalled(
     connection: &mut Connection,
     ids: Vec<String>,
+    account_scope: &str,
 ) -> Result<u64, String> {
+    let scope = validate_account_scope(account_scope)?;
     let mut unique = Vec::new();
     for raw in ids {
         let trimmed = raw.trim();
@@ -673,8 +680,8 @@ pub(crate) fn mark_memories_recalled(
             .execute(
                 "UPDATE butler_memories
                  SET recall_count = recall_count + 1, last_recalled_at = ?2
-                 WHERE id = ?1",
-                params![id, now],
+                 WHERE id = ?1 AND account_scope = ?3",
+                params![id, now, scope],
             )
             .map_err(|error| format!("无法更新记忆召回次数：{error}"))?;
         updated += changed as u64;
@@ -826,18 +833,45 @@ pub(crate) fn save_assistant_digest(
     Ok(digest)
 }
 
-pub(crate) fn delete_assistant_digest(connection: &Connection, id: &str) -> Result<bool, String> {
+pub(crate) fn delete_assistant_digest(
+    connection: &Connection,
+    id: &str,
+    account_scope: &str,
+) -> Result<bool, String> {
     let trimmed = id.trim();
     if trimmed.is_empty() {
         return Ok(false);
     }
+    let scope = validate_account_scope(account_scope)?;
     let changed = connection
         .execute(
-            "DELETE FROM butler_assistant_digests WHERE id = ?1",
-            params![trimmed],
+            "DELETE FROM butler_assistant_digests WHERE id = ?1 AND account_scope = ?2",
+            params![trimmed, scope],
         )
         .map_err(|error| format!("无法删除助理摘要：{error}"))?;
     Ok(changed > 0)
+}
+
+pub(crate) fn resolve_verified_account_scope(
+    db: &ButlerDb,
+    provided: Option<&str>,
+) -> Result<String, String> {
+    let active = db
+        .runtime_account_context()
+        .ok()
+        .map(|ctx| ctx.account_scope);
+    let requested = provided
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    match (active, requested) {
+        (Some(active_scope), Some(req_scope)) if active_scope != req_scope => {
+            Err("记忆操作作用域与当前已激活账号不一致".to_string())
+        }
+        (Some(active_scope), _) => Ok(active_scope),
+        (None, Some(req_scope)) => Ok(req_scope),
+        (None, None) => Err("账号数据库尚未就绪，缺少记忆作用域".to_string()),
+    }
 }
 
 #[tauri::command]
@@ -849,10 +883,11 @@ pub async fn butler_memory_list(
     query: Option<String>,
     enabled_only: Option<bool>,
 ) -> Result<Vec<ButlerMemoryEntry>, String> {
-    run_db(db.connection(), move |connection| {
+    let scope = resolve_verified_account_scope(&db, Some(&account_scope))?;
+    run_db(db.ready_connection()?, move |connection| {
         list_memories(
             connection,
-            &account_scope,
+            &scope,
             category,
             workspace_root,
             query,
@@ -867,8 +902,11 @@ pub async fn butler_memory_upsert(
     db: tauri::State<'_, ButlerDb>,
     input: ButlerMemoryUpsertInput,
 ) -> Result<ButlerMemoryEntry, String> {
-    run_db(db.connection(), move |connection| {
-        upsert_memory(connection, input)
+    let scope = resolve_verified_account_scope(&db, Some(&input.account_scope))?;
+    let mut scoped_input = input;
+    scoped_input.account_scope = scope;
+    run_db(db.ready_connection()?, move |connection| {
+        upsert_memory(connection, scoped_input)
     })
     .await
 }
@@ -877,9 +915,11 @@ pub async fn butler_memory_upsert(
 pub async fn butler_memory_delete(
     db: tauri::State<'_, ButlerDb>,
     id: String,
+    account_scope: Option<String>,
 ) -> Result<bool, String> {
-    run_db(db.connection(), move |connection| {
-        delete_memory(connection, &id)
+    let scope = resolve_verified_account_scope(&db, account_scope.as_deref())?;
+    run_db(db.ready_connection()?, move |connection| {
+        delete_memory(connection, &id, &scope)
     })
     .await
 }
@@ -888,9 +928,11 @@ pub async fn butler_memory_delete(
 pub async fn butler_memory_mark_recalled(
     db: tauri::State<'_, ButlerDb>,
     ids: Vec<String>,
+    account_scope: Option<String>,
 ) -> Result<u64, String> {
-    run_db(db.connection(), move |connection| {
-        mark_memories_recalled(connection, ids)
+    let scope = resolve_verified_account_scope(&db, account_scope.as_deref())?;
+    run_db(db.ready_connection()?, move |connection| {
+        mark_memories_recalled(connection, ids, &scope)
     })
     .await
 }
@@ -900,8 +942,9 @@ pub async fn butler_memory_clear_scope(
     db: tauri::State<'_, ButlerDb>,
     account_scope: String,
 ) -> Result<u64, String> {
-    run_db(db.connection(), move |connection| {
-        clear_memory_scope(connection, &account_scope)
+    let scope = resolve_verified_account_scope(&db, Some(&account_scope))?;
+    run_db(db.ready_connection()?, move |connection| {
+        clear_memory_scope(connection, &scope)
     })
     .await
 }
@@ -913,8 +956,9 @@ pub async fn butler_assistant_digest_list(
     kind: Option<String>,
     limit: Option<u32>,
 ) -> Result<Vec<ButlerAssistantDigest>, String> {
-    run_db(db.connection(), move |connection| {
-        list_assistant_digests(connection, &account_scope, kind, limit)
+    let scope = resolve_verified_account_scope(&db, Some(&account_scope))?;
+    run_db(db.ready_connection()?, move |connection| {
+        list_assistant_digests(connection, &scope, kind, limit)
     })
     .await
 }
@@ -924,8 +968,11 @@ pub async fn butler_assistant_digest_save(
     db: tauri::State<'_, ButlerDb>,
     input: ButlerAssistantDigestInput,
 ) -> Result<ButlerAssistantDigest, String> {
-    run_db(db.connection(), move |connection| {
-        save_assistant_digest(connection, input)
+    let scope = resolve_verified_account_scope(&db, Some(&input.account_scope))?;
+    let mut scoped_input = input;
+    scoped_input.account_scope = scope;
+    run_db(db.ready_connection()?, move |connection| {
+        save_assistant_digest(connection, scoped_input)
     })
     .await
 }
@@ -934,9 +981,11 @@ pub async fn butler_assistant_digest_save(
 pub async fn butler_assistant_digest_delete(
     db: tauri::State<'_, ButlerDb>,
     id: String,
+    account_scope: Option<String>,
 ) -> Result<bool, String> {
-    run_db(db.connection(), move |connection| {
-        delete_assistant_digest(connection, &id)
+    let scope = resolve_verified_account_scope(&db, account_scope.as_deref())?;
+    run_db(db.ready_connection()?, move |connection| {
+        delete_assistant_digest(connection, &id, &scope)
     })
     .await
 }
@@ -1128,10 +1177,18 @@ mod tests {
         assert!(cross_err.contains("作用域"));
 
         // Recall count increment
-        let updated_count =
-            mark_memories_recalled(&mut connection, vec![m1.id.clone(), m1.id.clone()])
-                .expect("mark recalled");
+        let updated_count = mark_memories_recalled(
+            &mut connection,
+            vec![m1.id.clone(), m1.id.clone()],
+            "server-a:alice",
+        )
+        .expect("mark recalled");
         assert_eq!(updated_count, 1);
+        assert_eq!(
+            mark_memories_recalled(&mut connection, vec![m1.id.clone()], "server-b:bob")
+                .expect("cross-scope recall denied"),
+            0
+        );
 
         let after_recall = list_memories(&connection, "server-a:alice", None, None, None, None)
             .expect("list after recall");
@@ -1152,7 +1209,8 @@ mod tests {
                 .len(),
             1
         );
-        assert!(delete_memory(&connection, &m2.id).unwrap());
+        assert!(!delete_memory(&connection, &m2.id, "server-a:alice").unwrap());
+        assert!(delete_memory(&connection, &m2.id, "server-b:bob").unwrap());
     }
 
     #[test]
@@ -1192,7 +1250,8 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(delete_assistant_digest(&connection, &saved.id).unwrap());
-        assert!(!delete_assistant_digest(&connection, &saved.id).unwrap());
+        assert!(!delete_assistant_digest(&connection, &saved.id, "server-b:bob").unwrap());
+        assert!(delete_assistant_digest(&connection, &saved.id, "server-a:alice").unwrap());
+        assert!(!delete_assistant_digest(&connection, &saved.id, "server-a:alice").unwrap());
     }
 }

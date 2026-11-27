@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { rocketxThreadName, workspaceLabel } from '../../apps/web/src/agent/threadName';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 test('RocketX 线程名带场景与明细，空白折叠、超长安全截断', () => {
   assert.equal(rocketxThreadName('管家'), 'RocketX 管家');
@@ -22,12 +24,16 @@ test('托管、任务与自动化在 Codex 会话库里都有可辨认的名字'
 
   // 托管线程（含 resume）仍有明确名字。
   const shared = readFileSync('apps/web/src/stores/sharedAgent.ts', 'utf8');
-  assert.match(shared, /rocketxThreadName\('托管'/);
+  assert.match(shared, /rocketxThreadName\(t\('agent\.shared\.threadScopeHosted'\)/);
+  assert.equal(zhCN['agent.shared.threadScopeHosted'], '托管');
+  assert.ok(enUS['agent.shared.threadScopeHosted'].length > 0);
   assert.equal(shared.match(/nameCodexThread\(appServer, /gu)?.length, 2);
   const controller = readFileSync('apps/web/src/agent/AppServerController.ts', 'utf8');
   assert.match(controller, /thread\/name\/set/);
   const automations = readFileSync('apps/web/src/stores/routines.ts', 'utf8');
-  assert.match(automations, /name: `自动化 · \$\{routine\.name\}`/);
+  assert.match(automations, /name: t\('agent\.routines\.automationName', \{ name: routine\.name \}\)/);
+  assert.equal(zhCN['agent.routines.automationName'], '自动化 · {name}');
+  assert.ok(enUS['agent.routines.automationName'].includes('{name}'));
   assert.throws(() => readFileSync('apps/web/src/stores/localCodex.ts', 'utf8'));
 
   // 托管面板给出原生线程的 codex resume 入口

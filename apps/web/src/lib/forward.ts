@@ -1,4 +1,5 @@
 import { tsMs, type RcDate, type RcMessageAttachment } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 export interface MergedForwardSource {
   text: string;
@@ -50,7 +51,7 @@ export function forwardFileName(attachment: RcMessageAttachment): string {
   if (attachment.title) return attachment.title;
   const path = protectedFilePath(attachment);
   const segment = path?.split('?')[0].split('/').filter(Boolean).at(-1);
-  if (!segment) return '文件';
+  if (!segment) return t('chat.common.file');
   try {
     return decodeURIComponent(segment);
   } catch {
@@ -73,8 +74,8 @@ export function forwardableAttachments(
         isProtectedRoomFile(attachment.image_url) || isProtectedRoomFile(attachment.title_link);
       if (preserveProtectedFiles || !protectedFile) return attachment;
       const { image_url, image_dimensions, title_link, title_link_download, ...safe } = attachment;
-      const label = attachment.title || attachment.description || '文件';
-      const notice = `[附件：${label}，请在原会话查看]`;
+      const label = attachment.title || attachment.description || t('chat.common.file');
+      const notice = t('chat.forward.protectedNotice', { label });
       return { ...safe, text: [safe.text, notice].filter(Boolean).join('\n') };
     });
 }
@@ -90,7 +91,7 @@ export function mergedForwardAttachments(
       text:
         source.text ||
         attachments[0]?.title ||
-        (attachments.length > 0 ? '[图片/文件]' : '[空消息]'),
+        (attachments.length > 0 ? t('chat.forward.mediaOrFile') : t('chat.forward.emptyMessage')),
       ts: source.ts,
     };
     return [header, ...attachments];

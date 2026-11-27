@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   COMPACT_CONVERSATION_WIDTH,
   effectiveConversationWidth,
@@ -49,25 +51,40 @@ test('私人房间 AI 自然进入对话态，共享托管继续由 AgentPanel �
   assert.match(chatArea, /butlerPanelOpen && ButlerPanel/);
   assert.match(chatArea, /!butlerPanelOpen[\s\S]*id="room-butler-launcher"[\s\S]*onClick=\{\(\) => togglePanel\(\{ kind: 'butler' \}\)\}/);
   assert.doesNotMatch(chatArea, /aria-label="关闭私人房间 AI 浮层"/);
-  assert.match(chatArea, /aria-label="配置 AI 托管"/);
-  assert.match(chatArea, /aria-label="选择 AI 托管项目"/);
+  assert.equal(Object.values(zhCN).some((value) => value.includes('关闭私人房间 AI 浮层')), false);
+  assert.match(chatArea, /aria-label=\{t\('chat\.area\.configureAiHosting'\)\}/);
+  assert.equal(zhCN['chat.area.configureAiHosting'], '配置 AI 托管');
+  assert.ok(enUS['chat.area.configureAiHosting'].length > 0);
+  assert.match(chatArea, /aria-label=\{t\('chat\.area\.selectAiProjectAria'\)\}/);
+  assert.equal(zhCN['chat.area.selectAiProjectAria'], '选择 AI 托管项目');
+  assert.ok(enUS['chat.area.selectAiProjectAria'].length > 0);
   assert.match(chatArea, /onClick=\{\(\) => setPanel\(\{ kind: 'agent', tmid: agentSessionKey \}\)\}/);
 
   assert.match(butlerPanel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/);
   assert.match(butlerPanel, /useCodexWorkspace\.getState\(\)\.send/);
   assert.doesNotMatch(butlerPanel, /usePrivateRoomDsh|privateRoomDshKey/);
   assert.match(butlerPanel, /<PanelShell[\s\S]*resizable/);
-  assert.match(butlerPanel, /aria-label="私人房间 AI 对话"/);
-  assert.match(butlerPanel, /私人会话/);
-  assert.match(butlerPanel, /仅你可见，不会向当前房间发送消息/);
+  assert.match(butlerPanel, /aria-label=\{t\('butler\.roomPanel\.dialogAria'\)\}/);
+  assert.equal(zhCN['butler.roomPanel.dialogAria'], '私人房间 AI 对话');
+  assert.ok(enUS['butler.roomPanel.dialogAria'].length > 0);
+  assert.match(butlerPanel, /t\('butler\.roomPanel\.privateBadge'\)/);
+  assert.equal(zhCN['butler.roomPanel.privateBadge'], '私人会话');
+  assert.ok(enUS['butler.roomPanel.privateBadge'].length > 0);
+  assert.match(butlerPanel, /t\('butler\.roomPanel\.privateNote'\)/);
+  assert.match(zhCN['butler.roomPanel.privateNote'], /仅你可见，不会向当前房间发送消息/);
+  assert.ok(enUS['butler.roomPanel.privateNote'].length > 0);
   assert.match(butlerPanel, /ConversationCopyButton/);
   assert.match(butlerPanel, /navigator\.clipboard\.writeText\(text\)/);
-  assert.match(butlerPanel, /aria-label="设置管家模型与权限"/);
+  assert.match(butlerPanel, /aria-label=\{t\('butler\.roomPanel\.settingsAria'\)\}/);
+  assert.equal(zhCN['butler.roomPanel.settingsAria'], '设置管家模型与权限');
+  assert.ok(enUS['butler.roomPanel.settingsAria'].length > 0);
   assert.match(butlerPanel, /const workspaceRoot = useCodexWorkspace\(\(state\) => state\.workspaceRoot\)/);
   assert.doesNotMatch(butlerPanel, /shadow-\[0_24px_64px/);
   assert.doesNotMatch(butlerPanel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|send\(`?@ai/);
 
-  assert.match(panelShell, /aria-label="关闭侧栏"/);
+  assert.match(panelShell, /aria-label=\{t\('nav\.panel\.closeAria'\)\}/);
+  assert.equal(zhCN['nav.panel.closeAria'], '关闭侧栏');
+  assert.ok(enUS['nav.panel.closeAria'].length > 0);
 
   assert.match(agentPanel, /useSharedAgent/);
   assert.match(agentPanel, /const tmid = sessionKey \?\?/);

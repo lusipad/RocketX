@@ -22,3 +22,4 @@ export interface WorkRuntimeEventsPage {
   cursor: number;
   hasMore: boolean;
 }
+

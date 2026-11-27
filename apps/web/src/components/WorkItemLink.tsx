@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ExternalLink, MessageSquare, MessageSquarePlus, SendHorizontal } from 'lucide-react';
+import { useT } from '../i18n';
 import {
   adoWebBase,
   commentWorkItem,
@@ -42,6 +43,7 @@ function QuickComment({
   inputBg?: string;
   onSent?: () => void;
 }) {
+  const t = useT();
   const [comment, setComment] = useState('');
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -61,7 +63,7 @@ function QuickComment({
         onSent?.();
       }, 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '评论失败');
+      setError(err instanceof Error ? err.message : t('workbench.workItem.commentFailed'));
     } finally {
       setSending(false);
     }
@@ -82,7 +84,7 @@ function QuickComment({
           value={comment}
           onChange={(e) => setComment(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="评论，Enter 发送"
+          placeholder={t('workbench.workItem.commentPlaceholder')}
           className={`h-6 min-w-0 flex-1 rounded px-2 text-xs outline-none placeholder:text-ink-3 ${inputBg}`}
         />
         <button
@@ -97,7 +99,7 @@ function QuickComment({
           {sent ? <Check size={12} /> : <SendHorizontal size={12} />}
         </button>
       </span>
-      {sent && <span className="mt-1 block text-xs text-success">已评论</span>}
+      {sent && <span className="mt-1 block text-xs text-success">{t('workbench.workItem.commented')}</span>}
       {error && <span className="mt-1 block text-xs text-danger">{error}</span>}
     </>
   );
@@ -117,6 +119,7 @@ function HoverCard({
   onEnter: () => void;
   onLeave: () => void;
 }) {
+  const t = useT();
   const left = Math.min(pos.x, window.innerWidth - 340);
   const top = Math.min(pos.y, window.innerHeight - 230);
 
@@ -128,7 +131,7 @@ function HoverCard({
       className="fixed z-50 w-[330px] rounded-xl bg-surface-4 shadow-raise p-4 shadow-[0_8px_24px_rgba(31,35,41,0.16)]"
     >
       {info === 'loading' ? (
-        <div className="py-4 text-center text-sm text-ink-3">加载中…</div>
+        <div className="py-4 text-center text-sm text-ink-3">{t('workbench.common.loadingShort')}</div>
       ) : (
         <>
           <div className="flex items-center gap-2">
@@ -143,7 +146,7 @@ function HoverCard({
               href={info.webUrl}
               target="_blank"
               rel="noreferrer"
-              title="在 Azure DevOps 中打开"
+              title={t('workbench.common.openInAdo')}
               className="ml-auto text-ink-3 hover:text-primary"
             >
               <ExternalLink size={14} />
@@ -163,7 +166,9 @@ function HoverCard({
             {info.priority != null && (
               <span className="rounded bg-fill-1 px-1.5 py-0.5 text-ink-2">P{info.priority}</span>
             )}
-            {info.assignedTo && <span className="text-ink-3">负责人：{info.assignedTo}</span>}
+            {info.assignedTo && (
+              <span className="text-ink-3">{t('workbench.workItem.assignedToLabel', { name: info.assignedTo })}</span>
+            )}
           </div>
           <div className="mt-3 border-t border-line pt-2.5">
             <QuickComment id={id} inputBg="bg-fill-1" />
@@ -245,6 +250,7 @@ export default function WorkItemLink({
   id: number;
   variant?: 'card' | 'chip';
 }) {
+  const t = useT();
   const [info, setInfo] = useState<AdoWorkItemInfo | null | 'loading'>('loading');
   const [showComment, setShowComment] = useState(false);
   const [showDiscussion, setShowDiscussion] = useState(false);
@@ -293,7 +299,7 @@ export default function WorkItemLink({
         <span className="flex animate-pulse flex-col rounded-lg border border-line bg-fill-1">
           <span className="block h-1 rounded-t-lg bg-line" />
           <span className="px-3 pt-1.5 pb-2">
-            <span className="block text-xs text-ink-3">#{id} 加载中…</span>
+            <span className="block text-xs text-ink-3">{t('workbench.workItem.loadingId', { id })}</span>
             <span className="mt-1 block h-4 w-44 max-w-full rounded bg-fill-2" />
             <span className="mt-1.5 block h-[18px] w-24 rounded bg-fill-2" />
           </span>
@@ -329,7 +335,7 @@ export default function WorkItemLink({
                   e.stopPropagation();
                   setShowDiscussion(true);
                 }}
-                title="创建工作项讨论"
+                title={t('workbench.workItem.createDiscussion')}
                 className="text-ink-3 transition hover:text-primary"
               >
                 <MessageSquarePlus size={12} />
@@ -340,7 +346,7 @@ export default function WorkItemLink({
                   e.stopPropagation();
                   setShowComment((v) => !v);
                 }}
-                title="快速评论"
+                title={t('workbench.workItem.quickComment')}
                 className="text-ink-3 transition hover:text-primary"
               >
                 <MessageSquare size={12} />
@@ -349,7 +355,7 @@ export default function WorkItemLink({
                 href={info.webUrl}
                 target="_blank"
                 rel="noreferrer"
-                title="在 Azure DevOps 中打开"
+                title={t('workbench.common.openInAdo')}
                 className="text-ink-3 transition hover:text-primary"
                 onClick={(e) => e.stopPropagation()}
               >

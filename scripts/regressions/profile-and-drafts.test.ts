@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { rest, setServerBase } from '../../apps/web/src/lib/client';
 import { useChat } from '../../apps/web/src/stores/chat';
 
@@ -144,10 +146,14 @@ test('自定义状态只做清单管理，不假装能应用（真机实测）',
   assert.match(settings, /rest\.deleteCustomUserStatus/);
   // 不再有「把状态挂到自己身上」的入口
   assert.doesNotMatch(settings, /statusType: customStatusId/);
-  assert.match(settings, /REST 做不到|无法把自定义状态挂到自己身上/);
+  assert.match(settings, /hint=\{t\('settings\.account\.customStatusesHint'\)\}/);
+  assert.match(zhCN['settings.account.customStatusesHint'], /REST 做不到|无法把自定义状态挂到自己身上/);
+  assert.ok(enUS['settings.account.customStatusesHint'].length > 0);
   // 昵称/简介合并提交（服务端限流每分钟 1 次）
   assert.match(settings, /rest\.updateOwnBasicInfo\(\{ nickname, bio \}\)/);
-  assert.match(settings, /限流每分钟 1 次/);
+  assert.match(settings, /hint=\{t\('settings\.account\.saveProfileHint'\)\}/);
+  assert.match(zhCN['settings.account.saveProfileHint'], /限流每分钟 1 次/);
+  assert.ok(enUS['settings.account.saveProfileHint'].length > 0);
 });
 
 test('草稿在订阅列表里就有，不必逐个 getOne（真机实测）', async () => {
@@ -171,9 +177,15 @@ test('停用账号：只给管理员看，且用 users.setActiveStatus', async (
   assert.match(userCard, /me\?\.roles\?\.includes\('admin'\)/);
   assert.match(userCard, /canManageAccount && user\._id/);
   assert.match(userCard, /rest\.setUserActiveStatus\(user\._id, !user\.active\)/);
-  assert.match(userCard, /停用后该账号无法登录/);
+  assert.match(userCard, /t\('nav\.userCard\.disableHint'\)/);
+  assert.match(zhCN['nav.userCard.disableHint'], /停用后该账号无法登录/);
+  assert.ok(enUS['nav.userCard.disableHint'].length > 0);
   // 成员列表接口不返回 active，打开卡片时补一次 users.info
-  assert.match(userCard, /user\.active === false \? '启用账号' : '停用账号'/);
+  assert.match(userCard, /user\.active === false \? t\('nav\.userCard\.enableAccount'\) : t\('nav\.userCard\.disableAccount'\)/);
+  assert.equal(zhCN['nav.userCard.enableAccount'], '启用账号');
+  assert.equal(zhCN['nav.userCard.disableAccount'], '停用账号');
+  assert.ok(enUS['nav.userCard.enableAccount'].length > 0);
+  assert.ok(enUS['nav.userCard.disableAccount'].length > 0);
   assert.match(users, /'users\.setActiveStatus',/);
   assert.match(users, /activeStatus: active/);
 });

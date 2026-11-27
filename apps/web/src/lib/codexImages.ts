@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export const MAX_CODEX_IMAGES = 4;
 export const MAX_CODEX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_CODEX_IMAGE_TOTAL_BYTES = 25 * 1024 * 1024;
@@ -32,7 +34,7 @@ export interface CodexGeneratedImage {
 function fileDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error(`无法读取图片 ${file.name}`));
+    reader.onerror = () => reject(reader.error ?? new Error(t('agent.codexImages.readFailed', { name: file.name })));
     reader.onload = () => resolve(String(reader.result));
     reader.readAsDataURL(file);
   });
@@ -45,16 +47,16 @@ export async function appendCodexImages(
   const selected = [...current];
   for (const file of files) {
     if (selected.length >= MAX_CODEX_IMAGES) {
-      throw new Error(`每次最多发送 ${MAX_CODEX_IMAGES} 张图片`);
+      throw new Error(t('agent.codexImages.tooMany', { max: MAX_CODEX_IMAGES }));
     }
     if (!SUPPORTED_IMAGE_TYPES.has(file.type.toLowerCase())) {
-      throw new Error(`不支持 ${file.name} 的图片格式，请使用 PNG、JPEG、GIF 或 WebP`);
+      throw new Error(t('agent.codexImages.unsupportedType', { name: file.name }));
     }
     if (file.size > MAX_CODEX_IMAGE_BYTES) {
-      throw new Error(`${file.name} 超过 10 MiB`);
+      throw new Error(t('agent.codexImages.tooLargeSingle', { name: file.name }));
     }
     if (selected.reduce((total, image) => total + image.size, 0) + file.size > MAX_CODEX_IMAGE_TOTAL_BYTES) {
-      throw new Error('本次图片总大小不能超过 25 MiB');
+      throw new Error(t('agent.codexImages.tooLargeTotal'));
     }
     selected.push({
       name: file.name,

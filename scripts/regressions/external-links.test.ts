@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { localPermalinkMessageId } from '../../apps/web/src/lib/messageText';
 
 test('仅识别当前 Rocket.Chat 部署路径以内的消息永久链接', () => {
@@ -22,7 +24,9 @@ test('普通 HTTP(S) 外链走受校验的原生命令，失败会明确提示�
 
   assert.match(client, /invoke\('open_external_url', \{ url \}\)/);
   assert.match(client, /openExternal\(href\)\.catch\(onError\)/);
-  assert.match(main, /无法用系统浏览器打开链接/);
+  assert.match(main, /t\('auth\.main\.openExternalFailed'\)/);
+  assert.equal(zhCN['auth.main.openExternalFailed'], '无法用系统浏览器打开链接');
+  assert.ok(enUS['auth.main.openExternalFailed'].length > 0);
 });
 
 test('Codex 线程 deep link 也走受校验的原生命令（issue #132）', () => {

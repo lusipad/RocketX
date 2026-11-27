@@ -15,6 +15,10 @@ pub use butler_ledger::*;
 mod butler_memory;
 pub use butler_memory::*;
 
+#[path = "butler_skills.rs"]
+mod butler_skills;
+pub use butler_skills::*;
+
 #[path = "butler_runtime_account.rs"]
 mod butler_runtime_account;
 use butler_runtime_account::RuntimeAccountSelection;
@@ -93,10 +97,8 @@ impl ButlerDb {
 pub fn init_db(app_data_dir: PathBuf) -> Result<ButlerDb, String> {
     std::fs::create_dir_all(&app_data_dir)
         .map_err(|error| format!("无法创建应用数据目录：{error}"))?;
-    // Account selection opens the durable database; never expose an unclaimed
-    // installation-wide legacy file through commands during startup.
-    let mut connection =
-        Connection::open_in_memory().map_err(|error| format!("无法初始化管家数据库：{error}"))?;
+    let mut connection = Connection::open(app_data_dir.join("butler.db"))
+        .map_err(|error| format!("无法打开管家数据库：{error}"))?;
     connection
         .execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
         .map_err(|error| format!("无法配置管家数据库：{error}"))?;
@@ -154,6 +156,7 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
     {
         butler_ledger::migrate_ledger(connection)?;
         butler_memory::migrate_memory(connection)?;
+        butler_skills::migrate_skills(connection)?;
         butler_runtime_events::migrate_runtime_events(connection)?;
         butler_native_runtime::migrate_native_runtime(connection)?;
     }
@@ -257,12 +260,8 @@ pub struct TodoFilter {
 #[serde(rename_all = "camelCase")]
 struct LegacyTodo {
     id: String,
-    source: Option<String>,
-    title: Option<String>,
     rid: Option<String>,
     mid: Option<String>,
-    ado_work_item_id: Option<i64>,
-    ado_project: Option<String>,
     room_name: Option<String>,
     excerpt: Option<String>,
     author: Option<String>,
@@ -271,10 +270,6 @@ struct LegacyTodo {
     done: bool,
     created_at: i64,
     done_at: Option<i64>,
-    updated_at: Option<i64>,
-    priority: Option<i32>,
-    committed_to: Option<String>,
-    waiting_for: Option<String>,
 }
 
 async fn run_db<T, F>(connection: Arc<Mutex<Connection>>, operation: F) -> Result<T, String>
@@ -297,7 +292,7 @@ pub async fn butler_todo_add(
     db: tauri::State<'_, ButlerDb>,
     todo: NewTodo,
 ) -> Result<Todo, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         add_todo(connection, todo)
     })
     .await
@@ -309,7 +304,7 @@ pub async fn butler_todo_update(
     id: String,
     patch: TodoPatch,
 ) -> Result<Todo, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         update_todo(connection, &id, patch)
     })
     .await
@@ -317,7 +312,7 @@ pub async fn butler_todo_update(
 
 #[tauri::command]
 pub async fn butler_todo_delete(db: tauri::State<'_, ButlerDb>, id: String) -> Result<(), String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         connection
             .execute("DELETE FROM todos WHERE id = ?1", params![id])
             .map_err(|error| format!("无法删除待办：{error}"))?;
@@ -331,7 +326,7 @@ pub async fn butler_todo_list(
     db: tauri::State<'_, ButlerDb>,
     filter: TodoFilter,
 ) -> Result<Vec<Todo>, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         list_todos(connection, filter)
     })
     .await
@@ -342,7 +337,7 @@ pub async fn butler_todo_migrate_from_json(
     db: tauri::State<'_, ButlerDb>,
     json: String,
 ) -> Result<u32, String> {
-    run_db(db.connection(), move |connection| {
+    run_db(db.ready_connection()?, move |connection| {
         migrate_from_json(connection, &json)
     })
     .await
@@ -567,35 +562,25 @@ fn migrate_from_json(connection: &mut Connection, json: &str) -> Result<u32, Str
     for item in legacy {
         validate_optional_date(item.due.as_deref())?;
         let title = item
-            .title
-            .filter(|v| !v.trim().is_empty())
-            .or(item.excerpt)
+            .excerpt
+            .clone()
             .or_else(|| item.note.clone())
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "待办".to_string());
-        let source = item
-            .source
-            .as_deref()
-            .unwrap_or(if item.ado_work_item_id.is_some() {
-                "ado"
-            } else if item.mid.is_some() {
-                "message"
-            } else {
-                "manual"
-            });
-        let updated_at = item
-            .updated_at
-            .or(item.done_at)
-            .unwrap_or(item.created_at)
-            .max(item.created_at);
+        let source = if item.mid.is_some() {
+            "message"
+        } else {
+            "manual"
+        };
+        let updated_at = item.done_at.unwrap_or(item.created_at).max(item.created_at);
         let changed = transaction
             .execute(
-                "INSERT INTO todos (
+                "INSERT OR IGNORE INTO todos (
                     id, source, rid, mid, title, note, room_name, author, done,
-                    priority, due, created_at, done_at, updated_at, ado_work_item_id, ado_project, committed_to, waiting_for
+                    priority, due, created_at, done_at, updated_at
                  ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
-                 ) ON CONFLICT(id) DO NOTHING",
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 3, ?10, ?11, ?12, ?13
+                 )",
                 params![
                     item.id,
                     source,
@@ -606,15 +591,10 @@ fn migrate_from_json(connection: &mut Connection, json: &str) -> Result<u32, Str
                     item.room_name,
                     item.author,
                     i64::from(item.done),
-                    item.priority.unwrap_or(3),
                     item.due,
                     item.created_at,
                     item.done_at,
                     updated_at,
-                    item.ado_work_item_id,
-                    item.ado_project,
-                    item.committed_to,
-                    item.waiting_for,
                 ],
             )
             .map_err(|error| format!("无法导入旧待办：{error}"))?;
@@ -817,33 +797,6 @@ mod tests {
                 .expect("todo exists")
                 .title,
             "发布说明"
-        );
-    }
-
-    #[test]
-    fn scoped_json_restore_preserves_work_links_and_editable_fields() {
-        let mut connection = connection();
-        let json = r#"[{"id":"tracked","source":"ado","title":"保留原题","note":"补充","done":false,
-            "adoWorkItemId":42,"adoProject":"project","priority":1,"committedTo":"A","waitingFor":"B",
-            "createdAt":1,"updatedAt":7}]"#;
-        assert_eq!(migrate_from_json(&mut connection, json).unwrap(), 1);
-        let todo = get_todo(&connection, "tracked").unwrap().unwrap();
-        assert_eq!(
-            (
-                todo.title.as_str(),
-                todo.source.as_str(),
-                todo.priority,
-                todo.updated_at
-            ),
-            ("保留原题", "ado", 1, 7)
-        );
-        assert_eq!(
-            (todo.ado_work_item_id, todo.ado_project.as_deref()),
-            (Some(42), Some("project"))
-        );
-        assert_eq!(
-            (todo.committed_to.as_deref(), todo.waiting_for.as_deref()),
-            (Some("A"), Some("B"))
         );
     }
 

@@ -10,16 +10,18 @@ import {
 
   CornerUpRight,
 } from 'lucide-react';
+import { useI18n, useT, type MessageKey } from '../i18n';
+import { formatDate } from '../i18n/format';
 import { openButlerSource } from '../lib/butlerSourceNavigation';
 import {
   useCalendar,
   monthGrid,
   weekDays,
   dateKey,
+  parseDate,
   eventsInRange,
   eventsForDate,
-  DAY_NAMES,
-  WEEK_HEADERS,
+  WEEK_HEADER_KEYS,
   isEventDone,
   type CalendarEvent,
   type CalendarView,
@@ -30,7 +32,33 @@ import { openExternal } from '../lib/client';
 import CalendarEventDialog from '../components/CalendarEventDialog';
 import TimeGrid from '../components/TimeGrid';
 
-const VIEW_LABELS: Record<CalendarView, string> = { month: '月', week: '周', day: '日' };
+const VIEW_LABEL_KEYS: Record<CalendarView, MessageKey> = {
+  month: 'pages.calendar.view.month',
+  week: 'pages.calendar.view.week',
+  day: 'pages.calendar.view.day',
+};
+
+const PREV_LABEL_KEYS: Record<CalendarView, MessageKey> = {
+  month: 'pages.calendar.prev.month',
+  week: 'pages.calendar.prev.week',
+  day: 'pages.calendar.prev.day',
+};
+
+const NEXT_LABEL_KEYS: Record<CalendarView, MessageKey> = {
+  month: 'pages.calendar.next.month',
+  week: 'pages.calendar.next.week',
+  day: 'pages.calendar.next.day',
+};
+
+const WEEKDAY_KEYS: readonly MessageKey[] = [
+  'nav.date.weekday.0',
+  'nav.date.weekday.1',
+  'nav.date.weekday.2',
+  'nav.date.weekday.3',
+  'nav.date.weekday.4',
+  'nav.date.weekday.5',
+  'nav.date.weekday.6',
+];
 
 /** 日程+待办+工作台的统一条目 */
 interface UnifiedItem {
@@ -51,6 +79,7 @@ function unifyForDate(
   todos: Todo[],
   workItems: WorkItem[],
   dateStr: string,
+  emptyContent: string,
 ): UnifiedItem[] {
   const items: UnifiedItem[] = [];
   const today = todayKey();
@@ -90,17 +119,17 @@ function unifyForDate(
     });
   }
 
-  for (const t of todos) {
-    if (t.due !== dateStr) continue;
+  for (const todo of todos) {
+    if (todo.due !== dateStr) continue;
     items.push({
       type: 'todo',
-      id: t.id,
-      title: t.note || t.excerpt || '（无文字内容）',
-      color: isOverdue(t, today) ? '#f54a45' : t.done ? '#8f959e' : '#3370ff',
-      done: t.done,
-      overdue: isOverdue(t, today),
+      id: todo.id,
+      title: todo.note || todo.excerpt || emptyContent,
+      color: isOverdue(todo, today) ? '#f54a45' : todo.done ? '#8f959e' : '#3370ff',
+      done: todo.done,
+      overdue: isOverdue(todo, today),
       source: 'todo',
-      raw: t,
+      raw: todo,
     });
   }
 
@@ -145,6 +174,7 @@ function MonthCell({
   onCreate: () => void;
   onToggleDone: (id: string, date: string) => void;
 }) {
+  const { t, tp } = useI18n();
   // 有时间的排前面（按时间），全天的垫后
   const sorted = [...events].sort((a, b) => {
     if (a.allDay !== b.allDay) return a.allDay ? 1 : -1;
@@ -167,11 +197,11 @@ function MonthCell({
       onClick: () => onPick(e),
       onToggle: () => onToggleDone(e.id, dayKey),
     })),
-    ...todos.map((t) => ({
-      key: `t${t.id}`,
-      color: isOverdue(t) ? '#f54a45' : '#3370ff',
-      label: `☑ ${t.note || t.excerpt}`,
-      done: t.done,
+    ...todos.map((todo) => ({
+      key: `t${todo.id}`,
+      color: isOverdue(todo) ? '#f54a45' : '#3370ff',
+      label: `☑ ${todo.note || todo.excerpt || todo.title || t('pages.todos.emptyContent')}`,
+      done: todo.done,
       onClick: onSelect,
     })),
     ...workItems.map((w) => ({
@@ -192,7 +222,7 @@ function MonthCell({
       className={`group flex min-h-0 cursor-pointer flex-col border-r border-b border-line p-1 transition last:border-r-0 ${
         isSelected ? 'bg-primary-light/40' : 'hover:bg-fill-hover'
       } ${isCurrentMonth ? '' : 'bg-fill-1/50'}`}
-      title="双击空白处新建日程"
+      title={t('pages.calendar.doubleClickCreate')}
     >
       <div className="flex shrink-0 items-center justify-between px-0.5">
         <span
@@ -212,7 +242,7 @@ function MonthCell({
             onCreate();
           }}
           className="text-ink-3 opacity-0 transition group-hover:opacity-100 hover:text-primary"
-          title="新建日程"
+          title={t('pages.calendar.newEvent')}
         >
           <Plus size={12} />
         </button>
@@ -243,7 +273,7 @@ function MonthCell({
                   background: it.done ? it.color : 'transparent',
                   border: `1.5px solid ${it.color}`,
                 }}
-                title={it.done ? '标记为未完成' : '标记完成'}
+                title={t(it.done ? 'pages.calendar.markUndone' : 'pages.calendar.markDone')}
               />
             ) : (
               <span
@@ -259,7 +289,9 @@ function MonthCell({
           </button>
         ))}
         {items.length > MAX && (
-          <div className="px-1 text-xs text-ink-3">还有 {items.length - MAX} 项</div>
+          <div className="px-1 text-xs text-ink-3">
+            {tp(items.length - MAX, 'pages.calendar.moreItemsOne', 'pages.calendar.moreItemsOther')}
+          </div>
         )}
       </div>
     </div>
@@ -275,6 +307,7 @@ function EventItem({
   onClick: () => void;
   onToggle?: () => void;
 }) {
+  const t = useT();
   const origin = item.type === 'event' ? (item.raw as CalendarEvent).origin : undefined;
   return (
     <button
@@ -299,7 +332,7 @@ function EventItem({
           background: item.done ? item.color : 'transparent',
           border: `2px solid ${item.color}`,
         }}
-        title={onToggle ? (item.done ? '标记为未完成' : '标记完成') : undefined}
+        title={onToggle ? t(item.done ? 'pages.calendar.markUndone' : 'pages.calendar.markDone') : undefined}
       />
       <div className="min-w-0 flex-1">
         <div className={`text-sm ${item.done ? 'text-ink-3 line-through' : 'text-ink'}`}>
@@ -313,12 +346,12 @@ function EventItem({
           )}
           {item.repeat && (
             <span className="flex items-center gap-0.5">
-              <Repeat size={12} /> 重复
+              <Repeat size={12} /> {t('pages.calendar.repeatBadge')}
             </span>
           )}
           {item.type === 'todo' && (
             <span className="flex items-center gap-0.5">
-              <ListTodo size={12} /> 待办
+              <ListTodo size={12} /> {t('pages.calendar.todoBadge')}
             </span>
           )}
           {/* 有出处就让它能回去——一条日程脱离上下文就成了「这是啥来着」 */}
@@ -326,7 +359,7 @@ function EventItem({
             <span
               role="button"
               tabIndex={0}
-              title={`回到出处：${origin.label}`}
+              title={t('pages.calendar.backToSource', { label: origin.label })}
               onClick={(event) => {
                 event.stopPropagation();
                 void openButlerSource(origin);
@@ -344,11 +377,11 @@ function EventItem({
           )}
           {item.type === 'workitem' && (
             <span className="flex items-center gap-0.5">
-              <CircleDot size={12} /> ADO 工作项
+              <CircleDot size={12} /> {t('pages.calendar.adoWorkItemBadge')}
             </span>
           )}
           {item.overdue && (
-            <span className="font-medium text-danger">已逾期</span>
+            <span className="font-medium text-danger">{t('pages.calendar.overdueBadge')}</span>
           )}
         </div>
       </div>
@@ -357,6 +390,7 @@ function EventItem({
 }
 
 export default function CalendarPage() {
+  const { t, locale } = useI18n();
   const events = useCalendar((s) => s.events);
   const view = useCalendar((s) => s.view);
   const cursor = useCalendar((s) => s.cursor);
@@ -388,8 +422,6 @@ export default function CalendarPage() {
   }, [wbConfig, wbLastRefresh, wbRefresh]);
   const setSelectedDate = useCalendar((s) => s.setSelectedDate);
   const prev = useCalendar((s) => s.prev);
-  // 翻页单位跟着视图走：写死「上一个月」在周/日视图里就是错的
-  const viewUnit = view === 'month' ? '个月' : view === 'week' ? '周' : '天';
   const next = useCalendar((s) => s.next);
   const goToday = useCalendar((s) => s.today);
 
@@ -412,20 +444,35 @@ export default function CalendarPage() {
   }, [cursor]);
 
   const headerLabel = useMemo(() => {
+    if (locale === 'zh-CN') {
+      if (view === 'month') {
+        return `${cursorDate.getFullYear()} 年 ${cursorDate.getMonth() + 1} 月`;
+      }
+      if (view === 'week') {
+        const days = weekDays(cursorDate);
+        const s = days[0];
+        const e = days[6];
+        if (s.getMonth() === e.getMonth()) {
+          return `${s.getFullYear()} 年 ${s.getMonth() + 1} 月 ${s.getDate()}-${e.getDate()} 日`;
+        }
+        return `${s.getMonth() + 1}/${s.getDate()} - ${e.getMonth() + 1}/${e.getDate()}`;
+      }
+      return `${cursorDate.getFullYear()} 年 ${cursorDate.getMonth() + 1} 月 ${cursorDate.getDate()} 日`;
+    }
     if (view === 'month') {
-      return `${cursorDate.getFullYear()} 年 ${cursorDate.getMonth() + 1} 月`;
+      return formatDate(cursorDate, { year: 'numeric', month: 'long' }, locale);
     }
     if (view === 'week') {
       const days = weekDays(cursorDate);
       const s = days[0];
       const e = days[6];
       if (s.getMonth() === e.getMonth()) {
-        return `${s.getFullYear()} 年 ${s.getMonth() + 1} 月 ${s.getDate()}-${e.getDate()} 日`;
+        return `${formatDate(s, { month: 'short' }, locale)} ${s.getDate()}–${e.getDate()}, ${s.getFullYear()}`;
       }
-      return `${s.getMonth() + 1}/${s.getDate()} - ${e.getMonth() + 1}/${e.getDate()}`;
+      return `${formatDate(s, { month: 'short', day: 'numeric' }, locale)} – ${formatDate(e, { month: 'short', day: 'numeric', year: 'numeric' }, locale)}`;
     }
-    return `${cursorDate.getFullYear()} 年 ${cursorDate.getMonth() + 1} 月 ${cursorDate.getDate()} 日`;
-  }, [view, cursorDate]);
+    return formatDate(cursorDate, { year: 'numeric', month: 'long', day: 'numeric' }, locale);
+  }, [view, cursorDate, locale]);
 
   const gridDates = useMemo(() => {
     if (view === 'month') return monthGrid(cursorDate.getFullYear(), cursorDate.getMonth());
@@ -434,15 +481,16 @@ export default function CalendarPage() {
   }, [view, cursorDate]);
 
   const eventMap = useMemo(() => eventsInRange(events, gridDates), [events, gridDates]);
+  const emptyTodoContent = t('pages.todos.emptyContent');
 
   const selectedItems = useMemo(
-    () => (selectedDate ? unifyForDate(events, todos, workItems, selectedDate) : []),
-    [events, todos, workItems, selectedDate],
+    () => (selectedDate ? unifyForDate(events, todos, workItems, selectedDate, emptyTodoContent) : []),
+    [events, todos, workItems, selectedDate, emptyTodoContent],
   );
 
   const todayItems = useMemo(
-    () => unifyForDate(events, todos, workItems, today),
-    [events, todos, workItems, today],
+    () => unifyForDate(events, todos, workItems, today, emptyTodoContent),
+    [events, todos, workItems, today, emptyTodoContent],
   );
 
   const handleItemClick = (item: UnifiedItem) => {
@@ -468,8 +516,8 @@ export default function CalendarPage() {
             <div className="flex items-center gap-0.5 rounded-xl border border-line-soft bg-surface-2 p-0.5">
               <button
                 onClick={prev}
-                title={`上一${viewUnit}`}
-                aria-label={`上一${viewUnit}`}
+                title={t(PREV_LABEL_KEYS[view])}
+                aria-label={t(PREV_LABEL_KEYS[view])}
                 className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-2 transition hover:bg-surface-4 hover:text-ink"
               >
                 <ChevronLeft size={16} />
@@ -478,12 +526,12 @@ export default function CalendarPage() {
                 onClick={goToday}
                 className="h-7 rounded-lg px-2.5 text-xs font-medium text-ink-2 transition hover:bg-surface-4 hover:text-ink"
               >
-                今天
+                {t('pages.calendar.today')}
               </button>
               <button
                 onClick={next}
-                title={`下一${viewUnit}`}
-                aria-label={`下一${viewUnit}`}
+                title={t(NEXT_LABEL_KEYS[view])}
+                aria-label={t(NEXT_LABEL_KEYS[view])}
                 className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-2 transition hover:bg-surface-4 hover:text-ink"
               >
                 <ChevronRight size={16} />
@@ -502,7 +550,7 @@ export default function CalendarPage() {
                       : 'text-ink-2 hover:text-ink'
                   }`}
                 >
-                  {VIEW_LABELS[v]}
+                  {t(VIEW_LABEL_KEYS[v])}
                 </button>
               ))}
             </div>
@@ -511,7 +559,7 @@ export default function CalendarPage() {
               className="flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
             >
               <Plus size={14} />
-              新建日程
+              {t('pages.calendar.newEvent')}
             </button>
           </div>
         </header>
@@ -521,9 +569,9 @@ export default function CalendarPage() {
           <div className="flex flex-1 flex-col overflow-hidden">
             {/* 星期头（按周起始日排，国内习惯周一） */}
             <div className="grid grid-cols-7 border-b border-line bg-surface-4">
-              {WEEK_HEADERS.map((name, i) => (
+              {WEEK_HEADER_KEYS.map((key, i) => (
                 <div key={i} className="py-2 text-center text-xs font-medium text-ink-3">
-                  {name}
+                  {t(key)}
                 </div>
               ))}
             </div>
@@ -588,10 +636,13 @@ export default function CalendarPage() {
             <span className="text-sm font-semibold text-ink">
               {selectedDate
                 ? (() => {
-                    const d = new Date(selectedDate + 'T00:00:00');
-                    return `${d.getMonth() + 1}月${d.getDate()}日 · 周${DAY_NAMES[d.getDay()]}`;
+                    const d = parseDate(selectedDate);
+                    if (locale === 'zh-CN') {
+                      return `${d.getMonth() + 1}月${d.getDate()}日 · ${t(WEEKDAY_KEYS[d.getDay()])}`;
+                    }
+                    return formatDate(d, { weekday: 'short', month: 'short', day: 'numeric' }, locale);
                   })()
-                : '选择日期'}
+                : t('pages.calendar.selectDate')}
             </span>
             <div className="flex items-center gap-0.5">
               <button
@@ -602,8 +653,8 @@ export default function CalendarPage() {
                     defaultDate: selectedDate ?? today,
                   })
                 }
-                aria-label="新建日程"
-                title="新建日程"
+                aria-label={t('pages.calendar.newEvent')}
+                title={t('pages.calendar.newEvent')}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
                 <Plus size={14} />
@@ -633,12 +684,12 @@ export default function CalendarPage() {
           ) : (
             selectedDate && (
               <div className="flex flex-col items-center gap-2 py-12 text-center">
-                <div className="text-xs text-ink-3">暂无日程</div>
+                <div className="text-xs text-ink-3">{t('pages.calendar.noEvents')}</div>
                 <button
                   onClick={() => setDialog({ mode: 'create', defaultDate: selectedDate })}
                   className="text-xs text-primary transition hover:underline"
                 >
-                  添加日程
+                  {t('pages.calendar.addEvent')}
                 </button>
               </div>
             )
@@ -648,7 +699,7 @@ export default function CalendarPage() {
           {selectedDate !== today && todayItems.length > 0 && (
             <div className="border-t border-line">
               <div className="px-4 py-2.5">
-                <span className="text-xs font-medium text-ink-3">今天日程</span>
+                <span className="text-xs font-medium text-ink-3">{t('pages.calendar.todayEvents')}</span>
               </div>
               {todayItems.map((item) => (
                 <EventItem
@@ -670,31 +721,31 @@ export default function CalendarPage() {
           {/* 近期待办 */}
           {(() => {
             const upcoming = todos
-              .filter((t) => !t.done && t.due && t.due >= today)
+              .filter((todo) => !todo.done && todo.due && todo.due >= today)
               .sort((a, b) => (a.due ?? '').localeCompare(b.due ?? ''))
               .slice(0, 5);
             if (upcoming.length === 0) return null;
             return (
               <div className="border-t border-line">
                 <div className="px-4 py-2.5">
-                  <span className="text-xs font-medium text-ink-3">近期待办</span>
+                  <span className="text-xs font-medium text-ink-3">{t('pages.calendar.upcomingTodos')}</span>
                 </div>
-                {upcoming.map((t) => (
+                {upcoming.map((todo) => (
                   <button
-                    key={t.id}
+                    key={todo.id}
                     onClick={() => {
-                      if (t.due) {
-                        setSelectedDate(t.due);
-                        setCursor(t.due);
+                      if (todo.due) {
+                        setSelectedDate(todo.due);
+                        setCursor(todo.due);
                       }
                     }}
                     className="flex w-full items-center gap-2.5 px-4 py-1.5 text-left transition hover:bg-fill-hover"
                   >
                     <span className="h-2 w-2 shrink-0 rounded-full bg-primary" />
                     <span className="min-w-0 flex-1 truncate text-xs text-ink">
-                      {t.note || t.excerpt}
+                      {todo.note || todo.excerpt}
                     </span>
-                    <span className="shrink-0 text-xs text-ink-3">{t.due}</span>
+                    <span className="shrink-0 text-xs text-ink-3">{todo.due}</span>
                   </button>
                 ))}
               </div>

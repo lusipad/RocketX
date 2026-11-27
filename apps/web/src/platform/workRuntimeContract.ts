@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 /** Display/transport contracts only. Native admission owns identity and authorization. */
 export const NATIVE_CODEX_COMMAND_SCHEMA = 'rocketx.native-codex-command.v1';
 export const NATIVE_COMMAND_EXECUTOR = 'native_host';
@@ -114,7 +116,7 @@ export function validateNativeCommandSpec(value: unknown): asserts value is Nati
     'schema', 'executor', 'requestId', 'todoId', 'scope', 'binding', 'expected', 'queueAfterTurn', 'intent', 'submittedBy',
   ]);
   if (spec.schema !== NATIVE_CODEX_COMMAND_SCHEMA || spec.executor !== NATIVE_COMMAND_EXECUTOR) {
-    throw new Error('不支持的原生命令合同或执行者');
+    throw new Error(t('nav.workContract.unsupportedSchema'));
   }
   identifier(spec.requestId, 'requestId', 256);
   identifier(spec.todoId, 'todoId', 256);
@@ -154,27 +156,27 @@ const utf8 = new TextEncoder();
 const whitespaceEdge = /^[\s\u0085]|[\s\u0085]$/u;
 
 function objectFields(value: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('命令字段必须是对象');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('nav.workContract.mustBeObject'));
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).some((key) => !allowed.includes(key))) throw new Error('命令包含未知字段');
+  if (Object.keys(record).some((key) => !allowed.includes(key))) throw new Error(t('nav.workContract.unknownFields'));
   return record;
 }
 
 function identifier(value: unknown, field: string, limit: number): asserts value is string {
   if (typeof value !== 'string' || !value || whitespaceEdge.test(value)
     || /\p{Cc}|[\uD800-\uDFFF]/u.test(value) || utf8.encode(value).length > limit) {
-    throw new Error(`${field} 必须为非空、无首尾空白及控制字符且不超过 ${limit} 字节的值`);
+    throw new Error(t('nav.workContract.invalidIdentifier', { field, limit }));
   }
 }
 
 function version(value: unknown, field: string): void {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${field} 必须为合同范围内的非负整数`);
+    throw new Error(t('nav.workContract.invalidVersion', { field }));
   }
 }
 
 function submitter(value: unknown): void {
-  if (value !== 'user' && value !== 'butler' && value !== 'automation') throw new Error('命令提交来源无效');
+  if (value !== 'user' && value !== 'butler' && value !== 'automation') throw new Error(t('nav.workContract.invalidSubmitter'));
 }
 
 function intent(value: unknown, nativeTurnId: unknown): void {
@@ -182,25 +184,25 @@ function intent(value: unknown, nativeTurnId: unknown): void {
   if (item.kind === 'prompt' || item.kind === 'steer') {
     if (typeof item.text !== 'string' || !/[^\s\u0085]/u.test(item.text)
       || /[\uD800-\uDFFF]/u.test(item.text) || utf8.encode(item.text).length > MAX_COMMAND_TEXT_BYTES) {
-      throw new Error('指令正文不能为空或超过 256 KiB');
+      throw new Error(t('nav.workContract.invalidIntentText'));
     }
   } else if (item.kind === 'resume' || item.kind === 'interrupt') {
-    if (Object.hasOwn(item, 'text')) throw new Error('该动作不接受指令正文');
-  } else { throw new Error('原生命令动作无效'); }
+    if (Object.hasOwn(item, 'text')) throw new Error(t('nav.workContract.intentTextNotAllowed'));
+  } else { throw new Error(t('nav.workContract.invalidIntentKind')); }
   if (item.kind === 'steer' || item.kind === 'interrupt') {
     identifier(nativeTurnId, 'nativeTurnId', 512);
   } else if (nativeTurnId !== undefined && nativeTurnId !== null) {
-    throw new Error('恢复及新轮次指令不得携带旧轮次 ID');
+    throw new Error(t('nav.workContract.unexpectedTurnId'));
   }
 }
 
 function jsonSize(value: unknown): void {
-  if (utf8.encode(JSON.stringify(value)).length > MAX_COMMAND_JSON_BYTES) throw new Error('原生命令超过 512 KiB');
+  if (utf8.encode(JSON.stringify(value)).length > MAX_COMMAND_JSON_BYTES) throw new Error(t('nav.workContract.commandTooLarge'));
 }
 
 function queue(value: unknown, commandIntent: unknown): void {
-  if (value !== undefined && typeof value !== 'boolean') throw new Error('排队选项必须为布尔值');
+  if (value !== undefined && typeof value !== 'boolean') throw new Error(t('nav.workContract.queueMustBeBoolean'));
   if (value === true && (commandIntent as NativeCodexIntent).kind !== 'prompt') {
-    throw new Error('只有新轮次指令可以排队');
+    throw new Error(t('nav.workContract.onlyPromptCanQueue'));
   }
 }

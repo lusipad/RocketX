@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+
 export const CODEX_APP_SERVER_VERSION = '0.144.4' as const;
 export const CODEX_PROTOCOL_BASELINE = CODEX_APP_SERVER_VERSION;
 export const CODEX_MINIMUM_CANDIDATE = '0.140.0' as const;
@@ -11,14 +13,14 @@ export function codexVersionFromUserAgent(userAgent: string): string | null {
 
 export function assertCodexHandshake(userAgent: unknown, processVersion: string): string {
   if (typeof userAgent !== 'string') {
-    throw new Error('Codex app-server 缺少 RocketX 所需的 initialize.userAgent 能力。');
+    throw new Error(t('agent.protocol.missingUserAgent'));
   }
   const version = codexVersionFromUserAgent(userAgent);
   if (!version) {
-    throw new Error(`Codex app-server 返回了无法识别的 userAgent：${userAgent}`);
+    throw new Error(t('agent.protocol.unrecognizedUserAgent', { userAgent }));
   }
   if (version !== processVersion) {
-    throw new Error(`Codex app-server 握手版本不一致：进程报告 ${processVersion}，初始化报告 ${version}。`);
+    throw new Error(t('agent.protocol.handshakeMismatch', { processVersion, version }));
   }
   return version;
 }

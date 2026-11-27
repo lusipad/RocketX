@@ -134,7 +134,9 @@ impl NativeCodexRpc {
         let _worker = thread::spawn(move || {
             while let Ok(Some(job)) = receiver.recv() {
                 {
-                    let mut state = worker_state.lock().unwrap();
+                    let mut state = worker_state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
                     if state.disconnected.is_some() {
                         break;
                     }
@@ -166,7 +168,9 @@ impl NativeCodexRpc {
                     disconnect_shared(&worker_state, &worker_sink, "timeout after write started");
                     break;
                 }
-                let mut state = worker_state.lock().unwrap();
+                let mut state = worker_state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
                 if let Some(pending) = state.pending.get_mut(&job.id) {
                     pending.write_finished = true;
                     if !pending.wait_for_response || pending.response.is_some() {
@@ -286,7 +290,7 @@ impl NativeCodexRpc {
         let timeout = job.timeout;
         let (sender, receiver) = mpsc::channel();
         {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             ensure_connected(&state)?;
             if started.elapsed() >= timeout {
                 return Err(not_sent("timeout before write"));
@@ -312,7 +316,7 @@ impl NativeCodexRpc {
             );
         }
         if self.writes.try_send(Some(job)).is_err() {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(pending) = state.pending.remove(&id) {
                 restore_unsent_approval(&mut state, &pending);
             }
@@ -321,7 +325,7 @@ impl NativeCodexRpc {
         match receiver.recv_timeout(timeout.saturating_sub(started.elapsed())) {
             Ok(result) => result,
             Err(error) => {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
                 if let Some(pending) = state.pending.remove(&id) {
                     if !pending.write_attempted {
                         restore_unsent_approval(&mut state, &pending);
@@ -362,7 +366,7 @@ impl NativeCodexRpc {
             }
             let params = object.get("params").cloned().unwrap_or(Value::Null);
             let inbound = {
-                let mut state = self.state.lock().unwrap();
+                let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
                 if state.disconnected.is_some() {
                     return Ok(());
                 }
@@ -399,7 +403,7 @@ impl NativeCodexRpc {
             _ => return Err(ProtocolFailure::InvalidEnvelope),
         };
         if let Some(id) = id.as_str() {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(pending) = state.pending.get_mut(id) {
                 if pending.wait_for_response && pending.write_attempted {
                     if pending.write_finished {
@@ -435,7 +439,7 @@ impl Drop for NativeCodexRpc {
 }
 
 fn disconnect_shared(state: &Mutex<State>, sink: &Arc<InboundSink>, reason: &str) {
-    let mut state = state.lock().unwrap();
+    let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
     if state.disconnected.is_some() {
         return;
     }

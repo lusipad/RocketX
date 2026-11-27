@@ -1,4 +1,5 @@
 import type { RcUser } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 export interface UserDirectoryPage {
   users: RcUser[];
@@ -49,7 +50,7 @@ export async function collectUserDirectory(
     return {
       users: [...users.values()],
       total,
-      warning: `目录报告共 ${total} 人，最多加载 ${maxUsers} 人；可尝试按准确姓名或用户名搜索更多`,
+      warning: t('chat.userDirectory.maxUsers', { total, maxUsers }),
     };
   }
   if (first.via !== 'directory' && first.via !== 'users.list') {
@@ -64,19 +65,24 @@ export async function collectUserDirectory(
     try {
       page = await fetchPage(offset);
     } catch (error) {
-      warning = `已加载 ${users.size} 人，后续分页失败：${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      warning = t('chat.userDirectory.pageFailed', {
+        loaded: users.size,
+        error: error instanceof Error ? error.message : String(error),
+      });
       break;
     }
     pages++;
     if (!isCurrent()) break;
     if (page.via !== first.via) {
-      warning = `已加载 ${users.size} 人，分页数据源发生变化（${first.via} → ${page.via}）`;
+      warning = t('chat.userDirectory.sourceChanged', {
+        loaded: users.size,
+        from: first.via,
+        to: page.via,
+      });
       break;
     }
     if (page.users.length === 0) {
-      warning = `服务端报告共 ${total} 人，但只返回了 ${users.size} 人`;
+      warning = t('chat.userDirectory.emptyPage', { total, loaded: users.size });
       break;
     }
 
@@ -86,18 +92,18 @@ export async function collectUserDirectory(
       users.set(user._id, user);
     }
     if (users.size === before) {
-      warning = `已加载 ${users.size} 人，后续分页没有新增用户`;
+      warning = t('chat.userDirectory.noNewUsers', { loaded: users.size });
       break;
     }
     offset += page.users.length;
   }
 
   if (!warning && users.size >= maxUsers && total > users.size) {
-    warning = `目录报告共 ${total} 人，最多加载 ${maxUsers} 人；可尝试按准确姓名或用户名搜索更多`;
+    warning = t('chat.userDirectory.maxUsers', { total, maxUsers });
   } else if (!warning && offset >= total && users.size < Math.min(total, maxUsers)) {
-    warning = `服务端报告共 ${total} 人，但分页去重后只返回了 ${users.size} 人`;
+    warning = t('chat.userDirectory.dedupShort', { total, loaded: users.size });
   } else if (!warning && pages >= maxPages && offset < total) {
-    warning = `目录报告共 ${total} 人，达到 ${maxPages} 页请求上限后只加载了 ${users.size} 人`;
+    warning = t('chat.userDirectory.maxPages', { total, maxPages, loaded: users.size });
   }
 
   return { users: [...users.values()], total, warning };

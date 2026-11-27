@@ -7,6 +7,7 @@ import type {
   StickerEntry,
   StickerGroup,
 } from './stickerManifest';
+import { t } from '../i18n';
 import { pinyinMatch, pinyinScore } from './pinyin';
 
 export const DEFAULT_STICKER_INDEX_URL = '/stickers/index.json';
@@ -136,7 +137,7 @@ function sanitizePackage(rawPackage: RawStickerPackage, baseUrl?: string): Stick
 async function loadFromIndex(indexUrl: string, fetchFn: FetchLike): Promise<StickerCatalog> {
   const resolvedIndexUrl = absoluteUrl(indexUrl) ?? indexUrl;
   const response = await fetchFn(resolvedIndexUrl);
-  if (!response.ok) throw new Error(`加载贴纸目录失败（${response.status}）`);
+  if (!response.ok) throw new Error(t('chat.sticker.loadCatalogFailed', { status: response.status }));
   const rawIndex = (await response.json()) as RawStickerIndex;
   const packageRefs = Array.isArray(rawIndex?.packages) ? rawIndex.packages : [];
   const groups: StickerGroup[] = [];
@@ -214,7 +215,7 @@ export async function fetchStickerFile(
   fetchFn: FetchLike = (input) => fetch(input),
 ): Promise<File> {
   const response = await fetchFn(entry.src);
-  if (!response.ok) throw new Error(`加载贴纸资源失败（${response.status}）`);
+  if (!response.ok) throw new Error(t('chat.sticker.loadAssetFailed', { status: response.status }));
   const blob = await response.blob();
   return new File([blob], entry.fileName, {
     type: blob.type || entry.mimeType || inferStickerMimeType(entry.fileName) || 'application/octet-stream',

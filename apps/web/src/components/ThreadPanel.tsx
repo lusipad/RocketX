@@ -23,6 +23,7 @@ import {
 import { matchSharedAiMention, resolveSharedAiMentionTarget } from '../lib/aiMention';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { useSharedAgent } from '../stores/sharedAgent';
+import { useI18n } from '../i18n';
 
 const SUPPORTS_FIELD_SIZING =
   typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
@@ -41,6 +42,7 @@ export default function ThreadPanel() {
   const myId = useAuth((s) => s.user?._id);
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
   const prefsLoaded = usePrefs((s) => s.loaded);
+  const { t, tp } = useI18n();
   const canMention = canMentionInRoom(roomType);
   const sharedAiStatus = useSharedAgent((s) => {
     if (!rid || !rootId || !runtimeFeatures().sharedAgent) return null;
@@ -230,7 +232,7 @@ export default function ThreadPanel() {
   return (
     <PanelShell
       title={
-        <span>话题</span>
+        <span>{t('panels.thread.title')}</span>
       }
     >
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
@@ -238,15 +240,15 @@ export default function ThreadPanel() {
           <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-line bg-surface-2 px-3 py-2">
             <div className="min-w-0">
               <div className="text-sm font-medium text-ink">
-                {following ? '已关注讨论串' : '未关注讨论串'}
+                {following ? t('panels.thread.following') : t('panels.thread.notFollowing')}
               </div>
-              <div className="text-xs text-ink-3">只有关注后，普通新回复才会提醒你</div>
+              <div className="text-xs text-ink-3">{t('panels.thread.followHint')}</div>
             </div>
             <button
               type="button"
               disabled={!myId || followLoading}
-              aria-label={following ? '取消关注讨论串' : '关注讨论串'}
-              title={following ? '关闭此讨论串提醒' : '接收此讨论串的新回复提醒'}
+              aria-label={following ? t('panels.thread.unfollowAria') : t('panels.thread.followAria')}
+              title={following ? t('panels.thread.unfollowTitle') : t('panels.thread.followTitle')}
               onClick={() => {
                 setFollowLoading(true);
                 void toggleThreadFollow(rootId, !following).finally(() => setFollowLoading(false));
@@ -254,7 +256,7 @@ export default function ThreadPanel() {
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
             >
               {following ? <BellOff size={14} /> : <Bell size={14} />}
-              {following ? '关闭提醒' : '关注'}
+              {following ? t('panels.thread.unfollowButton') : t('panels.thread.followButton')}
             </button>
           </div>
         )}
@@ -264,7 +266,9 @@ export default function ThreadPanel() {
             <div className="my-3 flex items-center gap-2">
               <div className="h-px flex-1 bg-line" />
               <span className="text-xs text-ink-3">
-                {replies.length > 0 ? `${replies.length} 条回复` : '暂无回复'}
+                {replies.length > 0
+                  ? tp(replies.length, 'panels.thread.replyCount.one', 'panels.thread.replyCount.other')
+                  : t('panels.thread.noReplies')}
               </span>
               <div className="h-px flex-1 bg-line" />
             </div>
@@ -285,7 +289,7 @@ export default function ThreadPanel() {
           </>
         ) : (
           <div className="py-10 text-center text-sm text-ink-3">
-            {panelRoot === null ? '无法查看话题主消息' : '话题加载中…'}
+            {panelRoot === null ? t('panels.thread.rootUnavailable') : t('panels.thread.loading')}
           </div>
         )}
       </div>
@@ -326,7 +330,7 @@ export default function ThreadPanel() {
           <div
             id="thread-mention-list"
             role="listbox"
-            aria-label="提及共享 AI"
+            aria-label={t('panels.thread.mentionSharedAiAria')}
             className="absolute bottom-full left-3 z-30 mb-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg bg-surface-4 py-1 shadow-pop"
           >
             <button
@@ -342,10 +346,10 @@ export default function ThreadPanel() {
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-primary-light text-primary">
                 <Bot size={14} />
               </span>
-              <span className="font-medium text-ink">AI 托管</span>
+              <span className="font-medium text-ink">{t('panels.thread.aiHosting')}</span>
               <span className="min-w-0 truncate text-xs text-ink-3">@ai</span>
               <span className="ml-auto shrink-0 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-3">
-                {sharedAiStatus === 'interrupted' ? '话题共享 · 已中断' : '话题共享'}
+                {sharedAiStatus === 'interrupted' ? t('panels.thread.sharedInterrupted') : t('panels.thread.shared')}
               </span>
             </button>
           </div>
@@ -362,7 +366,7 @@ export default function ThreadPanel() {
         )}
         <div className="flex items-center gap-1 pb-1.5">
           <button
-            title="表情"
+            title={t('panels.thread.emojiTitle')}
             onClick={() => setPicker((v) => !v)}
             className="flex h-7 w-7 items-center justify-center rounded text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
@@ -370,7 +374,7 @@ export default function ThreadPanel() {
           </button>
           {canMention && (
             <button
-              title="提及成员"
+              title={t('panels.thread.mentionTitle')}
               onClick={() => {
                 insertText('@');
                 setMentionQuery('');
@@ -405,8 +409,8 @@ export default function ThreadPanel() {
             rows={1}
             placeholder={
               sendOnEnter === 'alternative'
-                ? '回复话题，Ctrl + Enter 发送，Enter 换行'
-                : '回复话题，Enter 发送，Alt + Enter 换行'
+                ? t('panels.thread.placeholderAlt')
+                : t('panels.thread.placeholderNormal')
             }
             className="max-h-32 min-h-9 flex-1 resize-none overflow-y-auto rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition [field-sizing:content] focus:border-primary"
           />

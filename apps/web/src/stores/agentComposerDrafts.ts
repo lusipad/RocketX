@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { useEffect } from 'react';
+import { t } from '../i18n';
 import type { CodexImageInput } from '../lib/codexImages';
 
 export interface AgentComposerTarget {
@@ -64,7 +65,7 @@ async function readDraft(key: string): Promise<ComposerDraft | undefined> {
   if (!saved) return undefined;
   const images = (ids: string[]) => Promise.all(ids.map(async (id) => {
     const image = await read<CodexImageInput>('images', id);
-    if (!image) throw new Error('草稿附件已丢失');
+    if (!image) throw new Error(t('agent.drafts.missingAttachment'));
     imageIds.set(image, id);
     storedImages.add(id);
     return image;
@@ -124,7 +125,7 @@ async function persistDraft(key: string, draft: ComposerDraft): Promise<void> {
     for (const id of removedImages) storedImages.delete(id);
   } catch {
     useAgentComposerDrafts.setState((state) => ({
-      drafts: { ...state.drafts, [key]: { ...state.drafts[key], saveError: '草稿未保存到本机，请保留此页面并复制内容。' } },
+      drafts: { ...state.drafts, [key]: { ...state.drafts[key], saveError: t('agent.drafts.saveFailed') } },
     }));
   }
 }
@@ -161,7 +162,7 @@ export const useAgentComposerDrafts = create<ComposerState>((set, get) => {
         // A changed account or recipient is a different key; late reads stay with their original owner.
         const draft = saved ?? EMPTY;
         const failed = [...draft.failed];
-        if (draft.pending) failed.push({ ...draft.pending, error: '上次发送结果未确认，请先核对原会话，再决定是否重试。', requiresVerification: true });
+        if (draft.pending) failed.push({ ...draft.pending, error: t('agent.drafts.sendUnconfirmed'), requiresVerification: true });
         set((state) => {
           const current = state.drafts[key];
           return { drafts: { ...state.drafts, [key]: {
@@ -173,7 +174,7 @@ export const useAgentComposerDrafts = create<ComposerState>((set, get) => {
         if (edited.get(key)?.size) update(key, get().drafts[key]);
       }).catch(() => {
         if (get().drafts[key]?.loaded) return;
-        set((state) => ({ drafts: { ...state.drafts, [key]: { ...EMPTY, ...state.drafts[key], loaded: true, saveError: '无法读取本机草稿；本页新输入仍可使用。' } } }));
+        set((state) => ({ drafts: { ...state.drafts, [key]: { ...EMPTY, ...state.drafts[key], loaded: true, saveError: t('agent.drafts.loadFailed') } } }));
       }).finally(() => loading.delete(key));
       loading.set(key, request);
       return request;

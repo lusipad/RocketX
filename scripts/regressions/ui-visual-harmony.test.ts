@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 test('全局样式遵守 Tailwind v4 @layer 级联规范且移除双层内嵌圆角边框', () => {
   const styles = readFileSync('apps/web/src/styles.css', 'utf8');
@@ -48,15 +50,23 @@ test('Butler 桌面顶栏保持 52px，窄窗对话顶栏随内容增高且无�
   assert.match(conversation, /<header className="butler-conversation-header work-first-conversation-header /);
   assert.match(styles, /\.butler-conversation-header\s*\{[^}]*height:\s*52px/);
   assert.match(styles, /@media \(max-width: 1023px\)\s*\{\s*\.butler-conversation-pane > \.work-first-conversation-header\s*\{[^}]*height:\s*max-content/);
-  assert.match(kanban, /<h1[^>]*>我的工作<\/h1>/);
-  assert.match(kanban, /aria-label="管家简报"/);
+  assert.match(kanban, /<h1[^>]*>\{t\('agent\.kanban\.headerTitle'\)\}<\/h1>/);
+  assert.equal(zhCN['agent.kanban.headerTitle'], '我的工作');
+  assert.ok(enUS['agent.kanban.headerTitle'].length > 0);
+  assert.match(kanban, /aria-label=\{t\('agent\.kanban\.briefingAria'\)\}/);
+  assert.equal(zhCN['agent.kanban.briefingAria'], '管家简报');
+  assert.ok(enUS['agent.kanban.briefingAria'].length > 0);
 
   // 折叠态才显示主区展开侧栏按钮，避免并排重复 [|]
   assert.match(conversation, /butlerSidebarCollapsed\s*\?\s*\(/);
   assert.doesNotMatch(conversation, /\(\{workspaceRoot\}\)/);
 
   // 新建对话主按钮保持显式白色文字；导航保持精确契约且不含禁用旧词
-  assert.match(history, /<span className="text-white">\{tr\('新管家对话', 'New Butler Chat', locale\)\}<\/span>/);
-  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label=\{tr\('AI 协作', 'AI Workspace', locale\)\}>/);
+  assert.match(history, /<span className="text-white">\{t\('butler\.history\.newConversation'\)\}<\/span>/);
+  assert.equal(zhCN['butler.history.newConversation'], '新管家对话');
+  assert.ok(enUS['butler.history.newConversation'].length > 0);
+  assert.match(history, /<nav className="butler-codex-surface-nav work-first-primary-nav" aria-label=\{t\('butler\.history\.aiCollabAria'\)\}>/);
+  assert.equal(zhCN['butler.history.aiCollabAria'], 'AI 协作');
+  assert.ok(enUS['butler.history.aiCollabAria'].length > 0);
   assert.doesNotMatch(history, /\b(today|memory|paper|manage)\b/i);
 });

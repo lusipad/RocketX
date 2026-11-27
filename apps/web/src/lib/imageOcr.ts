@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export interface ImageOcrWord {
   text: string;
   x: number;
@@ -29,7 +31,7 @@ export function desktopLocalOcrAvailable(tauri: boolean): boolean {
 export function ocrBackendLabel(backend: ImageOcrBackend): string {
   switch (backend) {
     case 'pp-ocrv5':
-      return 'PP-OCRv5 本地离线引擎';
+      return t('chat.ocr.ppOcrv5');
     case 'windows-media-ocr':
       return 'Windows.Media.Ocr';
   }
@@ -60,7 +62,7 @@ async function blobBase64(blob: Blob): Promise<string> {
 }
 
 export async function recognizeImageBlob(blob: Blob): Promise<ImageOcrResult> {
-  if (blob.size > 20 * 1024 * 1024) throw new Error('图片过大，OCR 最大支持 20 MB');
+  if (blob.size > 20 * 1024 * 1024) throw new Error(t('chat.ocr.imageTooLarge'));
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<ImageOcrResult>('image_ocr_recognize', { imageBase64: await blobBase64(blob) });
 }

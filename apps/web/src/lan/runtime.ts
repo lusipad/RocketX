@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { t } from '../i18n';
 import { ensureSiteUrl, getServerBase, isTauri, readPublicSettingResult } from '../lib/client';
 import { resolveLanServerId } from '../lib/lanServerScope';
 import { useAuth } from '../stores/auth';
@@ -282,9 +283,9 @@ export async function sendLanFile(
   path: string,
   payload: { messageId: string; roomId: string; originalTs: number },
 ): Promise<LanFileReceipt> {
-  if (!isTauri) throw new Error('LAN file transfer is only available in the desktop app');
+  if (!isTauri) throw new Error(t('nav.lanRuntime.desktopOnly'));
   const deviceId = confirmedLanDevices.get(userId);
-  if (!deviceId) throw new Error('P2P 握手已失效，请重新发起直传');
+  if (!deviceId) throw new Error(t('nav.lanRuntime.handshakeExpired'));
   const startedAt = performance.now();
   const receipt = await invoke<Omit<LanFileReceipt, 'bytesPerSecond'>>('lan_send_file', {
     userId,

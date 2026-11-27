@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+
 export interface AcpPermissionJournalEntry {
   requestId: string;
   sessionKey: string;
@@ -27,7 +29,7 @@ export function writeAcpPermissionJournal(scope: string, entries: AcpPermissionJ
 }
 
 export function expireDisconnectedAcpPermissions(scope: string, liveRequestIds: ReadonlySet<string>): AcpPermissionJournalEntry[] {
-  const entries = readAcpPermissionJournal(scope).map((entry): AcpPermissionJournalEntry => liveRequestIds.has(entry.requestId) && entry.expiresAt > Date.now() ? entry : { ...entry, status: 'expired', reason: '原执行连接已失效或权限请求已超时，需重新请求权限' });
+  const entries = readAcpPermissionJournal(scope).map((entry): AcpPermissionJournalEntry => liveRequestIds.has(entry.requestId) && entry.expiresAt > Date.now() ? entry : { ...entry, status: 'expired', reason: t('agent.acpPermission.expiredReason') });
   writeAcpPermissionJournal(scope, entries);
   return entries.filter((entry) => entry.status === 'expired');
 }

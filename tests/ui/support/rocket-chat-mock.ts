@@ -149,7 +149,7 @@ export async function bootAuthenticated(page: Page): Promise<RocketChatMockState
     );
   }, { server: TEST_SERVER, userId: ME._id });
   await page.goto('/');
-  await page.getByRole('navigation', { name: 'RocketX 主导航' }).waitFor();
+  await page.getByRole('navigation', { name: /^(?:RocketX 主导航|RocketX Primary Navigation)$/ }).waitFor();
   await page.waitForFunction(async () => {
     const load = new Function('return import("/src/stores/ui.ts")');
     const { useUI } = await load();

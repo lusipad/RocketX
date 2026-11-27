@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 /** The native connection must be selected before any account data is admitted. */
 export interface RuntimeAccountContext {
   accountScope: string;
@@ -16,7 +18,7 @@ const waiting = new Set<{ resolve: (guard: () => void) => void; reject: (error: 
 export function captureButlerAccountGeneration(): () => void {
   const expected = generation;
   return () => {
-    if (expected !== generation) throw new Error('待办账号已切换，旧操作已取消');
+    if (expected !== generation) throw new Error(t('nav.butlerAccount.switchedCanceled'));
   };
 }
 
@@ -37,7 +39,7 @@ export function isButlerAccountReady(scope: string): boolean {
 }
 
 export function captureButlerRuntimeAccountContext(): RuntimeAccountContext {
-  if (!ready || !nativeContext) throw new Error('账号数据库尚未就绪');
+  if (!ready || !nativeContext) throw new Error(t('nav.butlerAccount.dbNotReady'));
   return { ...nativeContext };
 }
 
@@ -55,7 +57,7 @@ export function beginButlerAccountSelection(scope: string) {
       assertCurrent();
       if (context?.accountScope !== scope || !Number.isSafeInteger(context.generation)
         || context.generation <= newestNativeGeneration) {
-        throw new Error('原生账号作用域或代际不匹配，旧操作已取消');
+        throw new Error(t('nav.butlerAccount.scopeMismatch'));
       }
       nativeContext = { ...context };
       newestNativeGeneration = context.generation;
@@ -80,4 +82,11 @@ export async function runWithButlerAccount<T>(operation: () => Promise<T>): Prom
   } finally {
     assertCurrent();
   }
+}
+
+export async function runWithButlerAccountIfManaged<T>(operation: () => Promise<T>): Promise<T> {
+  if (accountScope !== null || ready || failure !== undefined) {
+    return runWithButlerAccount(operation);
+  }
+  return operation();
 }

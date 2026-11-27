@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { isTauri } from './http';
 import { formatMessageScrollDiagnostics } from './messageScrollDiagnostics';
 
@@ -89,7 +90,7 @@ export function buildDiagnosticReport(snapshot: DiagnosticSnapshot, logs: string
 }
 
 export async function exportDiagnostics(snapshot: DiagnosticSnapshot): Promise<boolean> {
-  if (!isTauri) throw new Error('诊断日志导出仅桌面端可用');
+  if (!isTauri) throw new Error(t('nav.diagnostics.desktopOnly'));
   const [{ invoke }, { save }, { writeFile }] = await Promise.all([
     import('@tauri-apps/api/core'),
     import('@tauri-apps/plugin-dialog'),

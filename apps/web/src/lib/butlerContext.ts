@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export type ButlerSourceKind =
   | 'room'
   | 'message'
@@ -101,23 +103,26 @@ export function extractButlerSources(toolName: string | undefined, content: stri
       if (!mid || !rid) return [];
       const room = textOf(row, 'roomName') ?? rid;
       const sender = textOf(row, 'sender');
-      const body = short(textOf(row, 'text'), '消息');
+      const body = short(textOf(row, 'text'), t('butler.context.fallbackMessage'));
       const webUrl = textOf(row, 'link');
+      const rawLabel = sender
+        ? t('butler.context.messageLabelWithSender', { room, sender, body })
+        : t('butler.context.messageLabel', { room, body });
       return [{
         kind: 'message', id: mid, mid, rid,
-        label: short(`${room}${sender ? ` · ${sender}` : ''}：${body}`, room),
+        label: short(rawLabel, room),
         ...(webUrl ? { webUrl } : {}),
       }];
     }
     if (toolName === 'list_todos') {
       const id = idOf(row);
       if (!id) return [];
-      return [{ kind: 'todo', id, label: short(textOf(row, 'text'), '待办') }];
+      return [{ kind: 'todo', id, label: short(textOf(row, 'text'), t('butler.context.fallbackTodo')) }];
     }
     if (toolName === 'list_calendar') {
       const id = idOf(row);
       if (!id) return [];
-      const title = short(textOf(row, 'title'), '日程');
+      const title = short(textOf(row, 'title'), t('butler.context.fallbackCalendar'));
       const date = textOf(row, 'date');
       return [{ kind: 'calendar', id, label: date ? `${date} · ${title}` : title }];
     }
@@ -126,7 +131,7 @@ export function extractButlerSources(toolName: string | undefined, content: stri
       if (!id) return [];
       return [{
         kind: 'work-item', id,
-        label: short(`#${id} ${textOf(row, 'title') ?? '工作项'}`, `#${id}`),
+        label: short(`#${id} ${textOf(row, 'title') ?? t('butler.context.fallbackWorkItem')}`, `#${id}`),
         project: textOf(row, 'project'),
         webUrl: textOf(row, 'webUrl'),
       }];
@@ -147,7 +152,7 @@ export function extractButlerSources(toolName: string | undefined, content: stri
       const name = textOf(row, 'buildNumber') ?? textOf(row, 'definition') ?? id;
       return [{
         kind: 'build', id,
-        label: short(`构建 ${name}`, `构建 ${id}`),
+        label: short(t('butler.context.buildLabel', { name }), t('butler.context.buildLabel', { name: id })),
         project: textOf(row, 'project'),
         webUrl: textOf(row, 'webUrl'),
       }];
@@ -159,11 +164,11 @@ export function extractButlerSources(toolName: string | undefined, content: stri
 
 export function butlerContextPrompt(context: ButlerSurfaceContext): string {
   return [
-    `用户当前工作面：${context.label}`,
+    t('butler.context.prompt.surface', { label: context.label }),
     context.detail,
-    ...(context.kind === 'room' ? [`用户当前所在房间：${context.label}`] : []),
+    ...(context.kind === 'room' ? [t('butler.context.prompt.room', { label: context.label })] : []),
     context.kind === 'room'
-      ? `按时段汇总本房间时用 list_room_messages，关键词检索时用 search_messages，并把 roomName 限定为“${context.label}”。`
-      : '回答时优先结合这个工作面；需要事实时仍调用工具查证，不要把页面摘要当成完整数据。',
+      ? t('butler.context.prompt.roomInstruction', { label: context.label })
+      : t('butler.context.prompt.defaultInstruction'),
   ].join('\n');
 }

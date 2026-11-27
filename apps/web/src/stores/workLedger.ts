@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import {
   correlateExternalEvent,
   evaluateCardCompletionGate,
@@ -43,7 +44,7 @@ import {
 export type { WorkSessionRuntime };
 import { isTauri } from '../lib/http';
 import { getLocalDataSchema, writeLocalData } from '../lib/localDataContract';
-import { isNativeHostAction, isNativeHostSession, isNativeHostWork, NATIVE_HOST_CONTROL_REASON } from '../lib/nativeWorkOwnership';
+import { isNativeHostAction, isNativeHostSession, isNativeHostWork, nativeHostControlReason } from '../lib/nativeWorkOwnership';
 import { useTodos, type Todo } from './todos';
 
 const STORAGE_KEY = 'rc_work_ledger_v1';
@@ -74,7 +75,7 @@ export function beginWorkLedgerAccount(scope: string): () => void {
   }
   activeAccountScope = scope;
   return () => {
-    if (generation !== accountGeneration) throw new Error('账号已切换，未激活旧工作数据库');
+    if (generation !== accountGeneration) throw new Error(t('agent.workLedger.accountSwitchedDb'));
     accountReady = true;
   };
 }
@@ -85,7 +86,7 @@ export function captureWorkLedgerAccount(): () => void {
   const assertCurrent = () => {
     if (!accountReady || generation !== accountGeneration || owner !== accountOwner()
       || (activeAccountScope && owner && activeAccountScope !== owner)) {
-      throw new Error('账号或工作数据库已切换，原操作未发布到当前账号');
+      throw new Error(t('agent.workLedger.accountSwitchedNotPublished'));
     }
   };
   assertCurrent();
@@ -217,7 +218,7 @@ function todoToNativeCard(
     mid: todo.mid ?? null,
     adoWorkItemId: todo.adoWorkItemId ?? null,
     adoProject: todo.adoProject ?? null,
-    title: todo.title || todo.excerpt || todo.note || '待办',
+    title: todo.title || todo.excerpt || todo.note || t('agent.hostTools.todoFallback'),
     note: todo.note ?? null,
     roomName: todo.roomName ?? null,
     author: todo.author ?? null,
@@ -306,7 +307,7 @@ function saveFallbackLedger(snapshot: {
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   } catch {
-    if (required) throw new Error('工作记录未能持久保存，请释放本机存储后重试');
+    if (required) throw new Error(t('agent.workLedger.persistFailed'));
   }
 }
 
@@ -438,9 +439,9 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     const assertAccount = captureWorkLedgerAccount();
     const followed = input.enroll || Boolean(input.acceptance?.length) || Boolean(input.ownerKind && input.ownerKind !== 'human');
     if (followed && (!input.goal?.trim() || !input.acceptance?.length || input.acceptance.some((criterion) => !criterion.trim()))) {
-      throw new Error('纳入跟进的工作必须明确目标和非空验收条件');
+      throw new Error(t('agent.workLedger.goalAndAcceptanceRequired'));
     }
-    const title = input.title.trim() || '未命名任务';
+    const title = input.title.trim() || t('agent.dispatch.unnamedTask');
     const note = input.note?.trim() || undefined;
     const priority = input.priority ?? 1;
     const patch: WorkCardPatchInput = {
@@ -527,7 +528,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
 
   updateCard: async (todoId, patch) => {
     const assertAccount = captureWorkLedgerAccount();
-    if (patch.humanAcceptance && (patch.expectedRequirementsVersion === undefined || patch.expectedContentVersion === undefined)) throw new Error('人工接受需要用户已审阅的要求与成果版本');
+    if (patch.humanAcceptance && (patch.expectedRequirementsVersion === undefined || patch.expectedContentVersion === undefined)) throw new Error(t('agent.workLedger.manualAckNeedsVersions'));
     if (isTauri) {
       const updated = await updateNativeWorkCard(todoId, patch as Record<string, unknown>);
       assertAccount();
@@ -544,11 +545,11 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     const current = get();
     const card = current.cards.find((c) => c.id === todoId);
     if (!card) {
-      throw new Error('工作卡片不存在');
+      throw new Error(t('agent.workLedger.cardNotFound'));
     }
     if ((patch.expectedRequirementsVersion !== undefined && patch.expectedRequirementsVersion !== (card.state.requirementsVersion ?? 0)) ||
       (patch.expectedContentVersion !== undefined && patch.expectedContentVersion !== (card.state.contentVersion ?? 0))) {
-      throw new Error('工作要求或成果已更新，请重新读取当前版本');
+      throw new Error(t('agent.workLedger.staleVersions'));
     }
 
     const scopeChanged =
@@ -563,7 +564,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     const goal = patch.goal !== undefined ? patch.goal : card.state.goal;
     const followed = patch.enroll === true || isFollowedWork(card) || Boolean(acceptance.length);
     if (followed && (!goal?.trim() || !acceptance.length || acceptance.some((c) => !c.trim()))) {
-      throw new Error('纳入跟进的工作必须明确目标和非空验收条件');
+      throw new Error(t('agent.workLedger.goalAndAcceptanceRequired'));
     }
     const requirementsVersion = followed
       ? Math.max(1, (card.state.requirementsVersion ?? 0) + (scopeChanged ? 1 : 0)) : 0;
@@ -582,10 +583,10 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     if (patch.humanAcceptance) {
       const actor = patch.humanAcceptance.actorId.trim();
       const scope = [...new Set(patch.humanAcceptance.criterionIds)];
-      if (!actor || !scope.length || scope.some((c) => !acceptance.includes(c))) throw new Error('人工接受需要明确身份和当前验收范围');
+      if (!actor || !scope.length || scope.some((c) => !acceptance.includes(c))) throw new Error(t('agent.workLedger.manualAckNeedsActorScope'));
       const now = Date.now();
       nextEvidences = [{ id: crypto.randomUUID(), todoId, sessionId: null, kind: 'manual_ack',
-        title: '人工接受验收结果', summary: null, headSha: null, workspaceRoot: null, webUrl: null,
+        title: t('agent.workLedger.manualAckTitle'), summary: null, headSha: null, workspaceRoot: null, webUrl: null,
         passed: true, stale: false, staleReason: null, verifiedAt: now, createdAt: now,
         requirementsVersion, contentVersion, criterionIds: scope, acceptedBy: actor, acceptanceScope: scope }, ...nextEvidences];
     }
@@ -700,7 +701,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     return get().updateCard(todoId, { waitState, waitReason });
   },
 
-  pauseCardAutomation: async (todoId, reason = '用户手动暂停自动跟进') => {
+  pauseCardAutomation: async (todoId, reason = t('agent.superAgent.manualPauseReason')) => {
     const now = Date.now();
     return get().updateCard(todoId, {
       waitState: 'paused',
@@ -796,7 +797,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
       && session.runtime === input.runtime && session.nativeSessionId === input.nativeSessionId
       && (session.sourceScope?.trim() || 'default') === (input.sourceScope?.trim() || 'default')
       && (session.hostDeviceId ?? '') === (input.hostDeviceId ?? '') && (session.accountScope ?? '') === (input.accountScope ?? ''));
-    if (nativeExisting || isNativeHostSession(input)) throw new Error(NATIVE_HOST_CONTROL_REASON);
+    if (nativeExisting || isNativeHostSession(input)) throw new Error(nativeHostControlReason());
     if (isTauri) {
       const session = await upsertNativeWorkSession(
         input as unknown as Record<string, unknown>,
@@ -838,7 +839,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     if (effectiveTodoId) {
       const card = current.cards.find((c) => c.id === effectiveTodoId);
       if (card?.state.visibility === 'private' && sessionFields.visibility === 'room_shared') {
-        throw new Error('隐私边界拦截：私密工作卡片不得绑定到房间共享会话');
+        throw new Error(t('agent.workLedger.privacyNoRoomSession'));
       }
     }
     const now = Date.now();
@@ -865,7 +866,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
 
   addEvidence: async (input) => {
     const assertAccount = captureWorkLedgerAccount();
-    if (input.kind === 'manual_ack') throw new Error('人工接受请使用显式验收操作');
+    if (input.kind === 'manual_ack') throw new Error(t('agent.workLedger.manualAckUseExplicit'));
     if (isTauri) {
       const evidence = await addNativeWorkEvidence(
         input as unknown as Record<string, unknown>,
@@ -879,8 +880,8 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     const now = Date.now();
     const current = get();
     const card = current.cards.find((c) => c.id === input.todoId);
-    if (!card) throw new Error('证据关联的工作不存在');
-    if (input.sessionId && !current.sessions.some((s) => s.id === input.sessionId && s.todoId === input.todoId)) throw new Error('证据会话不属于当前工作');
+    if (!card) throw new Error(t('agent.workLedger.evidenceWorkMissing'));
+    if (input.sessionId && !current.sessions.some((s) => s.id === input.sessionId && s.todoId === input.todoId)) throw new Error(t('agent.workLedger.evidenceWrongSession'));
     const versionCurrent = input.requirementsVersion === (card.state.requirementsVersion ?? 0) && input.contentVersion === (card.state.contentVersion ?? 0);
     const evidence: NativeWorkEvidence = {
       id: crypto.randomUUID(),
@@ -935,7 +936,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
 
         if (maxVer > input.resourceVersion) {
           status = 'superseded';
-          statusDetail = `乱序旧事件已抑制（当前最高版本 ${maxVer} > ${input.resourceVersion}）`;
+          statusDetail = t('agent.workLedger.staleOutOfOrderEvent', { maxVer, ver: input.resourceVersion });
         } else if (card) {
           if (
             (card.state.revokedAt != null && occurredAt <= card.state.revokedAt) ||
@@ -943,7 +944,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
             card.state.waitState === 'canceled'
           ) {
             status = 'verified_stale';
-            statusDetail = '事件早于卡片暂停/撤销水位线或卡片处于暂停态，已忽略';
+            statusDetail = t('agent.workLedger.staleBeforeRevokedOrPaused');
           } else if (match.tier === 'heuristic') {
             status = 'pending_approval';
           } else if (
@@ -992,7 +993,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
       : null;
     const verification = card
       ? verifyExternalEventAgainstLiveState(eventRecord, card, options)
-      : { stale: false, reason: '未绑定卡片' };
+      : { stale: false, reason: t('agent.workLedger.unlinkedCard') };
 
     const decision = evaluateEventDispatchDecision(
       eventRecord,
@@ -1008,7 +1009,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     const assertAccount = captureWorkLedgerAccount();
     if (isNativeHostAction(input) || (input.actionKind.startsWith('session_') && (isNativeHostWork(input.todoId, get().sessions)
       || get().sessions.some((session) => session.id === input.sessionId && isNativeHostSession(session))))) {
-      throw new Error(NATIVE_HOST_CONTROL_REASON);
+      throw new Error(nativeHostControlReason());
     }
     if (isTauri) {
       const record = await prepareNativeDispatchAction(
@@ -1030,33 +1031,33 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
 
     const card = current.cards.find((c) => c.id === input.todoId);
     if (!card) {
-      throw new Error('目标工作卡片不存在');
+      throw new Error(t('agent.superAgent.targetCardMissing'));
     }
     let specJson = input.specJson;
     if (['session_create', 'session_prompt', 'session_steer'].includes(input.actionKind)) {
       const spec = JSON.parse(specJson) as Record<string, unknown>;
-      if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new Error('派发规格必须为对象');
+      if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw new Error(t('agent.workLedger.specMustBeObject'));
       specJson = JSON.stringify({ requirementsVersion: card.state.requirementsVersion ?? 0,
         contentVersion: card.state.contentVersion ?? 0, ...spec });
     }
     if (card.state.waitState === 'paused' || card.state.waitState === 'canceled') {
-      throw new Error('卡片已暂停或取消，拒绝派发动作');
+      throw new Error(t('agent.workLedger.cardPausedOrCanceled'));
     }
-    if (card.state.autonomyMode === 'readonly') throw new Error('当前工作只读，不允许派发执行动作');
+    if (card.state.autonomyMode === 'readonly') throw new Error(t('agent.workLedger.cardReadonly'));
 
     if (input.sessionId) {
       const session = current.sessions.find((s) => s.id === input.sessionId);
       if (!session) {
-        throw new Error('目标会话不存在');
+        throw new Error(t('agent.workLedger.targetSessionMissing'));
       }
       if (card.state.visibility === 'private' && session.visibility === 'room_shared') {
-        throw new Error('隐私边界拦截：私密卡片不得向房间共享会话派发任务');
+        throw new Error(t('agent.workLedger.privacyNoDispatchRoom'));
       }
       if (
         session.controlMode === 'readonly' &&
         (input.actionKind === 'session_prompt' || input.actionKind === 'session_steer')
       ) {
-        throw new Error('会话处于只读模式（可能被其他终端占用），拒绝直接注入指令');
+        throw new Error(t('agent.workLedger.sessionReadonly'));
       }
     }
 
@@ -1066,7 +1067,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
       (card.state.autonomyMode !== 'autonomous' ||
         (agentAction && (card.state.autoTurnsUsed >= card.state.maxAutoTurns || card.state.consecutiveFailures >= 2)));
     if (agentAction && !requireConfirmation && (card.state.autoTurnsUsed >= card.state.maxAutoTurns || card.state.consecutiveFailures >= 2)) {
-      throw new Error('已达到自动推进预算或连续失败上限，需人工检查后继续');
+      throw new Error(t('agent.workLedger.budgetOrFailuresLimit'));
     }
 
     const now = Date.now();
@@ -1114,7 +1115,7 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     if (targetAction && (isNativeHostAction(targetAction)
       || (targetAction.actionKind.startsWith('session_') && (isNativeHostWork(targetAction.todoId, get().sessions)
         || get().sessions.some((session) => session.id === targetAction.sessionId && isNativeHostSession(session)))))) {
-      throw new Error(NATIVE_HOST_CONTROL_REASON);
+      throw new Error(nativeHostControlReason());
     }
     if (isTauri) {
       const record = await transitionNativeDispatchAction(
@@ -1129,9 +1130,9 @@ export const useWorkLedger = create<WorkLedgerState>((set, get) => ({
     const current = get();
     const target = current.actions.find((a) => a.id === input.id);
     if (!target) {
-      throw new Error('派发动作不存在');
+      throw new Error(t('agent.workLedger.actionNotFound'));
     }
-    if (input.expectedState && target.state !== input.expectedState) throw new Error('派发动作已被其他执行者更新，请重新核对');
+    if (input.expectedState && target.state !== input.expectedState) throw new Error(t('agent.workLedger.actionUpdatedElsewhere'));
     const now = Date.now();
     const updated: NativeDispatchActionRecord = {
       ...target,

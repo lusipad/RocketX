@@ -16,6 +16,7 @@ import type { Thread } from './protocol/generated/v2/Thread';
 import type { Turn } from './protocol/generated/v2/Turn';
 import type { UserInput } from './protocol/generated/v2/UserInput';
 import { executeRocketxDynamicTool, ROCKETX_DYNAMIC_TOOLS } from './codexHostTools';
+import { buildUiLanguageInstruction, t } from '../i18n';
 
 export type CodexPermissionPreset = 'ask' | 'auto' | 'full';
 
@@ -162,13 +163,13 @@ export class AppServerController {
     const stopping = this.stop();
     const generation = this.connectionGeneration;
     await stopping;
-    if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+    if (generation !== this.connectionGeneration) throw new Error(t('agent.transport.piCanceled'));
     const client = new AppServerClient(this.transportFactory(sessionId, workspaceRoot), {
       onNotification: (method, params) => {
         if (generation === this.connectionGeneration) this.options.onNotification?.(method, params);
       },
       onServerRequest: (request) => {
-        if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+        if (generation !== this.connectionGeneration) throw new Error(t('agent.transport.piCanceled'));
         return this.handleServerRequest(request);
       },
       onInterrupted: (error) => {
@@ -184,18 +185,18 @@ export class AppServerController {
     this.startingClient = client;
     try {
       const process = await client.start();
-      if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+      if (generation !== this.connectionGeneration) throw new Error(t('agent.transport.piCanceled'));
       if (process.managedSkillRoots.length === 0) {
-        throw new Error('RocketX 没有提供 Codex Skill 根目录');
+        throw new Error(t('agent.appServer.missingSkillRoots'));
       }
       await client.request('skills/extraRoots/set', { extraRoots: process.managedSkillRoots });
-      if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+      if (generation !== this.connectionGeneration) throw new Error(t('agent.transport.piCanceled'));
       const projectless = !workspaceRoot.trim() || workspaceRoot.trim() === '~';
       const runtimeWorkspaceRoot = projectless
         ? process.runtimeWorkspaceRoot?.trim() || workspaceRoot
         : workspaceRoot;
       const catalog = await readCatalog(client, runtimeWorkspaceRoot, null);
-      if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+      if (generation !== this.connectionGeneration) throw new Error(t('agent.transport.piCanceled'));
       this.assertPermissionProfiles(catalog.permissionProfiles);
       this.startingClient = undefined;
       this.client = client;
@@ -216,7 +217,7 @@ export class AppServerController {
     const workspaceRoot = this.requireWorkspaceRoot();
     const generation = this.connectionGeneration;
     const catalog = await readCatalog(client, workspaceRoot, threadId ?? null);
-    if (generation !== this.connectionGeneration) throw new Error('Pi 连接已取消');
+    if (generation !== this.connectionGeneration) throw new Error(t('agent.transport.piCanceled'));
     this.assertPermissionProfiles(catalog.permissionProfiles);
     this.catalog = catalog;
     return catalog;
@@ -257,7 +258,7 @@ export class AppServerController {
 
   async renameThread(threadId: string, name: string): Promise<void> {
     const normalized = name.trim();
-    if (!normalized) throw new Error('任务名称不能为空');
+    if (!normalized) throw new Error(t('agent.appServer.emptyTaskName'));
     await this.requireClient().request('thread/name/set', { threadId, name: normalized });
   }
 
@@ -275,6 +276,7 @@ export class AppServerController {
       model: selection.model,
       cwd: workspaceRoot,
       runtimeWorkspaceRoots: [workspaceRoot],
+      developerInstructions: buildUiLanguageInstruction(),
       ...permissions,
       ...(config ? { config } : {}),
       dynamicTools: ROCKETX_DYNAMIC_TOOLS,
@@ -303,9 +305,11 @@ export class AppServerController {
       model: selection.model,
       cwd: workspaceRoot,
       runtimeWorkspaceRoots: [workspaceRoot],
+      developerInstructions: buildUiLanguageInstruction(),
       ...permissions,
       excludeTurns: true,
       ...(config ? { config } : {}),
+      dynamicTools: ROCKETX_DYNAMIC_TOOLS,
     });
     await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
     await client.request('thread/settings/update', {
@@ -328,9 +332,11 @@ export class AppServerController {
       model: selection.model,
       cwd: workspaceRoot,
       runtimeWorkspaceRoots: [workspaceRoot],
+      developerInstructions: buildUiLanguageInstruction(),
       ...permissions,
       excludeTurns: true,
       ...(config ? { config } : {}),
+      dynamicTools: ROCKETX_DYNAMIC_TOOLS,
     });
     await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
     await client.request('thread/settings/update', {
@@ -419,7 +425,7 @@ export class AppServerController {
   private async handleServerRequest(request: ServerRequestContext): Promise<unknown> {
     if (request.policy !== 'dynamic-tool') {
       if (this.options.onServerRequest) return this.options.onServerRequest(request);
-      throw new Error(`RocketX 未处理 ${request.method}`);
+      throw new Error(t('agent.appServer.unhandledRequest', { method: request.method }));
     }
 
     const params = typeof request.params === 'object' && request.params !== null && !Array.isArray(request.params)
@@ -428,20 +434,20 @@ export class AppServerController {
     const tool = typeof params.tool === 'string' ? params.tool : '';
     const threadId = typeof params.threadId === 'string' ? params.threadId : '';
     if (SCHEDULE_MUTATION_TOOLS.has(tool) && !this.approvedScheduleMutationThreads.has(threadId)) {
-      if (!this.options.onServerRequest) throw new Error('变更已安排任务必须由当前用户显式审批');
+      if (!this.options.onServerRequest) throw new Error(t('agent.appServer.scheduleApprovalRequired'));
       const action = tool === 'create_scheduled_task'
-        ? '创建'
+        ? t('agent.appServer.scheduleAction.create')
         : tool === 'update_scheduled_task'
-          ? '修改'
+          ? t('agent.appServer.scheduleAction.update')
           : tool === 'delete_scheduled_task'
-            ? '删除'
-            : '立即运行';
+            ? t('agent.appServer.scheduleAction.delete')
+            : t('agent.appServer.scheduleAction.run');
       const approval = await this.options.onServerRequest({
         method: 'item/rocketxScheduledTask/requestApproval',
         policy: 'host-approval',
         params: {
           ...params,
-          reason: `${action}已安排任务\n${JSON.stringify(params.arguments ?? {}, null, 2)}`,
+          reason: t('agent.appServer.scheduleApprovalReason', { action, args: JSON.stringify(params.arguments ?? {}, null, 2) }),
         },
       });
       const decision = typeof approval === 'object' && approval !== null && !Array.isArray(approval)
@@ -450,7 +456,7 @@ export class AppServerController {
       if (decision === 'acceptForSession' && threadId) {
         this.approvedScheduleMutationThreads.add(threadId);
       } else if (decision !== 'accept' && decision !== 'approved') {
-        throw new Error('用户未批准变更已安排任务');
+        throw new Error(t('agent.appServer.scheduleApprovalDeclined'));
       }
     }
     return executeRocketxDynamicTool(request.params);
@@ -470,36 +476,36 @@ export class AppServerController {
   }
 
   private requireClient(): AppServerClient {
-    if (!this.client) throw new Error('Codex Runtime 尚未连接');
+    if (!this.client) throw new Error(t('agent.appServer.runtimeNotConnected'));
     return this.client;
   }
 
   private requireWorkspaceRoot(): string {
-    if (!this.workspaceRoot) throw new Error('尚未选择工作区');
+    if (!this.workspaceRoot) throw new Error(t('agent.appServer.noWorkspaceSelected'));
     return this.workspaceRoot;
   }
 
   private assertPermissionProfiles(profiles: readonly PermissionProfileSummary[]): void {
     for (const id of [':workspace', ':danger-full-access']) {
       if (!profiles.some((profile) => profile.id === id && profile.allowed)) {
-        throw new Error(`当前 Codex Runtime 缺少必需权限档 ${id}，请升级 Codex。`);
+        throw new Error(t('agent.appServer.missingPermissionProfile', { id }));
       }
     }
   }
 
   private assertSelection(selection: CodexRuntimeSelection): void {
     const catalog = this.catalog;
-    if (!catalog) throw new Error('Codex Runtime 能力目录尚未加载');
+    if (!catalog) throw new Error(t('agent.appServer.catalogNotLoaded'));
     const model = catalog.models.find((item) => item.model === selection.model || item.id === selection.model);
-    if (!model) throw new Error(`当前 Codex Runtime 没有模型 ${selection.model}`);
+    if (!model) throw new Error(t('agent.appServer.modelMissing', { model: selection.model }));
     if (selection.effort && !model.supportedReasoningEfforts.some(
       (item) => item.reasoningEffort === selection.effort,
     )) {
-      throw new Error(`模型 ${model.displayName} 不支持推理强度 ${selection.effort}`);
+      throw new Error(t('agent.appServer.unsupportedEffort', { model: model.displayName, effort: selection.effort }));
     }
     const profile = permissionSettings(selection.permissionPreset).permissions;
     if (!catalog.permissionProfiles.some((item) => item.id === profile && item.allowed)) {
-      throw new Error(`当前 Codex Runtime 不允许权限档 ${profile}`);
+      throw new Error(t('agent.appServer.disallowedPermissionProfile', { profile }));
     }
   }
 }

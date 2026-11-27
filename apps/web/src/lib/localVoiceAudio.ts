@@ -1,13 +1,34 @@
+import { getLocale, t, type ResolvedLocale } from '../i18n';
+
 export const LOCAL_VOICE_MAX_SECONDS = 30;
 export const LOCAL_VOICE_MAX_RECORDING_BYTES = 4 * 1024 * 1024;
 const SAMPLE_RATE = 16_000;
 
+export function selectLocalVoiceEngine<T extends { language: string }>(
+  engines: readonly T[] | undefined,
+  locale: ResolvedLocale = getLocale(),
+): T | undefined {
+  if (!engines || engines.length === 0) return undefined;
+  const target = locale.toLowerCase();
+  const primary = target.split('-')[0]!;
+  const fallbackPrimary = primary === 'zh' ? 'en' : 'zh';
+  const matchesPrimary = (language: string, prefix: string): boolean => {
+    const normalized = language.toLowerCase();
+    return normalized === prefix || normalized.startsWith(`${prefix}-`) || normalized.startsWith(`${prefix}_`);
+  };
+  return (
+    engines.find((engine) => engine.language.toLowerCase() === target)
+    ?? engines.find((engine) => matchesPrimary(engine.language, primary))
+    ?? engines.find((engine) => matchesPrimary(engine.language, fallbackPrimary))
+  );
+}
+
 /** Native recognition accepts a short, mono PCM16 WAV; no browser speech service is used. */
 export function encodeLocalVoiceWav(channels: Float32Array[], sampleRate: number): ArrayBuffer {
   const length = channels[0]?.length ?? 0;
-  if (!length || !Number.isFinite(sampleRate) || sampleRate <= 0) throw new Error('录音为空，请重试。');
-  if (channels.some((channel) => channel.length !== length)) throw new Error('录音音轨长度不一致，请重试。');
-  if (length / sampleRate > LOCAL_VOICE_MAX_SECONDS + 0.25) throw new Error('单次录音最多 30 秒。');
+  if (!length || !Number.isFinite(sampleRate) || sampleRate <= 0) throw new Error(t('voice.emptyRecording'));
+  if (channels.some((channel) => channel.length !== length)) throw new Error(t('voice.trackMismatch'));
+  if (length / sampleRate > LOCAL_VOICE_MAX_SECONDS + 0.25) throw new Error(t('voice.maxSeconds'));
   const outputLength = Math.min(Math.floor(length * SAMPLE_RATE / sampleRate), SAMPLE_RATE * LOCAL_VOICE_MAX_SECONDS);
   const wav = new ArrayBuffer(44 + outputLength * 2);
   const view = new DataView(wav);
@@ -37,8 +58,14 @@ export function localVoiceBase64(bytes: ArrayBuffer): string {
 
 export function localVoiceError(reason: unknown): string {
   if (reason instanceof DOMException && (reason.name === 'NotAllowedError' || reason.name === 'SecurityError')) {
-    return '麦克风权限未允许，请在系统隐私设置中允许 RocketX 使用麦克风后重试。';
+    return t('voice.micDenied');
   }
-  if (reason instanceof DOMException && reason.name === 'NotFoundError') return '未找到麦克风，请连接设备后重试。';
-  return reason instanceof Error ? reason.message : String(reason);
+  if (reason instanceof DOMException && reason.name === 'NotFoundError') return t('voice.micNotFound');
+  const message = reason instanceof Error ? reason.message : String(reason);
+  if (message.startsWith('LOCAL_VOICE_UNSUPPORTED:')) return t('voice.error.unsupported');
+  if (message.startsWith('LOCAL_VOICE_BUSY:')) return t('voice.error.busy');
+  if (message.startsWith('LOCAL_VOICE_LIMIT:')) return t('voice.error.limit');
+  if (message.startsWith('LOCAL_VOICE_CANCELED:')) return t('voice.error.canceled');
+  if (message.startsWith('LOCAL_VOICE_INVALID:')) return t('voice.error.invalid');
+  return message;
 }

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { renderDispatchSpec, type DispatchSpec } from './dispatchSpec';
 import { workContextPathKey } from '../lib/workContext';
 import type {
@@ -144,7 +145,7 @@ export interface SessionInspectionInput {
 export interface SessionControlEvaluation {
   controlMode: WorkSessionControlMode;
   controlReason: SessionControlReason;
-  badgeLabel: '只读' | '可恢复' | '可实时控制';
+  badgeLabel: string;
   description: string;
   capabilities: RuntimeCapabilities;
   canSendPromptDirectly: boolean;
@@ -163,8 +164,8 @@ export function evaluateSessionControlMode(
     return {
       controlMode: 'readonly',
       controlReason: 'corrupt_or_partial_log',
-      badgeLabel: '只读',
-      description: '会话日志部分损坏或尚未落盘完成，已降级为只读浏览',
+      badgeLabel: t('agent.sessionAdapter.badge.readonly'),
+      description: t('agent.sessionAdapter.desc.corruptLog'),
       capabilities,
       canSendPromptDirectly: false,
       canSteerActiveTurn: false,
@@ -177,8 +178,8 @@ export function evaluateSessionControlMode(
     return {
       controlMode: 'readonly',
       controlReason: 'workspace_missing',
-      badgeLabel: '只读',
-      description: '工作区目录不存在或当前不可访问，仅支持只读查看与导入上下文',
+      badgeLabel: t('agent.sessionAdapter.badge.readonly'),
+      description: t('agent.sessionAdapter.desc.workspaceMissing'),
       capabilities,
       canSendPromptDirectly: false,
       canSteerActiveTurn: false,
@@ -196,8 +197,8 @@ export function evaluateSessionControlMode(
     return {
       controlMode: 'readonly',
       controlReason: 'remote_device_lease',
-      badgeLabel: '只读',
-      description: '该会话归属其他设备且无远程控制端点，仅支持只读查看或导入到本机新会话',
+      badgeLabel: t('agent.sessionAdapter.badge.readonly'),
+      description: t('agent.sessionAdapter.desc.remoteLease'),
       capabilities,
       canSendPromptDirectly: false,
       canSteerActiveTurn: false,
@@ -215,8 +216,8 @@ export function evaluateSessionControlMode(
     return {
       controlMode: 'readonly',
       controlReason: 'active_external_writer',
-      badgeLabel: '只读',
-      description: '外部终端或其他实例正持有该会话写入权，RocketX 不会抢占，可导入上下文新建受管会话',
+      badgeLabel: t('agent.sessionAdapter.badge.readonly'),
+      description: t('agent.sessionAdapter.desc.externalWriter'),
       capabilities,
       canSendPromptDirectly: false,
       canSteerActiveTurn: false,
@@ -229,8 +230,8 @@ export function evaluateSessionControlMode(
     return {
       controlMode: 'controllable',
       controlReason: 'owned_live_controller',
-      badgeLabel: '可实时控制',
-      description: '当前由 RocketX 实时托管，可直接追问、追加约束、中断或响应审批',
+      badgeLabel: t('agent.sessionAdapter.badge.controllable'),
+      description: t('agent.sessionAdapter.desc.liveControl'),
       capabilities,
       canSendPromptDirectly: capabilities.sendPrompt,
       canSteerActiveTurn: capabilities.steerActiveTurn,
@@ -243,8 +244,8 @@ export function evaluateSessionControlMode(
     return {
       controlMode: 'readonly',
       controlReason: 'external_activity_unknown',
-      badgeLabel: '只读',
-      description: '尚未确认原端已停止。请在原端停止执行，再明确交接到 RocketX；不会自动启动第二个执行器',
+      badgeLabel: t('agent.sessionAdapter.badge.readonly'),
+      description: t('agent.sessionAdapter.desc.externalUnknown'),
       capabilities,
       canSendPromptDirectly: false,
       canSteerActiveTurn: false,
@@ -256,8 +257,8 @@ export function evaluateSessionControlMode(
   return {
     controlMode: 'resumable',
     controlReason: 'stopped_local_matching_cwd',
-    badgeLabel: '可恢复',
-    description: '本地会话当前已停止且无外部占用，可在原工作区冷恢复后继续推进',
+    badgeLabel: t('agent.sessionAdapter.badge.resumable'),
+    description: t('agent.sessionAdapter.desc.resumable'),
     capabilities,
     canSendPromptDirectly: false,
     canSteerActiveTurn: false,
@@ -287,7 +288,7 @@ export function checkSessionDispatchEligibility(
       allowed: false,
       requiresColdResume: false,
       fallbackToImportContext: false,
-      reason: '隐私保护拦截：个人私密卡片禁止派发到房间共享会话',
+      reason: t('agent.sessionAdapter.dispatch.privacy'),
     };
   }
 
@@ -300,8 +301,8 @@ export function checkSessionDispatchEligibility(
       fallbackToImportContext: capabilities.forkOrImportContext,
       reason:
         session.controlReason === 'active_external_writer'
-          ? '目标会话正被外部写入方占用（只读），禁止直接注入指令；可导入上下文新建受管会话'
-          : '目标会话当前为只读模式，禁止直接发送指令；可导入上下文新建受管会话',
+          ? t('agent.sessionAdapter.dispatch.readonlyExternal')
+          : t('agent.sessionAdapter.dispatch.readonly'),
     };
   }
 
@@ -311,7 +312,7 @@ export function checkSessionDispatchEligibility(
         allowed: false,
         requiresColdResume: false,
         fallbackToImportContext: false,
-        reason: `${session.runtime.toUpperCase()} 运行时不支持在活跃轮次中实时追加转向指令（steer），请等待当前轮次结束或中断后发送`,
+        reason: t('agent.sessionAdapter.dispatch.noSteer', { runtime: session.runtime.toUpperCase() }),
       };
     }
     if (session.controlMode !== 'controllable') {
@@ -319,14 +320,14 @@ export function checkSessionDispatchEligibility(
         allowed: false,
         requiresColdResume: true,
         fallbackToImportContext: false,
-        reason: '目标会话当前未处于实时托管态，需先冷恢复会话后再发送指令',
+        reason: t('agent.sessionAdapter.dispatch.notControllable'),
       };
     }
     return {
       allowed: true,
       requiresColdResume: false,
       fallbackToImportContext: false,
-      reason: '允许实时追加转向指令',
+      reason: t('agent.sessionAdapter.dispatch.steerAllowed'),
     };
   }
 
@@ -336,7 +337,7 @@ export function checkSessionDispatchEligibility(
         allowed: true,
         requiresColdResume: false,
         fallbackToImportContext: false,
-        reason: '会话处于实时可控制状态，可直接发送指令',
+        reason: t('agent.sessionAdapter.dispatch.promptAllowed'),
       };
     }
     if (session.controlMode === 'resumable' && capabilities.coldResume) {
@@ -344,7 +345,7 @@ export function checkSessionDispatchEligibility(
         allowed: true,
         requiresColdResume: true,
         fallbackToImportContext: false,
-        reason: '会话处于可恢复状态，冷恢复后可继续发送指令',
+        reason: t('agent.sessionAdapter.dispatch.coldResumeAllowed'),
       };
     }
   }
@@ -353,7 +354,7 @@ export function checkSessionDispatchEligibility(
     allowed: true,
     requiresColdResume: false,
     fallbackToImportContext: false,
-    reason: '允许执行派发动作',
+    reason: t('agent.sessionAdapter.dispatch.allowed'),
   };
 }
 
@@ -373,20 +374,20 @@ export function buildSessionContextImportSpec(options: ContextImportOptions): st
   const specInput: DispatchSpec = {
     title: options.cardGoal,
     goal: [
-      `原会话（${options.sourceSession.runtime}:${options.sourceSession.nativeSessionId}）因「${options.sourceSession.controlReason ?? '只读限制'}」保持只读，已在工作区 ${options.sourceSession.workspaceRoot} 创建新的 RocketX 受管会话接续推进。`,
-      `本次推进指令：${options.nextInstruction}`,
+      t('agent.sessionAdapter.import.goal', { runtime: options.sourceSession.runtime, sessionId: options.sourceSession.nativeSessionId, reason: options.sourceSession.controlReason ?? t('agent.sessionAdapter.import.readonlyFallback'), workspaceRoot: options.sourceSession.workspaceRoot }),
+      t('agent.sessionAdapter.import.nextInstruction', { instruction: options.nextInstruction }),
     ].join('\n'),
     acceptance:
       options.acceptance && options.acceptance.length > 0
         ? options.acceptance
-        : ['完成本次推进指令并产出可验证的证据（测试、构建或代码变更说明）'],
+        : [t('agent.sessionAdapter.import.defaultAcceptance')],
     boundaries: [
       ...(options.boundaries ?? []),
-      '不得假定原只读会话仍在协同执行，动手前先核查当前工作区 git status 与最新 HEAD',
+      t('agent.sessionAdapter.import.boundary'),
     ],
     evidence: [
       {
-        label: `${options.sourceSession.runtime}:${options.sourceSession.nativeSessionId} (${options.sourceSession.title ?? '原会话最近上下文摘要'})`,
+        label: `${options.sourceSession.runtime}:${options.sourceSession.nativeSessionId} (${options.sourceSession.title ?? t('agent.sessionAdapter.import.defaultTitle')})`,
         text: options.recentTranscriptExcerpt,
       },
     ],

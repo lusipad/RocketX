@@ -451,13 +451,11 @@
 }
 
 .butler-conversation-history > header button:disabled,
-.butler-conversation-history nav[aria-label='Chat History'] button:disabled,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] button:disabled {
+.butler-conversation-history .codex-history-nav button:disabled {
   opacity: 0.5;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'],
-.butler-conversation-history nav[aria-label='Codex 对话历史'] {
+.butler-conversation-history .codex-history-nav {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
@@ -468,8 +466,7 @@
   margin-top: 3px;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] button,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] button {
+.butler-conversation-history .codex-history-nav button {
   display: grid;
   width: 100%;
   min-width: 0;
@@ -481,14 +478,12 @@
   text-align: left;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] button:hover,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] button:hover {
+.butler-conversation-history .codex-history-nav button:hover {
   background: var(--color-fill-hover);
   color: var(--color-ink);
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] button[aria-current='page'],
-.butler-conversation-history nav[aria-label='Codex 对话历史'] button[aria-current='page'] {
+.butler-conversation-history .codex-history-nav button[aria-current='page'] {
   background: color-mix(in srgb, var(--color-fill-active) 76%, transparent);
   color: var(--color-ink);
 }
@@ -692,8 +687,7 @@
   text-align: center;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-expand,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-expand {
+.butler-conversation-history .codex-history-nav .codex-native-thread-expand {
   display: flex;
   width: calc(100% - 24px);
   height: 30px;
@@ -711,19 +705,16 @@
   white-space: nowrap;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-expand:hover,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-expand:hover {
+.butler-conversation-history .codex-history-nav .codex-native-thread-expand:hover {
   background: var(--color-fill-hover);
   color: var(--color-ink-2);
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-row,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-row {
+.butler-conversation-history .codex-history-nav .codex-native-thread-row {
   position: relative;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-main,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-main {
+.butler-conversation-history .codex-history-nav .codex-native-thread-main {
   padding-right: 42px;
 }
 
@@ -733,8 +724,7 @@
   right: 4px;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-actions > button,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-actions > button {
+.butler-conversation-history .codex-history-nav .codex-native-thread-actions > button {
   display: grid;
   width: 28px;
   height: 28px;
@@ -746,9 +736,7 @@
   opacity: 0;
 }
 
-.butler-conversation-history nav[aria-label='Chat History']
-  .codex-native-thread-main[aria-current='page'] + .codex-native-thread-actions > button,
-.butler-conversation-history nav[aria-label='Codex 对话历史']
+.butler-conversation-history .codex-history-nav
   .codex-native-thread-main[aria-current='page'] + .codex-native-thread-actions > button {
   background: var(--color-fill-hover);
   box-shadow: inset 0 0 0 1px var(--color-line);
@@ -776,8 +764,7 @@
   box-shadow: var(--shadow-pop);
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-actions [role='menu'] button,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-actions [role='menu'] button {
+.butler-conversation-history .codex-history-nav .codex-native-thread-actions [role='menu'] button {
   display: flex;
   width: 100%;
   min-height: 30px;
@@ -814,8 +801,7 @@
   outline: none;
 }
 
-.butler-conversation-history nav[aria-label='Chat History'] .codex-native-thread-rename button,
-.butler-conversation-history nav[aria-label='Codex 对话历史'] .codex-native-thread-rename button {
+.butler-conversation-history .codex-history-nav .codex-native-thread-rename button {
   display: block;
   width: auto;
   min-height: 30px;
@@ -915,9 +901,9 @@
 .work-first-composer-settings-content { display: flex; flex-direction: column; gap: 8px; min-width: 230px; }
 .work-first-conversation-actions > div { top: calc(100% + 8px); bottom: auto; right: 0; left: auto; }
 .work-first-composer-voice > div { width: min(340px, calc(100vw - 100px)); height: 230px; overflow: auto; }
-.work-first-composer-voice section[aria-label='可选本地语音'] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-.work-first-composer-voice section[aria-label='可选本地语音'] > span { grid-column: 1 / -1; }
-.work-first-composer-voice section[aria-label='可选本地语音'] > button { min-height: 36px; width: 100%; }
+.work-first-composer-voice .local-voice-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.work-first-composer-voice .local-voice-controls > span { grid-column: 1 / -1; }
+.work-first-composer-voice .local-voice-controls > button { min-height: 36px; width: 100%; }
 .work-first-board { min-width: 0; container-type: inline-size; }
 .work-board-entry-actions { display: flex; gap: 8px; }
 .work-board-entry-actions button { white-space: nowrap; }
@@ -1570,6 +1556,30 @@
   border: 1px solid var(--color-line);
   border-radius: 9px;
   background: var(--color-surface-2);
+  color: var(--color-primary);
+}
+
+.rocketx-agent-answer-avatar[data-role="product"] {
+  border-color: color-mix(in srgb, #d97706 35%, var(--color-line));
+  background: color-mix(in srgb, #f59e0b 12%, var(--color-surface-2));
+  color: #d97706;
+}
+
+.rocketx-agent-answer-avatar[data-role="architect"] {
+  border-color: color-mix(in srgb, #0284c7 35%, var(--color-line));
+  background: color-mix(in srgb, #0ea5e9 12%, var(--color-surface-2));
+  color: #0284c7;
+}
+
+.rocketx-agent-answer-avatar[data-role="contrarian"] {
+  border-color: color-mix(in srgb, #e11d48 35%, var(--color-line));
+  background: color-mix(in srgb, #f43f5e 12%, var(--color-surface-2));
+  color: #e11d48;
+}
+
+.rocketx-agent-answer-avatar[data-role="captain"] {
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-line));
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--color-surface-2));
   color: var(--color-primary);
 }
 
@@ -3952,8 +3962,7 @@
   white-space: nowrap;
 }
 
-.butler-codex-project-list + nav[aria-label='Chat History'],
-.butler-codex-project-list + nav[aria-label='Codex 对话历史'] {
+.butler-codex-project-list + .codex-history-nav {
   padding-left: 20px;
 }
 
@@ -4512,8 +4521,7 @@
   font-size: var(--text-xs);
 }
 
-.codex-native-image-viewer header button[aria-label='Close image preview'],
-.codex-native-image-viewer header button[aria-label='关闭图片预览'] {
+.codex-native-image-viewer header .codex-native-image-viewer-close {
   width: 32px;
   justify-content: center;
   padding: 0;

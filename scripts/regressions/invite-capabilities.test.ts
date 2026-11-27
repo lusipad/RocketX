@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import type { RcUser } from '../../packages/rc-client/src/index';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { canInviteMembers } from '../../apps/web/src/lib/roomAdmin';
 
 const me: RcUser = { _id: 'me', username: 'me' };
@@ -60,11 +62,15 @@ test('成员面板只按讨论判定收口，并说明为什么不能加人', as
   assert.match(panel, /const canInvite = canInviteMembers\(me, room\)/);
   // 「添加成员」「从其他频道导入」「批量加人」都按同一个判定禁用
   assert.equal([...panel.matchAll(/disabled=\{!canInvite\}/g)].length, 3);
-  assert.match(panel, /只有讨论的创建者能往讨论里加人/);
+  assert.match(panel, /t\('panels\.members\.discussionInviteBlocked'\)/);
+  assert.match(zhCN['panels.members.discussionInviteBlocked'], /只有讨论的创建者能往讨论里加人/);
+  assert.ok(enUS['panels.members.discussionInviteBlocked'].length > 0);
   // 禁用时给出原因，而不是让用户点完才发现
   assert.match(panel, /inviteBlockedReason && \(/);
   // 禁用不能改掉按钮自己的标识（否则连「添加成员」都找不到了）
-  assert.equal([...panel.matchAll(/title="添加成员"/g)].length, 1);
+  assert.equal([...panel.matchAll(/title=\{t\('panels\.members\.addMembersTitle'\)\}/g)].length, 1);
+  assert.equal(zhCN['panels.members.addMembersTitle'], '添加成员');
+  assert.ok(enUS['panels.members.addMembersTitle'].length > 0);
   assert.doesNotMatch(panel, /title=\{canInvite/);
   // 不再按房间类型/角色提前禁用非讨论房间
   assert.doesNotMatch(panel, /canInviteMembers\(me, roomRoles, membersType, room\)/);

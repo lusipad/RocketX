@@ -1,3 +1,5 @@
+import { getLocale, t } from '../i18n';
+
 /**
  * 本机 Windows 防火墙对 RocketX 局域网入站的判定（原生端 `firewall.rs`）。
  *
@@ -52,7 +54,8 @@ export interface LanFirewallAdvice {
 }
 
 function quoteNames(names: string[]): string {
-  return names.map((name) => `「${name}」`).join('、');
+  const sep = getLocale() === 'zh-CN' ? '、' : ', ';
+  return names.map((name) => (getLocale() === 'zh-CN' ? `「${name}」` : `"${name}"`)).join(sep);
 }
 
 export function lanFirewallAdvice(status: LanFirewallStatus): LanFirewallAdvice {
@@ -60,35 +63,35 @@ export function lanFirewallAdvice(status: LanFirewallStatus): LanFirewallAdvice 
   switch (status.state) {
     case 'missing_rule':
       return {
-        text: '本机防火墙没有放行 RocketX 的局域网连接，对方发现不了本机、也连不进来。',
+        text: t('nav.lanFirewall.missingRule'),
         elevate: true,
         elevateOnFailure: false,
         breaksP2p: true,
       };
     case 'blocked':
       return {
-        text: '本机防火墙存在阻止 RocketX 的规则（通常是「允许访问」弹窗被取消后生成的），直传必然失败。',
+        text: t('nav.lanFirewall.blocked'),
         elevate: true,
         elevateOnFailure: false,
         breaksP2p: true,
       };
     case 'blocked_other':
       return {
-        text: '本机有其他防火墙规则拦截了 RocketX 使用的局域网端口，一键放行覆盖不了；请管理员检查防火墙入站规则。',
+        text: t('nav.lanFirewall.blockedOther'),
         elevate: false,
         elevateOnFailure: false,
         breaksP2p: true,
       };
     case 'block_all_inbound':
       return {
-        text: '当前网络开启了「阻止所有传入连接」，任何放行都无效；请在 Windows 安全中心 → 防火墙和网络保护中关闭该选项后重试。',
+        text: t('nav.lanFirewall.blockAllInbound'),
         elevate: false,
         elevateOnFailure: false,
         breaksP2p: true,
       };
     case 'managed':
       return {
-        text: '本机防火墙由组织策略管理，无法在本机放行；请联系 IT 为 RocketX 放行局域网入站。',
+        text: t('nav.lanFirewall.managed'),
         elevate: false,
         elevateOnFailure: false,
         breaksP2p: true,
@@ -96,7 +99,7 @@ export function lanFirewallAdvice(status: LanFirewallStatus): LanFirewallAdvice 
     case 'third_party':
       return {
         ...none,
-        text: `本机防火墙由${quoteNames(status.thirdParty)}接管，RocketX 无法检查；如直传失败，请在其中放行 RocketX 的局域网连接。`,
+        text: t('nav.lanFirewall.thirdParty', { names: quoteNames(status.thirdParty) }),
       };
     case 'partial':
     case 'unknown':
@@ -120,7 +123,7 @@ export function lanFirewallFailureHint(
   if (advice.breaksP2p) {
     return {
       text: advice.elevate
-        ? `${advice.text}再次点击 P2P 直传，并在系统窗口中允许管理员授权即可放行。`
+        ? t('nav.lanFirewall.elevateSuffix', { advice: advice.text })
         : advice.text,
       cause: true,
     };
@@ -128,7 +131,7 @@ export function lanFirewallFailureHint(
   if (status.state === 'third_party') return { text: advice.text, cause: false };
   if (status.thirdParty.length > 0) {
     return {
-      text: `如仍失败，请检查${quoteNames(status.thirdParty)}是否拦截了 RocketX 的局域网连接。`,
+      text: t('nav.lanFirewall.thirdPartyPossible', { names: quoteNames(status.thirdParty) }),
       cause: false,
     };
   }

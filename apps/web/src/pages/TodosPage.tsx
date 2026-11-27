@@ -21,19 +21,21 @@ import TodoDialog from '../components/TodoDialog';
 import { ConfirmDialog } from '../components/Dialog';
 import { LinkifiedText } from '../lib/markdown';
 import { adoWebBase } from '../lib/ado';
+import { useI18n, useT, type MessageKey } from '../i18n';
 
 // 统一看板矩阵与多会话流转已升级由 AI 管家原生看板承载 (WorkKanbanBoard)
 
 type Tab = 'open' | 'today' | 'overdue' | 'done';
 
-const TABS: { key: Tab; label: string; icon: typeof ListTodo }[] = [
-  { key: 'open', label: '待办', icon: ListTodo },
-  { key: 'today', label: '今天', icon: CalendarClock },
-  { key: 'overdue', label: '已逾期', icon: CalendarClock },
-  { key: 'done', label: '已完成', icon: CheckCircle2 },
+const TABS: { key: Tab; labelKey: MessageKey; icon: typeof ListTodo }[] = [
+  { key: 'open', labelKey: 'pages.todos.tab.open', icon: ListTodo },
+  { key: 'today', labelKey: 'pages.todos.tab.today', icon: CalendarClock },
+  { key: 'overdue', labelKey: 'pages.todos.tab.overdue', icon: CalendarClock },
+  { key: 'done', labelKey: 'pages.todos.tab.done', icon: CheckCircle2 },
 ];
 
 function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
+  const t = useT();
   const toggle = useTodos((s) => s.toggle);
   const remove = useTodos((s) => s.remove);
   const openRoom = useChat((s) => s.openRoom);
@@ -64,7 +66,7 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
       <button
         onClick={() => toggle(todo.id)}
         className="mt-0.5 shrink-0 text-ink-3 transition hover:text-primary"
-        title={todo.done ? '标记为未完成' : '标记为完成'}
+        title={t(todo.done ? 'pages.todos.markUndone' : 'pages.todos.markDone')}
       >
         {todo.done ? (
           <CheckCircle2 size={16} className="text-primary" />
@@ -80,12 +82,12 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
             todo.done ? 'text-ink-3 line-through' : 'font-medium text-ink'
           }`}
         >
-          <LinkifiedText text={todo.note || todo.excerpt || todo.title || '（无文字内容）'} renderPlain={emojify} />
+          <LinkifiedText text={todo.note || todo.excerpt || todo.title || t('pages.todos.emptyContent')} renderPlain={emojify} />
         </div>
 
         {todo.note && hasSource && (
           <div className="mt-1 line-clamp-2 rounded-r border-l-2 border-line bg-fill-1 px-2 py-1 text-xs break-words text-ink-3">
-            <LinkifiedText text={todo.excerpt ?? '（无文字内容）'} renderPlain={emojify} />
+            <LinkifiedText text={todo.excerpt ?? t('pages.todos.emptyContent')} renderPlain={emojify} />
           </div>
         )}
 
@@ -97,7 +99,7 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
           )}
           {todo.adoWorkItemId && (
             <span className="truncate">
-              工作项 #{todo.adoWorkItemId}
+              {t('pages.todos.workItemLabel', { id: todo.adoWorkItemId })}
               {todo.adoProject ? ` · ${todo.adoProject}` : ''}
             </span>
           )}
@@ -122,18 +124,18 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
           <button
             onClick={() => void jump()}
             className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-            title="跳到原消息"
+            title={t('pages.todos.jumpToMessage')}
           >
             <CornerUpRight size={14} />
           </button>
         )}
-        {workItemUrl && (
+        {workItemUrl && todo.adoWorkItemId && (
           <a
             href={workItemUrl}
             target="_blank"
             rel="noreferrer"
             className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-            title={`打开工作项 #${todo.adoWorkItemId}`}
+            title={t('pages.todos.openWorkItem', { id: todo.adoWorkItemId })}
           >
             <ExternalLink size={14} />
           </a>
@@ -144,25 +146,25 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
             setButlerView('kanban');
           }}
           className="flex h-7 items-center gap-1 rounded px-1.5 text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-          title="在管家统一看板推进"
+          title={t('pages.todos.advanceInKanbanTitle')}
         >
           <Kanban size={13} />
-          <span className="text-xs">推进</span>
+          <span className="text-xs">{t('pages.todos.advanceAction')}</span>
         </button>
         <button
           onClick={() => onEdit(todo)}
           className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-          title="编辑"
+          title={t('common.edit')}
         >
           <Pencil size={14} />
         </button>
         <button
           onClick={() => {
             remove(todo.id);
-            toast.success('待办已删除');
+            toast.success(t('pages.todos.deleted'));
           }}
           className="flex h-7 w-7 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-danger"
-          title="删除"
+          title={t('common.delete')}
         >
           <Trash2 size={14} />
         </button>
@@ -175,6 +177,7 @@ function TodoRow({ todo, onEdit }: { todo: Todo; onEdit: (t: Todo) => void }) {
 export default function TodosPage() {
   // 跨过零点后「今天到期 / 已逾期」要跟着变
   useDayTick();
+  const { t, tp } = useI18n();
   const todos = useTodos((s) => s.todos);
   const clearDone = useTodos((s) => s.clearDone);
   const [tab, setTab] = useState<Tab>('open');
@@ -215,9 +218,9 @@ export default function TodosPage() {
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="flex w-[216px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
-        <div className="px-2.5 py-2 text-base font-semibold text-ink">待办</div>
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">{t('pages.todos.title')}</div>
         <div className="flex flex-col gap-0.5">
-          {TABS.map(({ key, label, icon: Icon }) => (
+          {TABS.map(({ key, labelKey, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -228,7 +231,7 @@ export default function TodosPage() {
               }`}
             >
               <Icon size={16} className={tab === key ? 'text-primary' : ''} />
-              <span>{label}</span>
+              <span>{t(labelKey)}</span>
               {counts[key] > 0 && (
                 <span
                   className={`ml-auto rounded-full px-1.5 py-0.5 text-2xs font-medium ${
@@ -257,8 +260,8 @@ export default function TodosPage() {
                 <Kanban size={15} />
               </span>
               <div>
-                <div className="font-medium text-ink group-hover:text-primary">AI 管家统一看板</div>
-                <div className="mt-0.5 text-xs text-ink-3">矩阵流转与凭证验收</div>
+                <div className="font-medium text-ink group-hover:text-primary">{t('pages.todos.butlerKanbanTitle')}</div>
+                <div className="mt-0.5 text-xs text-ink-3">{t('pages.todos.butlerKanbanSubtitle')}</div>
               </div>
             </div>
             <CornerUpRight size={13} className="text-ink-3 transition group-hover:text-primary" />
@@ -270,10 +273,10 @@ export default function TodosPage() {
         <header className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-6">
           <div className="flex items-center gap-2.5">
             <h1 className="text-base font-semibold text-ink">
-              {TABS.find((t) => t.key === tab)?.label}
+              {t(TABS.find((item) => item.key === tab)!.labelKey)}
             </h1>
             <span className="rounded-full border border-line-soft bg-surface-2 px-2 py-0.5 text-xs text-ink-3">
-              {list.length} 项
+              {tp(list.length, 'pages.todos.countOne', 'pages.todos.countOther')}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -282,7 +285,7 @@ export default function TodosPage() {
                 onClick={() => setConfirmClear(true)}
                 className="rounded-lg px-2.5 py-1 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-danger"
               >
-                清空已完成
+                {t('pages.todos.clearDone')}
               </button>
             )}
             <button
@@ -290,15 +293,15 @@ export default function TodosPage() {
               className="flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
             >
               <Plus size={14} />
-              新建待办
+              {t('pages.todos.newTodo')}
             </button>
           </div>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6">
           <div className="overflow-hidden rounded-2xl border border-line bg-surface-4 shadow-card">
-            {list.map((t) => (
-              <TodoRow key={t.id} todo={t} onEdit={setEditing} />
+            {list.map((todo) => (
+              <TodoRow key={todo.id} todo={todo} onEdit={setEditing} />
             ))}
             {list.length === 0 && (
               <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
@@ -306,12 +309,10 @@ export default function TodosPage() {
                   <ListTodo size={24} />
                 </span>
                 <div className="text-sm font-medium text-ink-2">
-                  {tab === 'done' ? '还没有完成的待办' : '这里是空的'}
+                  {t(tab === 'done' ? 'pages.todos.emptyDone' : 'pages.todos.emptyOpen')}
                 </div>
                 <div className="max-w-xs text-xs leading-relaxed text-ink-3">
-                  在任意聊天消息上点右键，选「标记为待办」，就能把它捞到这里，
-                  还能补充说明和截止日期。点待办可以跳回原消息。
-                  也可以点右上角「新建待办」直接记一条。
+                  {t('pages.todos.emptyHint')}
                 </div>
               </div>
             )}
@@ -323,12 +324,12 @@ export default function TodosPage() {
       {creating && <TodoDialog onClose={() => setCreating(false)} />}
       {confirmClear && (
         <ConfirmDialog
-          title="清空已完成"
-          message={`将删除 ${counts.done} 条已完成的待办，原消息不受影响。`}
-          confirmLabel="清空"
+          title={t('pages.todos.clearDone')}
+          message={tp(counts.done, 'pages.todos.clearDoneConfirmOne', 'pages.todos.clearDoneConfirmOther')}
+          confirmLabel={t('pages.todos.clearAction')}
           onConfirm={() => {
             clearDone();
-            toast.success('已清空');
+            toast.success(t('pages.todos.cleared'));
           }}
           onClose={() => setConfirmClear(false)}
         />

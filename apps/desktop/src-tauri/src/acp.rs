@@ -255,6 +255,7 @@ impl TerminalBuffer {
 
 struct ManagedAcpTerminal {
     child: Arc<Mutex<Child>>,
+    stdin: Option<Arc<Mutex<ChildStdin>>>,
     sync: Arc<(Mutex<TerminalBuffer>, Condvar)>,
 }
 
@@ -1213,6 +1214,9 @@ pub(crate) fn resolve_workspace_scoped_path(
     if !canonical_root.is_dir() {
         return Err("ACP 工作区必须是目录".to_string());
     }
+    if canonical_root.parent().is_none() {
+        return Err("ACP 工作区不能是文件系统根目录".to_string());
+    }
 
     let trimmed_path = raw_path.trim();
     if trimmed_path.is_empty() || trimmed_path.contains('\0') {
@@ -2008,6 +2012,7 @@ pub async fn acp_terminal_create(
         let child_arc = Arc::new(Mutex::new(child));
         let managed = Arc::new(ManagedAcpTerminal {
             child: Arc::clone(&child_arc),
+            stdin: None,
             sync: Arc::clone(&sync),
         });
 
@@ -2154,7 +2159,10 @@ pub fn acp_terminal_kill(
             .ok_or_else(|| "ACP 终端不存在或已释放".to_string())?
     };
     if let Ok(mut child) = terminal.child.lock() {
-        let _ = kill_and_wait(&mut child);
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = kill_owned_tree_and_wait(&mut child, OWNED_TREE_STOP_TIMEOUT)
+                .or_else(|_| kill_and_wait(&mut child));
+        }
     }
     Ok(())
 }
@@ -2171,7 +2179,10 @@ pub fn acp_terminal_release(
         .remove(&terminal_id);
     if let Some(terminal) = terminal {
         if let Ok(mut child) = terminal.child.lock() {
-            let _ = kill_and_wait(&mut child);
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = kill_owned_tree_and_wait(&mut child, OWNED_TREE_STOP_TIMEOUT)
+                    .or_else(|_| kill_and_wait(&mut child));
+            }
         }
     }
     Ok(())
@@ -2216,9 +2227,360 @@ pub fn shutdown_all_acp_processes(app: &tauri::AppHandle) {
         .unwrap_or_default();
     for term in drained_terms {
         if let Ok(mut child) = term.child.lock() {
-            let _ = kill_and_wait(&mut child);
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = kill_owned_tree_and_wait(&mut child, OWNED_TREE_STOP_TIMEOUT)
+                    .or_else(|_| kill_and_wait(&mut child));
+            }
         }
     }
+}
+
+fn pick_interactive_shell(requested: Option<&str>) -> Result<(PathBuf, Vec<String>), String> {
+    if let Some(raw) = requested.map(str::trim).filter(|s| !s.is_empty()) {
+        let lower = raw.to_ascii_lowercase();
+        let allowed = matches!(
+            lower.as_str(),
+            "pwsh" | "powershell" | "powershell.exe" | "cmd" | "cmd.exe" | "bash" | "sh" | "zsh"
+        );
+        if !allowed {
+            return Err("不支持的交互式终端 Shell".to_string());
+        }
+        let resolved = find_program(raw).unwrap_or_else(|| PathBuf::from(raw));
+        let args = if lower.contains("pwsh") || lower.contains("powershell") {
+            vec![
+                "-NoLogo".to_string(),
+                "-NoExit".to_string(),
+                "-Command".to_string(),
+                "-".to_string(),
+            ]
+        } else if lower.contains("cmd") {
+            vec!["/Q".to_string()]
+        } else {
+            Vec::new()
+        };
+        return Ok((resolved, args));
+    }
+
+    #[cfg(windows)]
+    {
+        if let Some(pwsh) = find_program("pwsh.exe").or_else(|| find_program("pwsh")) {
+            return Ok((
+                pwsh,
+                vec![
+                    "-NoLogo".to_string(),
+                    "-NoExit".to_string(),
+                    "-Command".to_string(),
+                    "-".to_string(),
+                ],
+            ));
+        }
+        if let Some(ps) = find_program("powershell.exe") {
+            return Ok((
+                ps,
+                vec![
+                    "-NoLogo".to_string(),
+                    "-NoExit".to_string(),
+                    "-Command".to_string(),
+                    "-".to_string(),
+                ],
+            ));
+        }
+        let cmd = find_program("cmd.exe").unwrap_or_else(|| PathBuf::from("cmd.exe"));
+        Ok((cmd, vec!["/Q".to_string()]))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let fallback_env = std::env::var("SHELL")
+            .ok()
+            .filter(|s| s.ends_with("/bash") || s.ends_with("/zsh") || s.ends_with("/sh"));
+        if let Some(shell_path) = fallback_env.map(PathBuf::from).filter(|p| p.is_file()) {
+            return Ok((shell_path, Vec::new()));
+        }
+        if let Some(bash) = find_program("bash") {
+            return Ok((bash, Vec::new()));
+        }
+        Ok((
+            find_program("sh").unwrap_or_else(|| PathBuf::from("/bin/sh")),
+            Vec::new(),
+        ))
+    }
+}
+
+#[tauri::command]
+pub async fn butler_terminal_start(
+    state: tauri::State<'_, AcpSupervisorState>,
+    workspace_root: String,
+    shell: Option<String>,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    let terminals = Arc::clone(&state.terminals);
+    let term_num = state.next_id.fetch_add(1, Ordering::Relaxed);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let requested_cwd = cwd
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .unwrap_or(".");
+        let (_root, resolved_cwd) =
+            resolve_workspace_scoped_path(&workspace_root, requested_cwd, true)?;
+        if !resolved_cwd.is_dir() {
+            return Err("终端工作目录必须是目录".to_string());
+        }
+        let cwd_host = host_path(&resolved_cwd);
+        let (shell_exe, shell_args) = pick_interactive_shell(shell.as_deref())?;
+        let mut cmd = build_command_for_program(&shell_exe, &shell_args);
+        cmd.current_dir(&cwd_host)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|error| format!("启动集成终端失败：{error}"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "终端 stdin 不可用".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "终端 stdout 不可用".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "终端 stderr 不可用".to_string())?;
+
+        let sync = Arc::new((
+            Mutex::new(TerminalBuffer::new(DEFAULT_TERMINAL_OUTPUT_BYTES)),
+            Condvar::new(),
+        ));
+        let stdout_handle = spawn_terminal_stream_reader(stdout, Arc::clone(&sync));
+        let stderr_handle = spawn_terminal_stream_reader(stderr, Arc::clone(&sync));
+
+        let child_arc = Arc::new(Mutex::new(child));
+        let managed = Arc::new(ManagedAcpTerminal {
+            child: Arc::clone(&child_arc),
+            stdin: Some(Arc::new(Mutex::new(stdin))),
+            sync: Arc::clone(&sync),
+        });
+
+        let terminal_id = format!("butler-term-{term_num}");
+        terminals
+            .lock()
+            .map_err(|_| "集成终端注册表不可用".to_string())?
+            .insert(terminal_id.clone(), managed);
+
+        thread::spawn(move || loop {
+            let exited = {
+                let Ok(mut guard) = child_arc.lock() else {
+                    break;
+                };
+                match guard.try_wait() {
+                    Ok(Some(status)) => Some(AcpTerminalExitStatus {
+                        exit_code: status.code(),
+                        signal: exit_signal_name(&status),
+                    }),
+                    Ok(None) => None,
+                    Err(_) => Some(AcpTerminalExitStatus {
+                        exit_code: None,
+                        signal: None,
+                    }),
+                }
+            };
+            if let Some(status) = exited {
+                let _ = stdout_handle.join();
+                let _ = stderr_handle.join();
+                if let Ok(mut buffer) = sync.0.lock() {
+                    buffer.exit_status = Some(status);
+                }
+                sync.1.notify_all();
+                break;
+            }
+            thread::sleep(Duration::from_millis(30));
+        });
+
+        Ok(terminal_id)
+    })
+    .await
+    .map_err(|error| format!("启动集成终端失败：{error}"))?
+}
+
+#[tauri::command]
+pub fn butler_terminal_write(
+    state: tauri::State<'_, AcpSupervisorState>,
+    terminal_id: String,
+    data: String,
+) -> Result<(), String> {
+    let terminal = {
+        let terminals = state
+            .terminals
+            .lock()
+            .map_err(|_| "集成终端注册表不可用".to_string())?;
+        terminals
+            .get(&terminal_id)
+            .cloned()
+            .ok_or_else(|| "集成终端不存在或已关闭".to_string())?
+    };
+    let stdin = terminal
+        .stdin
+        .as_ref()
+        .ok_or_else(|| "该终端不支持交互输入".to_string())?;
+    let mut writer = stdin.lock().map_err(|_| "终端输入流不可用".to_string())?;
+    writer
+        .write_all(data.as_bytes())
+        .and_then(|_| writer.flush())
+        .map_err(|error| format!("写入终端命令失败：{error}"))
+}
+
+#[tauri::command]
+pub fn butler_terminal_output(
+    state: tauri::State<'_, AcpSupervisorState>,
+    terminal_id: String,
+) -> Result<AcpTerminalOutputSnapshot, String> {
+    acp_terminal_output(state, terminal_id)
+}
+
+#[tauri::command]
+pub fn butler_terminal_kill(
+    state: tauri::State<'_, AcpSupervisorState>,
+    terminal_id: String,
+) -> Result<(), String> {
+    acp_terminal_kill(state, terminal_id)
+}
+
+#[tauri::command]
+pub fn butler_terminal_release(
+    state: tauri::State<'_, AcpSupervisorState>,
+    terminal_id: String,
+) -> Result<(), String> {
+    acp_terminal_release(state, terminal_id)
+}
+
+fn score_workspace_file_match(rel: &str, query_lower: &str) -> Option<i32> {
+    if query_lower.is_empty() {
+        return Some(0);
+    }
+    let rel_lower = rel.to_ascii_lowercase();
+    let basename = rel_lower.rsplit('/').next().unwrap_or(&rel_lower);
+    if basename == query_lower {
+        return Some(500);
+    }
+    if basename.starts_with(query_lower) {
+        return Some(400);
+    }
+    if basename.contains(query_lower) {
+        return Some(300);
+    }
+    if rel_lower.contains(query_lower) {
+        return Some(200);
+    }
+    let mut q_chars = query_lower.chars().peekable();
+    for ch in rel_lower.chars() {
+        if q_chars.peek() == Some(&ch) {
+            q_chars.next();
+            if q_chars.peek().is_none() {
+                return Some(100);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn list_workspace_files_sync(
+    workspace_root: &str,
+    query: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<String>, String> {
+    let (canonical_root, _) = resolve_workspace_scoped_path(workspace_root, ".", true)?;
+    let max_results = limit.unwrap_or(80).clamp(1, 200);
+    let query_lower = query.unwrap_or("").trim().to_ascii_lowercase();
+
+    let mut stack: Vec<(PathBuf, usize)> = vec![(canonical_root.clone(), 0)];
+    let mut collected: Vec<(i32, String)> = Vec::new();
+    let mut visited = 0usize;
+    const MAX_VISITED: usize = 4_000;
+    const MAX_DEPTH: usize = 8;
+
+    while let Some((dir, depth)) = stack.pop() {
+        if visited >= MAX_VISITED {
+            break;
+        }
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if visited >= MAX_VISITED {
+                break;
+            }
+            visited += 1;
+            let file_name = entry.file_name();
+            let name = file_name.to_string_lossy();
+            if matches!(
+                name.as_ref(),
+                ".git"
+                    | "node_modules"
+                    | "target"
+                    | "dist"
+                    | ".next"
+                    | ".turbo"
+                    | "build"
+                    | "out"
+                    | ".venv"
+                    | "__pycache__"
+            ) {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                if depth < MAX_DEPTH {
+                    stack.push((entry_path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Ok(rel_path) = entry_path.strip_prefix(&canonical_root) else {
+                continue;
+            };
+            let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+            if let Some(score) = score_workspace_file_match(&rel_str, &query_lower) {
+                collected.push((score, rel_str));
+            }
+        }
+    }
+
+    collected.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| a.1.len().cmp(&b.1.len()))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    Ok(collected
+        .into_iter()
+        .take(max_results)
+        .map(|(_, path)| path)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn butler_workspace_list_files(
+    workspace_root: String,
+    query: Option<String>,
+    limit: Option<u32>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_workspace_files_sync(&workspace_root, query.as_deref(), limit.map(|v| v as usize))
+    })
+    .await
+    .map_err(|error| format!("扫描工作区文件失败：{error}"))?
 }
 
 #[cfg(test)]
@@ -2690,5 +3052,58 @@ mod tests {
 
         let blank_adapter = vec!["--rocketx-acp-bridge=   ".to_string()];
         assert!(extract_bridge_adapter(&blank_adapter).is_none());
+    }
+
+    #[test]
+    fn resolve_workspace_scoped_path_rejects_filesystem_root() {
+        #[cfg(windows)]
+        let root = std::env::var("SystemDrive")
+            .map(|drive| format!("{drive}\\"))
+            .unwrap_or_else(|_| "C:\\".to_string());
+        #[cfg(not(windows))]
+        let root = "/".to_string();
+
+        let err = resolve_workspace_scoped_path(&root, "README.md", false).unwrap_err();
+        assert!(err.contains("根目录"));
+    }
+
+    #[test]
+    fn list_workspace_files_skips_vendor_dirs_and_ranks_matches() {
+        let root = temp_test_dir("list-files");
+        std::fs::create_dir_all(root.join("src").join("components")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules").join("pkg")).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(
+            root.join("src")
+                .join("components")
+                .join("ButlerTerminal.tsx"),
+            "",
+        )
+        .unwrap();
+        std::fs::write(root.join("src").join("main.ts"), "").unwrap();
+        std::fs::write(
+            root.join("node_modules")
+                .join("pkg")
+                .join("ButlerTerminal.tsx"),
+            "",
+        )
+        .unwrap();
+        std::fs::write(root.join(".git").join("HEAD"), "").unwrap();
+
+        let all = list_workspace_files_sync(&host_path(&root), None, None).unwrap();
+        assert!(all.contains(&"src/components/ButlerTerminal.tsx".to_string()));
+        assert!(all.contains(&"src/main.ts".to_string()));
+        assert!(!all
+            .iter()
+            .any(|p| p.contains("node_modules") || p.contains(".git")));
+
+        let matched =
+            list_workspace_files_sync(&host_path(&root), Some("ButlerTerm"), Some(10)).unwrap();
+        assert_eq!(
+            matched,
+            vec!["src/components/ButlerTerminal.tsx".to_string()]
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -4,6 +4,8 @@ import { BASIC_PERMISSIONS, DANGEROUS_PERMISSIONS, SENSITIVE_PERMISSIONS } from 
 import { parseManifestJson, type AppPermission, type RcxAppManifest } from './manifest';
 import { httpFetch } from '../lib/http';
 import { ensureHttpOrigin } from '../lib/http';
+import { t } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 
 export interface InstalledApp {
   manifest: RcxAppManifest;
@@ -40,7 +42,7 @@ function officialIdentity(
   const expected = identities.get(manifest.id);
   if (!expected) return false;
   if (identityHash.toLowerCase() !== expected) {
-    throw new Error(`应用 ID ${manifest.id} 由 RocketX 官方插件保留，当前包身份校验失败`);
+    throw new Error(t('settings.kernel.installed.officialIdentityMismatch', { appId: manifest.id }));
   }
   return true;
 }
@@ -59,7 +61,7 @@ function normalizePath(path: string): string {
   for (const part of path.replaceAll('\\', '/').split('/')) {
     if (!part || part === '.') continue;
     if (part === '..') {
-      if (!parts.length) throw new Error('entry 不能越出应用目录');
+      if (!parts.length) throw new Error(t('settings.kernel.installed.entryEscape'));
       parts.pop();
     } else {
       parts.push(part);
@@ -87,7 +89,7 @@ function grantsFor(manifest: RcxAppManifest, selected: AppPermission[] = []): Ap
   const selectedSet = new Set(selected);
   for (const permission of selectedSet) {
     if (!SENSITIVE.has(permission) || !manifest.permissions.includes(permission)) {
-      throw new Error(`不能授权未申请的敏感权限: ${permission}`);
+      throw new Error(t('settings.kernel.installed.unrequestedSensitivePermission', { permission }));
     }
   }
   return manifest.permissions.filter(
@@ -116,18 +118,18 @@ function grantsForBundledApp(manifest: RcxAppManifest, previous?: InstalledApp):
 
 function validateRuntime(manifest: RcxAppManifest, source: InstalledApp['source']['kind']): void {
   if (manifest.runtime === 'native' || manifest.runtime === 'mcp') {
-    throw new Error(`${manifest.runtime} runtime 按蓝图留到 M8`);
+    throw new Error(t('settings.kernel.installed.runtimeReserved', { runtime: manifest.runtime }));
   }
   if (manifest.service && source !== 'bundled') {
-    throw new Error('native service 只允许随 RocketX 签名发布的内置应用使用');
+    throw new Error(t('settings.kernel.installed.nativeServiceBundledOnly'));
   }
   if (manifest.runtime === 'worker' && source !== 'directory') {
-    throw new Error('M6 只允许本机显式安装的 worker，远程 worker 已被安全策略拒绝');
+    throw new Error(t('settings.kernel.installed.remoteWorkerDenied'));
   }
   if (manifest.runtime === 'worker') {
     const uiPoints = ['nav.module', 'panel.right', 'message.renderer', 'entity.link'];
     const invalid = uiPoints.find((point) => manifest.contributes?.[point as keyof typeof manifest.contributes]?.length);
-    if (invalid) throw new Error(`worker 不能声明 UI 扩展点: ${invalid}`);
+    if (invalid) throw new Error(t('settings.kernel.installed.workerNoUiPoint', { point: invalid }));
   }
 }
 
@@ -154,7 +156,9 @@ export class AppManager {
   }
 
   list(): readonly InstalledApp[] {
-    return [...this.apps.values()].sort((left, right) => left.manifest.name.localeCompare(right.manifest.name));
+    return [...this.apps.values()].sort((left, right) =>
+      compareLocaleText(left.manifest.name, right.manifest.name),
+    );
   }
 
   get(appId: string): InstalledApp | undefined {
@@ -207,12 +211,12 @@ export class AppManager {
 
   async installDirectory(files: File[], options: InstallOptions = {}): Promise<InstalledApp> {
     const manifestFile = files.find((file) => /(^|\/)rcx\.app\.json$/i.test(file.webkitRelativePath || file.name));
-    if (!manifestFile) throw new Error('所选目录里没有 rcx.app.json');
+    if (!manifestFile) throw new Error(t('settings.kernel.installed.missingManifest'));
     const manifestText = await manifestFile.text();
     const manifest = parseManifestJson(manifestText);
     validateRuntime(manifest, 'directory');
     if (typeof manifest.entry !== 'string' || /^https?:\/\//i.test(manifest.entry)) {
-      throw new Error('本地目录应用的 entry 必须是目录内相对路径');
+      throw new Error(t('settings.kernel.installed.directoryEntryMustBeRelative'));
     }
     const manifestPath = normalizePath(manifestFile.webkitRelativePath || manifestFile.name);
     const base = manifestPath.includes('/') ? manifestPath.slice(0, manifestPath.lastIndexOf('/') + 1) : '';
@@ -220,7 +224,7 @@ export class AppManager {
     const entryFile = files.find(
       (file) => normalizePath(file.webkitRelativePath || file.name) === entryPath,
     );
-    if (!entryFile) throw new Error(`找不到 entry: ${manifest.entry}`);
+    if (!entryFile) throw new Error(t('settings.kernel.installed.missingEntry', { entry: manifest.entry }));
     const entryContent = await entryFile.text();
     const official = officialIdentity(
       this.officialIdentities,
@@ -252,23 +256,27 @@ export class AppManager {
     options: InstallOptions = {},
   ): Promise<InstalledApp> {
     const url = new URL(manifestUrl);
-    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('安装地址只支持 http/https');
-    if (!/^[a-f0-9]{64}$/i.test(expectedSha256)) throw new Error('URL 安装必须提供 64 位 SHA-256');
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error(t('settings.kernel.installed.urlHttpOnly'));
+    if (!/^[a-f0-9]{64}$/i.test(expectedSha256)) throw new Error(t('settings.kernel.installed.urlSha256Required'));
     await ensureHttpOrigin(url);
     const manifestResponse = await httpFetch(url);
-    if (!manifestResponse.ok) throw new Error(`下载 manifest 失败: HTTP ${manifestResponse.status}`);
+    if (!manifestResponse.ok) {
+      throw new Error(t('settings.kernel.installed.downloadManifestFailed', { status: manifestResponse.status }));
+    }
     const manifestText = await manifestResponse.text();
     const manifest = parseManifestJson(manifestText);
     validateRuntime(manifest, 'url');
-    if (typeof manifest.entry !== 'string') throw new Error('M6 URL 应用必须使用 iframe entry');
+    if (typeof manifest.entry !== 'string') throw new Error(t('settings.kernel.installed.urlMustBeIframe'));
     const entryUrl = new URL(manifest.entry, url);
     await ensureHttpOrigin(entryUrl);
     const entryResponse = await httpFetch(entryUrl);
-    if (!entryResponse.ok) throw new Error(`下载 entry 失败: HTTP ${entryResponse.status}`);
+    if (!entryResponse.ok) {
+      throw new Error(t('settings.kernel.installed.downloadEntryFailed', { status: entryResponse.status }));
+    }
     const entryContent = await entryResponse.text();
     const bundleHash = await sha256([manifestText, '\n', entryContent]);
     if (bundleHash.toLowerCase() !== expectedSha256.toLowerCase()) {
-      throw new Error(`应用包 SHA-256 不匹配（实际 ${bundleHash}）`);
+      throw new Error(t('settings.kernel.installed.sha256Mismatch', { actual: bundleHash }));
     }
     return this.save({
       manifest: { ...manifest, entry: entryUrl.href },
@@ -311,7 +319,7 @@ export class AppManager {
   async uninstall(appId: string): Promise<void> {
     const app = this.apps.get(appId);
     if (!app) return;
-    if (app.source.kind === 'bundled') throw new Error('内置应用不能卸载，请将它停用');
+    if (app.source.kind === 'bundled') throw new Error(t('settings.kernel.installed.cannotUninstallBundled'));
     await this.deactivate(appId);
     this.apps.delete(appId);
     await Promise.all([
@@ -369,7 +377,7 @@ export function setActiveAppManager(manager: AppManager): void {
 }
 
 export function appManager(): AppManager {
-  if (!activeManager) throw new Error('扩展内核尚未初始化');
+  if (!activeManager) throw new Error(t('settings.kernel.installed.notInitialized'));
   return activeManager;
 }
 

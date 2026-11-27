@@ -1,5 +1,6 @@
 import type { RcxAppManifest } from './manifest';
 import type { CapabilityBus } from './capabilities/bus';
+import { t } from '../i18n';
 
 interface JsonRpcRequest {
   jsonrpc: '2.0';
@@ -127,18 +128,18 @@ export class BridgeHost {
       let result: unknown;
       if (request.method === 'rcx/call') {
         const params = request.params as { method?: unknown; params?: unknown } | undefined;
-        if (typeof params?.method !== 'string') throw new Error('rcx/call 缺少 method');
+        if (typeof params?.method !== 'string') throw new Error(t('settings.kernel.bridge.callMissingMethod'));
         result = await this.capabilities.call(params.method, params.params, registration);
       } else if (request.method === 'rcx/requestUI') {
         const params = request.params as { kind?: unknown; props?: unknown } | undefined;
-        if (typeof params?.kind !== 'string') throw new Error('rcx/requestUI 缺少 kind');
+        if (typeof params?.kind !== 'string') throw new Error(t('settings.kernel.bridge.requestUiMissingKind'));
         result = await this.capabilities.call(
           'ui.notify',
           { kind: params.kind, props: params.props },
           registration,
         );
       } else {
-        throw new Error(`未知 Bridge 方法: ${request.method}`);
+        throw new Error(t('settings.kernel.bridge.unknownMethod', { method: request.method }));
       }
       registration.send({ jsonrpc: '2.0', id: request.id, result });
     } catch (error) {

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type {
   NativeDispatchActionRecord, NativeExternalEventRecord, NativeWorkCard, NativeWorkCardState,
   NativeWorkLedgerSnapshot,
@@ -7,17 +8,17 @@ import { isNativeHostAction, isNativeHostSession, isNativeHostWork } from '../li
 import { evaluateEventDispatchDecision, verifyExternalEventAgainstLiveState } from './workCoordinator';
 
 export function actionStopReason(card: NativeWorkCard, action: NativeDispatchActionRecord, now: number): string | null {
-  if (action.state !== 'prepared') return '动作已不处于待派发状态，请核对原动作回执';
-  if ((card.state.requirementsVersion ?? 0) <= 0) return '该待办未纳入自动跟进';
+  if (action.state !== 'prepared') return t('agent.workSup.notPrepared');
+  if ((card.state.requirementsVersion ?? 0) <= 0) return t('agent.workSup.notEnrolled');
   let spec: { requirementsVersion?: number; contentVersion?: number } = {};
   try { spec = JSON.parse(action.specJson); } catch { /* 无版本的旧动作需重新提出。 */ }
-  if (spec.requirementsVersion !== card.state.requirementsVersion) return '工作要求版本已变更，旧动作已失效';
-  if (spec.contentVersion !== (card.state.contentVersion ?? 0)) return '成果版本已变更，旧动作需重新核对';
-  if (card.state.waitState === 'paused') return '自动跟进已暂停';
-  if (card.state.autonomyMode === 'readonly') return '当前工作仅观察，不允许继续派发';
-  if (card.state.waitState === 'canceled' || card.state.stage === 'done') return '工作已取消或完成';
-  if (card.state.revokedAt != null && action.createdAt <= card.state.revokedAt) return '动作早于控制撤销水位，需重新授权';
-  if (card.state.deadlineAt != null && now >= card.state.deadlineAt) return '自动跟进已到截止时间，需要你决定是否继续';
+  if (spec.requirementsVersion !== card.state.requirementsVersion) return t('agent.workSup.reqChanged');
+  if (spec.contentVersion !== (card.state.contentVersion ?? 0)) return t('agent.workSup.contentChanged');
+  if (card.state.waitState === 'paused') return t('agent.workSup.paused');
+  if (card.state.autonomyMode === 'readonly') return t('agent.workSup.readonly');
+  if (card.state.waitState === 'canceled' || card.state.stage === 'done') return t('agent.workSup.ended');
+  if (card.state.revokedAt != null && action.createdAt <= card.state.revokedAt) return t('agent.workSup.revoked');
+  if (card.state.deadlineAt != null && now >= card.state.deadlineAt) return t('agent.workSup.deadlineReached');
   return null;
 }
 
@@ -43,9 +44,9 @@ function drainDispatchQueue(): void {
   for (let index = 0; index < dispatchQueue.length;) {
     const item = dispatchQueue[index];
     const reason = activeWorkspaces.has(item.workspaceRoot)
-      ? '同一工作区已有写入任务，正在排队'
+      ? t('agent.workSup.workspaceWriteQueued')
       : activeDispatches >= 2
-        ? '后台并发已达 2 路，正在排队'
+        ? t('agent.workSup.concurrencyQueued')
         : item.ready?.() ?? null;
     if (reason !== item.lastReason) {
       item.lastReason = reason;
@@ -185,8 +186,8 @@ export function createWorkSupervisor(ports: SupervisorPorts) {
       const exhausted = card.state.autoTurnsUsed >= card.state.maxAutoTurns || card.state.consecutiveFailures >= 2;
       const deadline = card.state.deadlineAt != null && now >= card.state.deadlineAt;
       if (deadline || (exhausted && !ports.snapshot().actions.some((a) => a.todoId === card.id && activeAction(a)))) {
-        const reason = deadline ? '自动跟进已到截止时间；当前执行状态保留，需要你决定是否继续'
-          : `自动跟进预算已用尽（${card.state.autoTurnsUsed}/${card.state.maxAutoTurns} 轮，连续失败 ${card.state.consecutiveFailures} 次）`;
+        const reason = deadline ? t('agent.workSup.deadlineWaiting')
+          : t('agent.workSup.budgetExhausted', { used: card.state.autoTurnsUsed, max: card.state.maxAutoTurns, failures: card.state.consecutiveFailures });
         if (card.state.waitState !== 'waiting_input' || card.state.waitReason !== reason) {
           await ports.updateCard(card.id, { waitState: 'waiting_input', waitReason: reason });
         }
@@ -196,7 +197,7 @@ export function createWorkSupervisor(ports: SupervisorPorts) {
       const unresolved = card.state.dependsOn.filter((id) => !state.cards.some((c) => c.id === id && c.state.stage === 'done'));
       if (unresolved.length) {
         if (card.state.waitState === 'none' || card.state.waitState === 'waiting_external') {
-          const reason = `等待前置工作完成：${unresolved.map((id) => state.cards.find((c) => c.id === id)?.title ?? id).join('、')}`;
+          const reason = t('agent.workSup.waitingDependencies', { deps: unresolved.map((id) => state.cards.find((c) => c.id === id)?.title ?? id).join(t('agent.common.listSep')) });
           if (card.state.waitReason !== reason) await ports.updateCard(card.id, { waitState: 'waiting_external', waitReason: reason });
         }
         continue;
@@ -206,7 +207,7 @@ export function createWorkSupervisor(ports: SupervisorPorts) {
       if ((!due && !dependencyReady) || ['waiting_approval', 'waiting_input', 'blocked'].includes(card.state.waitState)
         || state.actions.some((a) => a.todoId === card.id && activeAction(a))) continue;
       if (card.state.autonomyMode !== 'autonomous') {
-        await ports.updateCard(card.id, { waitState: 'waiting_input', waitReason: '已到复查时间，请确认下一步', nextCheckAt: null });
+        await ports.updateCard(card.id, { waitState: 'waiting_input', waitReason: t('agent.workSup.reviewDueConfirm'), nextCheckAt: null });
         continue;
       }
       const session = state.sessions.find((s) => s.todoId === card.id && s.controlMode === 'controllable');
@@ -216,10 +217,10 @@ export function createWorkSupervisor(ports: SupervisorPorts) {
         requireConfirmation: !session,
         specJson: JSON.stringify({ requirementsVersion: card.state.requirementsVersion, contentVersion: card.state.contentVersion ?? 0,
           workspaceRoot: session?.workspaceRoot, automatic: true,
-          specText: `目标：${card.state.goal}\n验收：${card.state.acceptance.join('；')}\n${card.state.nextStep || '复查外部等待或前置工作的最新状态，再决定下一步。'}\n只依据当前可验证事实继续；等待仍未解除时设置下次复查时间，不得把等待当作完成。` }),
+          specText: t('agent.workSup.followupSpec', { goal: card.state.goal ?? '', acceptance: card.state.acceptance.join(t('agent.common.semicolonSep')), nextStep: card.state.nextStep || t('agent.workSup.defaultNextStep') }) }),
       });
       await ports.updateCard(card.id, { nextCheckAt: null, waitState: session ? 'none' : 'waiting_approval',
-        waitReason: session ? null : '复查需要选择执行会话和工作目录' });
+        waitReason: session ? null : t('agent.workSup.needSessionAndDir') });
     }
     for (const event of [...ports.snapshot().events].sort((a, b) => a.occurredAt - b.occurredAt)) {
       if (stopped) return;
@@ -231,15 +232,15 @@ export function createWorkSupervisor(ports: SupervisorPorts) {
       if (isNativeHostAction(action) || isNativeHostWork(action.todoId, ports.snapshot().sessions)
         || ports.snapshot().sessions.some((session) => session.id === action.sessionId && isNativeHostSession(session))) continue;
       const card = ports.snapshot().cards.find((c) => c.id === action.todoId);
-      const reason = card ? actionStopReason(card, action, now) : '关联工作已不存在';
+      const reason = card ? actionStopReason(card, action, now) : t('agent.workSup.workMissing');
       if (reason) {
         await ports.transition({ id: action.id, state: 'canceled', expectedState: 'prepared', errorMessage: reason });
         continue;
       }
       if (ports.snapshot().actions.some((other) => other.id !== action.id && other.todoId === action.todoId
         && ['dispatched', 'verifying_delivery'].includes(other.state))) {
-        if (action.errorMessage !== '前一动作的送达结果待核对，已保留排队') await ports.transition({
-          id: action.id, state: 'prepared', expectedState: 'prepared', errorMessage: '前一动作的送达结果待核对，已保留排队',
+        if (action.errorMessage !== t('agent.workSup.prevActionVerifying')) await ports.transition({
+          id: action.id, state: 'prepared', expectedState: 'prepared', errorMessage: t('agent.workSup.prevActionVerifying'),
         });
         continue;
       }
@@ -252,10 +253,10 @@ export function createWorkSupervisor(ports: SupervisorPorts) {
       const actions = ports.snapshot().actions.filter((a) => a.todoId === card.id && !isNativeHostAction(a));
       const unknown = actions.filter((a) => !inFlight.has(a.id) && (a.state === 'verifying_delivery' || a.state === 'dispatched'));
       const needsApproval = actions.some((a) => a.state === 'awaiting_approval');
-      const reason = unknown.length ? '有动作的送达结果待核对，自动跟进不会重复发送'
-        : needsApproval ? '有待确认动作，需要你决定'
-          : ['waiting_input', 'waiting_approval', 'blocked'].includes(card.state.waitState) ? card.state.waitReason || '需要你处理'
-            : card.state.stage === 'done' ? '工作已验收完成' : null;
+      const reason = unknown.length ? t('agent.workSup.notifyUnknownDelivery')
+        : needsApproval ? t('agent.workSup.notifyNeedsApproval')
+          : ['waiting_input', 'waiting_approval', 'blocked'].includes(card.state.waitState) ? card.state.waitReason || t('agent.workSup.notifyNeedsAttention')
+            : card.state.stage === 'done' ? t('agent.workSup.notifyDone') : null;
       if (!reason) {
         const notices = ports.readNotices();
         if (notices[card.id]) {

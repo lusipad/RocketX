@@ -1,4 +1,5 @@
 import { RcApiError, tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { emojify } from '../lib/emoji';
 import { QUOTE_LINK_RE, stripQuotePrefix } from '../lib/messageText';
 import { isLanControlMessage } from '../lan/protocol';
@@ -45,11 +46,17 @@ export function messagePreview(msg: RcMessage | undefined): string {
   if (!msg) return '';
   if (isLanControlMessage(msg.msg)) return '';
   const who = msg.u?.name || msg.u?.username || '';
-  if (msg.t) return '[系统消息]';
+  if (msg.t) return t('chat.projection.systemMessage');
   const text = emojify(stripAgentSessionMarker(msg.msg ?? '').replace(QUOTE_LINK_RE, ''));
   if (text) return who ? `${who}: ${text}` : text;
-  if (msg.file?.name) return who ? `${who}: [文件] ${msg.file.name}` : `[文件] ${msg.file.name}`;
-  if (msg.attachments?.length) return who ? `${who}: [图片/附件]` : '[图片/附件]';
+  if (msg.file?.name) {
+    const fileLabel = t('chat.projection.filePrefix', { name: msg.file.name });
+    return who ? `${who}: ${fileLabel}` : fileLabel;
+  }
+  if (msg.attachments?.length) {
+    const mediaLabel = t('chat.projection.mediaAttachment');
+    return who ? `${who}: ${mediaLabel}` : mediaLabel;
+  }
   return '';
 }
 
@@ -61,7 +68,7 @@ export function localQuoteAttachment(quoted: RcMessage): RcMessageAttachment {
     text:
       stripQuotePrefix(stripAgentSessionMarker(quoted.msg)) ||
       quoted.attachments?.[0]?.title ||
-      '[卡片消息]',
+      t('chat.projection.cardMessage'),
     ts: quoted.ts,
     ...(image?.image_url ? { image_url: image.image_url } : {}),
     ...(image

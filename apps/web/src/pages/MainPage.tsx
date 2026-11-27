@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { t as i18nT, tp as i18nTp, useI18n } from '../i18n';
 import { buildConversations, isViewingConversation, useChat } from '../stores/chat';
 import { usePrefs } from '../stores/prefs';
 import { useUI } from '../stores/ui';
@@ -6,7 +7,6 @@ import { kernelRegistry, useKernelContributions } from '../kernel/registry';
 import { useFolders } from '../stores/folders';
 import { clearTaskbarFlash, setTaskbarBadge } from '../lib/taskbar';
 import { shortcutKeyOf } from '../lib/shortcutKey';
-import { tr, useUiLocale } from '../lib/uiLocale';
 import {
   clearTrayAttention,
   formatTrayTooltip,
@@ -52,6 +52,9 @@ import {
   effectiveConversationWidth,
 } from '../lib/conversationPanelLayout';
 import { startAutoAway } from '../lib/autoAway';
+import { startProactiveLifecycle } from '../agent/proactiveLifecycle';
+import { startRoomAiParticipantBridge } from '../agent/roomAiParticipantRuntime';
+import { startWorktreeLifecycleBridge } from '../agent/worktreeLifecycle';
 
 const NARROW_LAYOUT_WIDTH = 1180;
 const MIN_CHAT_WIDTH = 420;
@@ -61,7 +64,7 @@ const COLLAPSED_GROUP_WIDTH = 48;
 const RESIZER_WIDTH = 6;
 
 export default function MainPage() {
-  const locale = useUiLocale();
+  const { locale, t } = useI18n();
   const connection = useChat((s) => s.connection);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
@@ -104,6 +107,12 @@ export default function MainPage() {
 
   // 自动离开：无操作超时置 away，活动后恢复 online；监听器/计时器随卸载清理
   useEffect(() => startAutoAway(), []);
+  // 后台主动感知与每日 Dream 生命周期（去抖评估 + 静默消化，仅高价值事项浮出）
+  useEffect(() => startProactiveLifecycle(), []);
+  // 房间内 AI 参与者 / AI 讨论组消息监听桥
+  useEffect(() => startRoomAiParticipantBridge(), []);
+  // 受管 Worktree 完结自动清理守护
+  useEffect(() => startWorktreeLifecycleBridge(), []);
 
   // 离开消息模块即结束此次定位，正常返回时不能再重放旧的搜索或通知跳转。
   useEffect(() => {
@@ -121,8 +130,13 @@ export default function MainPage() {
       const summaries = store.flushDue(Date.now());
       for (const summary of summaries) {
         void desktopNotify({
-          title: `${summary.roomName} · ${summary.count} 条新消息`,
-          body: `${summary.latestSenderName}：${summary.latestText}`.slice(0, 120),
+          title: i18nTp(summary.count, 'nav.main.aggregateTitleOne', 'nav.main.aggregateTitleOther', {
+            roomName: summary.roomName,
+          }),
+          body: i18nT('nav.main.aggregateBody', {
+            sender: summary.latestSenderName,
+            text: summary.latestText,
+          }).slice(0, 120),
           tag: `aggregate:${summary.roomId}`,
           rid: summary.roomId,
           mid: summary.latestMessageId,
@@ -294,7 +308,7 @@ export default function MainPage() {
     void setTaskbarBadge(total);
     void setTrayAttention(hasTrayAttention(subscriptions, unreadAlert));
     void setTrayTooltip(formatTrayTooltip(allConversations));
-  }, [allConversations, subscriptions, unreadAlert]);
+  }, [allConversations, locale, subscriptions, unreadAlert]);
 
   // 全局快捷键
   useEffect(() => {
@@ -363,6 +377,7 @@ export default function MainPage() {
         return;
       }
       if (mod && key === '/') {
+        if (e.defaultPrevented) return;
         e.preventDefault();
         setShortcutsOpen(true);
         return;
@@ -370,6 +385,7 @@ export default function MainPage() {
       // Escape：优先退出多选（issue #19-2），其次关闭右侧面板。
       // 弹窗/灯箱等自己捕获 Esc 并 stopPropagation，不会走到这里。
       if (e.key === 'Escape') {
+        if (e.defaultPrevented) return;
         const state = useChat.getState();
         if (state.selectMode) {
           state.exitSelectMode();
@@ -395,13 +411,13 @@ export default function MainPage() {
             <ConversationList width={conversationWidth} />
             <div
               role="separator"
-              aria-label={tr('调整会话列表宽度', 'Resize conversation list', locale)}
+              aria-label={t('nav.main.resizeConversationAria')}
               aria-orientation="vertical"
               aria-valuemin={MIN_CONVERSATION_WIDTH}
               aria-valuemax={maxConversationWidth}
               aria-valuenow={Math.round(conversationWidth)}
               tabIndex={0}
-              title={tr('拖动调整会话列表宽度，双击恢复默认', 'Drag to resize conversation list, double-click to reset', locale)}
+              title={t('nav.main.resizeConversationTitle')}
               onDoubleClick={() => {
                 clearConversationPanelNarrowing();
                 resetConversationWidth();
@@ -432,14 +448,12 @@ export default function MainPage() {
           </>)) : module === 'settings' ? <SettingsPage /> : ActiveModule ? (
           <ActiveModule />
         ) : (
-          <div className="flex flex-1 items-center justify-center bg-surface-3 text-sm text-ink-3">
-            {tr('正在准备本地工作区…', 'Preparing local workspace…', locale)}
-          </div>
+          <div className="flex flex-1 items-center justify-center bg-surface-3 text-sm text-ink-3">{t('nav.main.preparingWorkspace')}</div>
         )}
       </div>
       {(connection === 'reconnecting' || connection === 'connecting') && (
         <div className="fixed top-3 left-1/2 z-50 -translate-x-1/2 rounded-full border border-line bg-surface-4/95 px-4 py-1.5 text-xs text-ink shadow-pop backdrop-blur-xs">
-          {tr('连接中，消息推送可能延迟…', 'Reconnecting…', locale)}
+          {t('nav.main.reconnecting')}
         </div>
       )}
       {switcher && (

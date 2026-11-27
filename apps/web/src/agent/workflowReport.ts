@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type {
   ButlerMemoryEntry,
   NativeWorkCard,
@@ -90,26 +91,26 @@ function computeStatus(input: BuildWorkflowReportInput): {
 } {
   const { card, acpSession } = input;
   if (acpSession?.status === 'error') {
-    return { status: 'failed', statusLabel: '执行异常' };
+    return { status: 'failed', statusLabel: t('agent.report.status.failed') };
   }
   if (acpSession && acpSession.pendingPermissions.length > 0) {
-    return { status: 'waiting', statusLabel: '等待审批确认' };
+    return { status: 'waiting', statusLabel: t('agent.report.status.waitingApproval') };
   }
   if (card?.state.waitState === 'blocked') {
-    return { status: 'blocked', statusLabel: '已阻塞' };
+    return { status: 'blocked', statusLabel: t('agent.report.status.blocked') };
   }
   if (
     card?.state.waitState === 'waiting_input' ||
     card?.state.waitState === 'waiting_approval' ||
     card?.state.waitState === 'waiting_external'
   ) {
-    return { status: 'waiting', statusLabel: '等待响应' };
+    return { status: 'waiting', statusLabel: t('agent.report.status.waiting') };
   }
   if (card?.state.stage === 'done') {
-    return { status: 'completed', statusLabel: '已完成' };
+    return { status: 'completed', statusLabel: t('agent.report.status.completed') };
   }
   if (card?.state.stage === 'verifying') {
-    return { status: 'verifying', statusLabel: '核验中' };
+    return { status: 'verifying', statusLabel: t('agent.report.status.verifying') };
   }
   if (
     acpSession &&
@@ -117,9 +118,9 @@ function computeStatus(input: BuildWorkflowReportInput): {
     acpSession.turnCount > 0 &&
     !card
   ) {
-    return { status: 'completed', statusLabel: '本轮已完成' };
+    return { status: 'completed', statusLabel: t('agent.report.status.turnCompleted') };
   }
-  return { status: 'in_progress', statusLabel: '推进中' };
+  return { status: 'in_progress', statusLabel: t('agent.report.status.inProgress') };
 }
 
 export function buildWorkflowExecutionReport(
@@ -140,7 +141,7 @@ export function buildWorkflowExecutionReport(
     card?.title ||
     acp?.title ||
     ledgerSessions[0]?.title ||
-    '工作流执行汇报';
+    t('agent.report.defaultTitle');
 
   const { status, statusLabel } = computeStatus({ card, acpSession: acp });
 
@@ -186,7 +187,7 @@ export function buildWorkflowExecutionReport(
       .find((m) => m.role === 'assistant' && m.text.trim().length > 0);
     if (lastAssistant && keyChanges.length === 0) {
       keyChanges.push({
-        title: '代理输出结论',
+        title: t('agent.report.assistantOutputTitle'),
         kind: 'assistant_output',
         status: 'completed',
         detail: lastAssistant.text.slice(0, 220),
@@ -217,41 +218,41 @@ export function buildWorkflowExecutionReport(
     risksAndBlockers.push(card.state.waitReason);
   }
   if (acp?.error) {
-    risksAndBlockers.push(`ACP 会话报错：${acp.error}`);
+    risksAndBlockers.push(t('agent.report.riskAcpError', { error: acp.error }));
   }
   if (acp && acp.pendingPermissions.length > 0) {
     risksAndBlockers.push(
-      `存在 ${acp.pendingPermissions.length} 项待审批的工具权限请求`,
+      t('agent.report.riskPendingPerms', { count: acp.pendingPermissions.length }),
     );
   }
   const staleCount = evidences.filter((e) => e.stale).length;
   if (staleCount > 0) {
-    risksAndBlockers.push(`有 ${staleCount} 项既有验收证据已过期，需要重新核验`);
+    risksAndBlockers.push(t('agent.report.riskStaleEv', { count: staleCount }));
   }
   const failedEvCount = evidences.filter((e) => e.kind !== 'agent_report' && !e.passed && !e.stale).length;
   if (failedEvCount > 0) {
-    risksAndBlockers.push(`有 ${failedEvCount} 项验证记录未通过`);
+    risksAndBlockers.push(t('agent.report.riskFailedEv', { count: failedEvCount }));
   }
   if (card && card.state.consecutiveFailures > 0) {
-    risksAndBlockers.push(`最近已累计连续失败 ${card.state.consecutiveFailures} 次`);
+    risksAndBlockers.push(t('agent.report.riskFailures', { count: card.state.consecutiveFailures }));
   }
 
   const nextActions: string[] = [];
   if (acp && acp.pendingPermissions.length > 0) {
-    nextActions.push('在 ACP 工作区中审批或拒绝挂起的权限请求');
+    nextActions.push(t('agent.report.nextHandlePerms'));
   }
   if (card?.state.nextStep?.trim()) {
     nextActions.push(card.state.nextStep.trim());
   }
   const validEvCount = evidences.filter((e) => e.kind !== 'agent_report' && e.passed && !e.stale).length;
   if (card && card.state.stage !== 'done' && validEvCount === 0) {
-    nextActions.push('运行测试或构建核验并登记一条有效验收证据');
+    nextActions.push(t('agent.report.nextVerify'));
   }
   if (nextActions.length === 0) {
     nextActions.push(
       status === 'completed'
-        ? '可归档本次结论到长期记忆，或在讨论室同步最终结果'
-        : '继续跟进当前阶段产物并确认剩余计划项',
+        ? t('agent.report.nextArchive')
+        : t('agent.report.nextFollowUp'),
     );
   }
 
@@ -263,40 +264,40 @@ export function buildWorkflowExecutionReport(
     : undefined;
 
   const summaryParts: string[] = [
-    `「${title}」当前状态为${statusLabel}`,
+    t('agent.report.summaryStatus', { title, status: statusLabel }),
   ];
   if (progressPercent !== null) {
-    summaryParts.push(`计划完成 ${completedPlanCount}/${planBreakdown.length} 项（${progressPercent}%）`);
+    summaryParts.push(t('agent.report.summaryProgress', { completed: completedPlanCount, total: planBreakdown.length, percent: progressPercent }));
   } else if (planBreakdown.length > 0) {
-    summaryParts.push(`验收条件 ${planBreakdown.length} 项，尚未逐项确认`);
+    summaryParts.push(t('agent.report.summaryCriteria', { count: planBreakdown.length }));
   }
   if (evidences.length > 0) {
-    summaryParts.push(`有效验证证据 ${validEvCount} 项`);
+    summaryParts.push(t('agent.report.summaryValidEv', { count: validEvCount }));
   }
   if (lastAssistantText) {
     const brief = lastAssistantText.replace(/\s+/g, ' ').slice(0, 140);
-    summaryParts.push(`最新结论：${brief}${lastAssistantText.length > 140 ? '…' : ''}`);
+    summaryParts.push(t('agent.report.summaryConclusion', { brief: `${brief}${lastAssistantText.length > 140 ? '…' : ''}` }));
   }
-  const summary = `${summaryParts.join('；')}。`;
+  const summary = `${summaryParts.join(t('agent.report.summaryJoin'))}${t('agent.report.summaryEnd')}`;
 
   const workspaceRoot =
     acp?.workspaceRoot ?? ledgerSessions[0]?.workspaceRoot ?? null;
   const sessionId = acp?.acpSessionId ?? ledgerSessions[0]?.id ?? null;
 
   const mdLines: string[] = [
-    '# 工作流执行汇报',
+    t('agent.report.md.heading'),
     '',
-    `- **任务主题**：${title}`,
-    `- **当前状态**：${statusLabel}`,
+    t('agent.report.md.topic', { title }),
+    t('agent.report.md.status', { status: statusLabel }),
     ...(progressPercent !== null
-      ? [`- **计划步骤**：完成 ${completedPlanCount}/${planBreakdown.length} 项（${progressPercent}%）`]
+      ? [t('agent.report.md.planProgress', { completed: completedPlanCount, total: planBreakdown.length, percent: progressPercent })]
       : []),
-    ...(workspaceRoot ? [`- **工作区**：\`${workspaceRoot}\``] : []),
+    ...(workspaceRoot ? [t('agent.report.md.workspace', { path: workspaceRoot })] : []),
     '',
-    '## 核心结论',
+    t('agent.report.md.coreSummary'),
     summary,
     '',
-    progressPercent === null && planBreakdown.length > 0 ? '## 验收条件（尚未逐项确认）' : '## 计划步骤',
+    progressPercent === null && planBreakdown.length > 0 ? t('agent.report.md.criteriaSection') : t('agent.report.md.planSection'),
     ...(planBreakdown.length > 0
       ? planBreakdown.map((item) => {
           const mark =
@@ -307,33 +308,33 @@ export function buildWorkflowExecutionReport(
                 : '[ ]';
           return `- ${mark} (${item.priority}) ${item.content}`;
         })
-      : ['- 暂无结构化计划拆解条目']),
+      : [t('agent.report.md.planEmpty')]),
     '',
-    '## 关键产出与工具执行',
+    t('agent.report.md.changesSection'),
     ...(keyChanges.length > 0
       ? keyChanges.map((item) => {
           const loc = item.locations?.length ? ` (${item.locations.join(', ')})` : '';
-          const detail = item.detail ? `：${item.detail}` : '';
+          const detail = item.detail ? t('agent.report.md.changeDetail', { detail: item.detail }) : '';
           return `- [${item.status}] \`${item.kind}\` ${item.title}${loc}${detail}`;
         })
-      : ['- 暂无工具执行或代码产出记录']),
+      : [t('agent.report.md.changesEmpty')]),
     '',
-    '## 验证证据',
+    t('agent.report.md.evidenceSection'),
     ...(evidences.length > 0
       ? evidences.map((ev) => {
-          const tag = ev.stale ? '已过期' : ev.kind === 'agent_report' ? '说明记录' : ev.passed ? '通过' : '未通过';
+          const tag = ev.stale ? t('agent.report.md.tagStale') : ev.kind === 'agent_report' ? t('agent.report.md.tagNote') : ev.passed ? t('agent.report.md.tagPassed') : t('agent.report.md.tagFailed');
           const sha = ev.headSha ? ` @ ${ev.headSha.slice(0, 8)}` : '';
           const note = ev.summary ? ` — ${ev.summary}` : '';
           return `- [${tag}] (${ev.kind}) ${ev.title}${sha}${note}`;
         })
-      : ['- 暂无已登记的验证证据']),
+      : [t('agent.report.md.evidenceEmpty')]),
     '',
-    '## 待确认与风险',
+    t('agent.report.md.risksSection'),
     ...(risksAndBlockers.length > 0
       ? risksAndBlockers.map((r) => `- ${r}`)
-      : ['- 暂无阻塞或异常风险']),
+      : [t('agent.report.md.risksEmpty')]),
     '',
-    '## 下一步建议',
+    t('agent.report.md.nextSection'),
     ...nextActions.map((act) => `- ${act}`),
   ];
 
@@ -367,12 +368,12 @@ export async function recordReportAsWorkEvidence(
   report: WorkflowExecutionReport,
 ): Promise<NativeWorkEvidence> {
   const validSha = report.evidences.find((e) => e.headSha && !e.stale)?.headSha ?? null;
-  if (report.todoId !== todoId) throw new Error('汇报与工作归属不一致，未登记');
+  if (report.todoId !== todoId) throw new Error(t('agent.report.evidenceMismatch'));
   return useWorkLedger.getState().addEvidence({
     todoId,
     sessionId: report.sessionId,
     kind: 'agent_report',
-    title: `工作流汇报：${report.title}`,
+    title: t('agent.report.evidenceTitle', { title: report.title }),
     summary: report.summary,
     headSha: validSha,
     workspaceRoot: report.workspaceRoot,
@@ -388,11 +389,11 @@ export async function distillReportToMemory(
 ): Promise<ButlerMemoryEntry> {
   const nextStepSuffix =
     report.nextActions.length > 0
-      ? `；后续建议：${report.nextActions.slice(0, 2).join('；')}`
+      ? t('agent.report.memoryNextSuffix', { actions: report.nextActions.slice(0, 2).join(t('agent.common.semicolonSep')) })
       : '';
   return useButlerMemory.getState().upsertMemory({
     category: 'episodic_summary',
-    title: `工作流总结：${report.title}`,
+    title: t('agent.report.memoryTitle', { title: report.title }),
     content: `${report.summary}${nextStepSuffix}`,
     tags: ['workflow-report', report.status],
     workspaceRoot: workspaceRoot !== undefined ? workspaceRoot : report.workspaceRoot,
@@ -409,9 +410,9 @@ export async function postWorkflowReportToRoom(
 ): Promise<{ ok: boolean; messageId?: string; action: NativeDispatchActionRecord }> {
   const targetRid = rid.trim();
   if (!targetRid) {
-    throw new Error('请先选择要发送汇报的 Rocket.Chat 讨论室');
+    throw new Error(t('agent.report.selectRoom'));
   }
-  if (!report.todoId) throw new Error('请先将汇报关联到工作，再发送到讨论室');
+  if (!report.todoId) throw new Error(t('agent.report.linkWorkFirst'));
   const action = await publishWorkReport({
     workId: report.todoId, rid: targetRid, reportId: report.id, reportTitle: report.title,
     reportGeneratedAt: report.generatedAt, markdown: report.markdown,

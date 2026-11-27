@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   adoConnectionChanged,
   loadWorkspaceSource,
@@ -606,12 +608,27 @@ test('设置页团队配置分区保留内部 key，但只展示团队配置入�
   const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
   const section = readFileSync('apps/web/src/components/WorkspaceConfigImport.tsx', 'utf8');
 
-  assert.match(settings, /\{ key: 'workspace', label: '团队配置', icon: UsersRound \}/);
+  assert.match(settings, /\{ key: 'workspace', labelKey: 'settings\.sections\.workspace', icon: UsersRound \}/);
+  assert.equal(zhCN['settings.sections.workspace'], '团队配置');
+  assert.ok(enUS['settings.sections.workspace'].length > 0);
+  assert.match(section, /title=\{config\.name \? t\('settings\.workspace\.importNamedTitle', \{ name: config\.name \}\) : t\('settings\.workspace\.importTitle'\)\}/);
+  assert.equal(zhCN['settings.workspace.importNamedTitle'], '导入「{name}」');
+  assert.equal(zhCN['settings.workspace.importTitle'], '导入团队配置');
+  assert.ok(enUS['settings.workspace.importNamedTitle'].length > 0 && enUS['settings.workspace.importTitle'].length > 0);
+  assert.match(section, /<h2 className="text-base font-semibold text-ink">\{t\('settings\.workspace\.sourceHeading'\)\}<\/h2>/);
+  assert.equal(zhCN['settings.workspace.sourceHeading'], '配置来源');
+  assert.ok(enUS['settings.workspace.sourceHeading'].length > 0);
+  assert.match(section, /placeholder=\{t\('settings\.workspace\.sourceInputPlaceholder'\)\}/);
+  assert.equal(zhCN['settings.workspace.sourceInputPlaceholder'], '配置 URL、ADO 文件链接或 UNC 共享 JSON 路径');
+  assert.ok(enUS['settings.workspace.sourceInputPlaceholder'].length > 0);
+  assert.match(section, /aria-label=\{t\('settings\.workspace\.sourceInputAriaLabel'\)\}/);
+  assert.equal(zhCN['settings.workspace.sourceInputAriaLabel'], '团队配置来源');
+  assert.ok(enUS['settings.workspace.sourceInputAriaLabel'].length > 0);
+  assert.match(section, /toast\.error\(err, t\('settings\.workspace\.invalidSource'\)\)/);
+  assert.equal(zhCN['settings.workspace.invalidSource'], '配置来源无效');
+  assert.ok(enUS['settings.workspace.invalidSource'].length > 0);
+  assert.match(section, /\{t\('settings\.workspace\.fromAdoDescription'\)\}/);
+  assert.match(zhCN['settings.workspace.fromAdoDescription'], /直接把 ADO 仓库文件链接粘贴到上面的统一输入框里自动回填/);
+  assert.ok(enUS['settings.workspace.fromAdoDescription'].length > 0);
   assert.doesNotMatch(settings, /LocalAgentEnvironmentsSettings/);
-  assert.match(section, /title=\{config\.name \? tr\(`导入「\$\{config\.name\}」`,[^)]+\) : tr\('导入团队配置', 'Import Team Config', locale\)\}/);
-  assert.match(section, /<h2 className="text-base font-semibold text-ink">\{tr\('配置来源', 'Config Source', locale\)\}<\/h2>/);
-  assert.match(section, /配置 URL、ADO 文件链接或 UNC 共享 JSON 路径/);
-  assert.match(section, /aria-label=\{tr\('团队配置来源', 'Team config source', locale\)\}/);
-  assert.match(section, /toast\.error\(err, tr\('配置来源无效', 'Invalid config source', locale\)\)/);
-  assert.match(section, /直接把 ADO 仓库文件链接粘贴到上面的统一输入框里自动回填/);
 });

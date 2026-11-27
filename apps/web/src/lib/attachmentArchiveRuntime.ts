@@ -1,4 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { getServerBase, isTauri, loadStoredAuth, rest } from './client';
 import {
   DEFAULT_ATTACHMENT_ARCHIVE_SETTINGS,
@@ -145,7 +146,7 @@ function limitedStream(body: ReadableStream<Uint8Array>, limit: number): Readabl
       received += next.value.byteLength;
       if (received > limit) {
         await reader.cancel();
-        controller.error(new Error('附件超过本地留存的单文件上限'));
+        controller.error(new Error(t('nav.archive.exceedsMaxFileBytes')));
         return;
       }
       controller.enqueue(next.value);
@@ -223,7 +224,7 @@ async function archiveMessage(
     const response = await rest.fetchFileResponse(candidate.sourcePath);
     const declaredSize = Number(response.headers.get('content-length'));
     if (Number.isFinite(declaredSize) && declaredSize > snapshot.settings.maxFileBytes) return;
-    if (!response.body) throw new Error('附件响应没有可读取的内容');
+    if (!response.body) throw new Error(t('nav.archive.emptyBody'));
     const { mkdir, remove, stat, writeFile } = await import('@tauri-apps/plugin-fs');
     await mkdir(await roomDirectory(current, candidate.rid), { recursive: true });
     await writeFile(path, limitedStream(response.body, snapshot.settings.maxFileBytes));
@@ -239,7 +240,7 @@ async function archiveMessage(
     }
     const archive = recordArchivedAttachment(latest.archive, {
       ...candidate,
-      roomName: roomName || '会话',
+      roomName: roomName || t('nav.search.roomFallback'),
       size: metadata.size,
       cachedAt: Date.now(),
     });
@@ -275,7 +276,7 @@ export async function deleteRoomAttachmentArchive(rid: string): Promise<void> {
   const current = owner();
   if (!current) return;
   const deletion = queue.then(async () => {
-    if (!sameOwner(owner(), current)) throw new Error('账号已切换，请重试删除本地附件');
+    if (!sameOwner(owner(), current)) throw new Error(t('nav.archive.accountSwitchedDelete'));
     const snapshot = readFor(current);
     const records = snapshot.archive.records.filter((item) => item.rid === rid);
     if (records.length === 0) return;

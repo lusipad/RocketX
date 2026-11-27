@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 test('右键创建讨论先允许编辑讨论名称，再把名称传给创建流程', async () => {
   const messageItem = await readFile(
@@ -19,7 +21,9 @@ test('右键创建讨论先允许编辑讨论名称，再把名称传给创建�
   assert.match(messageItem, /setCreateDiscussionOpen\(true\)/);
   assert.match(messageItem, /createDiscussionFrom\(message, name\)/);
   // 弹窗后来抽成独立组件，同时服务「从消息创建」与「在房间里创建」
-  assert.match(dialog, /title="创建讨论"/);
+  assert.match(dialog, /title=\{t\('chat\.discussion\.createTitle'\)\}/);
+  assert.equal(zhCN['chat.discussion.createTitle'], '创建讨论');
+  assert.ok(enUS['chat.discussion.createTitle'].length > 0);
   assert.match(dialog, /maxLength=\{40\}/);
   assert.match(chatStore, /createDiscussionFrom: \(msg: RcMessage, name\?: string\)/);
   assert.match(chatStore, /requestedName\?\.trim\(\) \|\| stripQuotePrefix\(msg\.msg\)/);
@@ -50,7 +54,9 @@ test('创建讨论的入口支持中文讨论名称，且统一规范化首尾�
   assert.match(dialog, /const finalName = normalizeDiscussionName\(/);
   // store 是唯一发请求的地方：提示语与参数都使用规范化讨论名
   assert.match(chatStore, /const name = normalizeDiscussionName\(/);
-  assert.match(chatStore, /已创建讨论「\$\{name\}」/);
+  assert.match(chatStore, /t\('chat\.discussion\.created', \{ name \}\)/);
+  assert.equal(zhCN['chat.discussion.created'], '已创建讨论「{name}」');
+  assert.ok(enUS['chat.discussion.created'].includes('{name}'));
   // 工作项两条路径支持中文标题建讨论，不再被清洗成纯哈希
   assert.match(workItemDialog, /const discName = normalizeDiscussionName\(`#\$\{top\.id\} \$\{top\.title\}`/);
   assert.match(workItemDiscussionDialog, /normalizeDiscussionName\(discussionName\.trim\(\)/);

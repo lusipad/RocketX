@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 test('桌面通知权限查询绕过 WebView2 的 Notification.permission', async () => {
   const source = await readFile(new URL('../../apps/web/src/lib/notify.ts', import.meta.url), 'utf8');
@@ -21,6 +23,8 @@ test('通知设置提供应用内关闭路径，不把系统权限撤销伪装�
   );
 
   assert.match(source, /desktopNotifications === 'nothing'/);
-  assert.match(source, /关闭桌面通知/);
+  assert.match(source, /t\('settings\.notification\.disableDesktop'\)/);
+  assert.equal(zhCN['settings.notification.disableDesktop'], '关闭桌面通知');
+  assert.ok(enUS['settings.notification.disableDesktop'].length > 0);
   assert.match(source, /desktopNotifications: prefs\.desktopNotifications === 'nothing' \? 'all' : 'nothing'/);
 });

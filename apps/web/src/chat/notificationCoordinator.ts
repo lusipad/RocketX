@@ -1,4 +1,5 @@
 import { tsMs, type RcMessage, type RcRoom, type RcSubscription, type RcUser } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { routeNotification, type NotificationAggregationInput, type NotificationAggregationStateV1 } from '../lib/notificationAggregation';
 import { focusAggregationConfig } from '../stores/focus';
 import { stripAgentSessionMarker } from '../agent/card';
@@ -123,7 +124,7 @@ export async function notifyChatMessage(
   if (!policy.showDesktopNotification) return;
 
   const title = msg.u.name || msg.u.username;
-  const body = stripAgentSessionMarker(msg.msg) || (msg.attachments?.length ? '[卡片/文件]' : '');
+  const body = stripAgentSessionMarker(msg.msg) || (msg.attachments?.length ? t('chat.notification.cardOrFile') : '');
   const directMention = !!currentUser && !!msg.mentions?.some((mention) =>
     mention._id === currentUser._id || mention.username === currentUser.username,
   );
@@ -133,7 +134,7 @@ export async function notifyChatMessage(
   const candidate: NotificationAggregationInput = {
     id: msg._id,
     roomId: rid,
-    roomName: subscription.fname || subscription.name || snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+    roomName: subscription.fname || subscription.name || snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || t('chat.common.conversation'),
     senderName: title,
     text: body,
     timestamp: tsMs(msg.ts),

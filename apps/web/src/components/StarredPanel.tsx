@@ -5,19 +5,21 @@ import { rest } from '../lib/client';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { humanError } from '../stores/toast';
+import { useT } from '../i18n';
 import PanelShell from './PanelShell';
 import MessageResultRow from './MessageResultRow';
 import { SkeletonRows } from './Skeleton';
 
 /** 标记（星标）消息面板：点击跳转到原消息，悬停可取消标记 */
 export default function StarredPanel() {
+  const t = useT();
   const rid = useChat((s) => s.activeRid);
   const localMessages = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const toggleStar = useChat((s) => s.toggleStar);
   const myId = useAuth((s) => s.user?._id);
   const [fetched, setFetched] = useState<RcMessage[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ raw: unknown } | null>(null);
 
   useEffect(() => {
     if (!rid) return;
@@ -28,7 +30,7 @@ export default function StarredPanel() {
       .then(setFetched)
       .catch((err: unknown) => {
         setFetched([]);
-        setError(humanError(err, '无法获取标记消息'));
+        setError({ raw: err });
       })
       .finally(() => setLoading(false));
   }, [rid]);
@@ -44,31 +46,39 @@ export default function StarredPanel() {
     return [...map.values()].sort((a, b) => tsMs(b.ts) - tsMs(a.ts));
   }, [fetched, localMessages, myId]);
 
+  const errorMessage = error ? humanError(error.raw, t('panels.starred.loadFailed')) : null;
+
   return (
-    <PanelShell title={`标记消息${starred.length ? `（${starred.length}）` : ''}`}>
+    <PanelShell
+      title={
+        starred.length
+          ? t('panels.starred.titleWithCount', { count: starred.length })
+          : t('panels.starred.title')
+      }
+    >
       <div className="flex-1 overflow-y-auto px-3 py-2">
         {loading && <SkeletonRows rows={3} />}
-        {!loading && error && (
+        {!loading && errorMessage && (
           <div className="flex flex-col items-center gap-2 py-10 text-center">
             <AlertCircle size={22} className="text-danger" />
-            <div className="max-w-xs text-xs break-words text-ink-3">{error}</div>
+            <div className="max-w-xs text-xs break-words text-ink-3">{errorMessage}</div>
           </div>
         )}
-        {!loading && !error && starred.length === 0 && (
+        {!loading && !errorMessage && starred.length === 0 && (
           <div className="py-10 text-center text-sm text-ink-3">
-            暂无标记消息
-            <div className="mt-1 text-xs">右键消息选择「标记」，重要内容不再丢失</div>
+            {t('panels.starred.empty')}
+            <div className="mt-1 text-xs">{t('panels.starred.emptyHint')}</div>
           </div>
         )}
         {!loading &&
-          !error &&
+          !errorMessage &&
           starred.map((m) => (
             <MessageResultRow
               key={m._id}
               message={m}
               action={
                 <button
-                  title="取消标记"
+                  title={t('panels.starred.unstar')}
                   onClick={() => void toggleStar(m)}
                   className="flex h-6 w-6 items-center justify-center rounded bg-surface-4 text-ink-3 transition hover:bg-fill-hover hover:text-danger"
                 >

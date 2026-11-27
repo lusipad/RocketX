@@ -8,6 +8,8 @@ import { toast } from '../stores/toast';
 import { personName, useAliases } from '../stores/aliases';
 import { tsMs } from '@rcx/rc-client';
 import { aggregateOncall, type OncallShift } from '../lib/oncall';
+import { useI18n, type MessageKey, type ResolvedLocale } from '../i18n';
+import { formatDate } from '../i18n/format';
 import { useUserSearch } from './NewChatDialogs';
 import PanelShell from './PanelShell';
 
@@ -18,7 +20,19 @@ import PanelShell from './PanelShell';
  * 之后跟随会话消息缓存实时更新。「发布」往主频道发一份文本快照，方便没开面板的人看。
  */
 
-const SHIFT_PRESETS = ['全天', '早班', '晚班', '夜班'];
+const SHIFT_PRESET_KEYS: readonly MessageKey[] = [
+  'panels.oncall.shiftPreset.allDay',
+  'panels.oncall.shiftPreset.morning',
+  'panels.oncall.shiftPreset.evening',
+  'panels.oncall.shiftPreset.night',
+];
+
+function formatShiftDay(day: string, locale: ResolvedLocale): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!match) return day;
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return formatDate(date, { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short' }, locale);
+}
 
 function roomTypeOf(rid: string): RoomType {
   const s = useChat.getState();
@@ -26,6 +40,7 @@ function roomTypeOf(rid: string): RoomType {
 }
 
 export default function OncallPanel() {
+  const { t, tp, locale } = useI18n();
   const rid = useChat((s) => s.activeRid);
   const myUsername = useAuth((s) => s.user?.username);
   const roomMessages = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
@@ -36,7 +51,8 @@ export default function OncallPanel() {
   const [loaded, setLoaded] = useState(false);
 
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [shift, setShift] = useState('全天');
+  const [customShift, setCustomShift] = useState<string | null>(null);
+  const shift = customShift ?? t('panels.oncall.shiftPreset.allDay');
   const [member, setMember] = useState<RcUser | null>(null);
   const [keyword, setKeyword] = useState('');
   const [adding, setAdding] = useState(false);
@@ -106,6 +122,17 @@ export default function OncallPanel() {
     return aggregateOncall(cachedThread);
   }, [rid, boardRoot, roomMessages]);
 
+  // 按日期分组展示（日期升序）
+  const grouped = useMemo(() => {
+    const map = new Map<string, OncallShift[]>();
+    for (const s of shifts) {
+      const list = map.get(s.date) ?? [];
+      list.push(s);
+      map.set(s.date, list);
+    }
+    return [...map.entries()];
+  }, [shifts]);
+
   if (!rid) return null;
 
   const createBoard = async () => {
@@ -113,7 +140,7 @@ export default function OncallPanel() {
       const root = await useChat.getState().ensureOncallBoard(rid);
       setBoardRoot(root);
     } catch (err) {
-      toast.error(err, '创建值班表失败');
+      toast.error(err, t('panels.oncall.createFailed'));
     }
   };
 
@@ -143,33 +170,22 @@ export default function OncallPanel() {
     }
   };
 
-  // 按日期分组展示（日期升序）
-  const grouped = useMemo(() => {
-    const map = new Map<string, OncallShift[]>();
-    for (const s of shifts) {
-      const list = map.get(s.date) ?? [];
-      list.push(s);
-      map.set(s.date, list);
-    }
-    return [...map.entries()];
-  }, [shifts]);
-
   return (
-    <PanelShell title={<span className="flex items-center gap-1.5"><CalendarClock size={14} /> 团队值班表</span>}>
-      {scanning && <div className="p-4 text-sm text-ink-3">正在查找频道值班表…</div>}
+    <PanelShell title={<span className="flex items-center gap-1.5"><CalendarClock size={14} /> {t('panels.oncall.title')}</span>}>
+      {scanning && <div className="p-4 text-sm text-ink-3">{t('panels.oncall.scanning')}</div>}
 
       {!scanning && !boardRoot && (
         <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
           <CalendarClock size={28} className="text-ink-3" />
-          <div className="text-sm text-ink-2">这个频道还没有值班表</div>
+          <div className="text-sm text-ink-2">{t('panels.oncall.emptyBoard')}</div>
           <div className="max-w-[220px] text-xs leading-relaxed text-ink-3">
-            值班表归这个频道所有：排班记录保存在服务端，成员实时共享，还可以把当前排班发布成消息。
+            {t('panels.oncall.emptyBoardDesc')}
           </div>
           <button
             onClick={() => void createBoard()}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover"
           >
-            创建值班表
+            {t('panels.oncall.createBoard')}
           </button>
         </div>
       )}
@@ -188,13 +204,13 @@ export default function OncallPanel() {
               <input
                 list="oncall-shift-presets"
                 value={shift}
-                onChange={(e) => setShift(e.target.value)}
-                placeholder="班次"
+                onChange={(e) => setCustomShift(e.target.value)}
+                placeholder={t('panels.oncall.shiftPlaceholder')}
                 className="h-8 w-24 shrink-0 rounded-md border border-line px-2 text-sm outline-none transition focus:border-primary"
               />
               <datalist id="oncall-shift-presets">
-                {SHIFT_PRESETS.map((p) => (
-                  <option key={p} value={p} />
+                {SHIFT_PRESET_KEYS.map((key) => (
+                  <option key={key} value={t(key)} />
                 ))}
               </datalist>
             </div>
@@ -210,7 +226,7 @@ export default function OncallPanel() {
                   onClick={() => setMember(null)}
                   className="h-7 shrink-0 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover"
                 >
-                  换人
+                  {t('panels.oncall.changeMember')}
                 </button>
               </div>
             ) : (
@@ -220,7 +236,7 @@ export default function OncallPanel() {
                   <input
                     value={keyword}
                     onChange={(e) => setKeyword(e.target.value)}
-                    placeholder="选择值班人（搜索用户名）"
+                    placeholder={t('panels.oncall.memberPlaceholder')}
                     className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
                   />
                 </div>
@@ -250,7 +266,7 @@ export default function OncallPanel() {
               disabled={!member || !date || !shift.trim() || adding}
               className="h-8 w-full rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {adding ? '排班中…' : '加一条排班'}
+              {adding ? t('panels.oncall.adding') : t('panels.oncall.addShift')}
             </button>
           </div>
 
@@ -258,12 +274,12 @@ export default function OncallPanel() {
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
             {grouped.length === 0 && (
               <div className="py-8 text-center text-sm text-ink-3">
-                {loaded ? '还没有排班，从上面加一条' : '排班记录加载中…'}
+                {loaded ? t('panels.oncall.noShifts') : t('panels.oncall.loadingShifts')}
               </div>
             )}
             {grouped.map(([day, list]) => (
               <div key={day} className="mb-3">
-                <div className="mb-1 text-xs font-medium text-ink-2">{day}</div>
+                <div className="mb-1 text-xs font-medium text-ink-2">{formatShiftDay(day, locale)}</div>
                 <div className="space-y-1">
                   {list.map((s) => (
                     <div
@@ -279,11 +295,11 @@ export default function OncallPanel() {
                       </span>
                       {s.username === myUsername && (
                         <span className="shrink-0 rounded bg-primary-light px-1 py-0.5 text-xs text-primary">
-                          我
+                          {t('panels.oncall.meBadge')}
                         </span>
                       )}
                       <button
-                        title="取消这条排班"
+                        title={t('panels.oncall.removeShiftTitle')}
                         onClick={() => void useChat.getState().removeOncallShift(rid, s.id)}
                         className="shrink-0 rounded p-1 text-ink-3 transition hover:bg-fill-hover hover:text-danger"
                       >
@@ -303,10 +319,12 @@ export default function OncallPanel() {
               className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Send size={13} />
-              {publishing ? '发布中…' : `发布到频道（${shifts.length} 条排班）`}
+              {publishing
+                ? t('panels.oncall.publishing')
+                : tp(shifts.length, 'panels.oncall.publishWithCount.one', 'panels.oncall.publishWithCount.other')}
             </button>
             <div className="mt-1.5 text-center text-xs text-ink-3">
-              排班改动实时同步给所有成员，发布只是发一份文本快照
+              {t('panels.oncall.syncNote')}
             </div>
           </div>
         </div>

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runtimeFeatures } from '../../apps/web/src/lib/runtimeMode';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 function read(path: string): string {
   return readFileSync(path, 'utf8');
@@ -22,9 +24,15 @@ test('管家页保留普通对话与 AI 托管，并明确私人房间 AI 不属
   const page = read('apps/web/src/pages/ButlerPage.tsx');
 
   assert.match(history, /useSharedAgent/, '管家页左栏应读取 sharedAgent 托管会话');
-  assert.match(history, /AI 托管/, '管家页应保留托管信息架构');
-  assert.match(history, /aria-label=\{tr\('AI 托管会话', 'AI Hosted Sessions', locale\)\}/, '托管会话应作为同一导航中的一段');
-  assert.match(history, /私人房间 AI 会话同样仅你可见/, '导航应明确个人对话与共享托管的边界');
+  assert.match(history, /t\('butler\.history\.hosted\.title'\)/, '管家页应保留托管信息架构');
+  assert.match(zhCN['butler.history.hosted.title'], /AI 托管/);
+  assert.ok(enUS['butler.history.hosted.title'].trim());
+  assert.match(history, /aria-label=\{t\('butler\.history\.hosted\.listAria'\)\}/, '托管会话应作为同一导航中的一段');
+  assert.match(zhCN['butler.history.hosted.listAria'], /AI 托管会话/);
+  assert.ok(enUS['butler.history.hosted.listAria'].trim());
+  assert.match(history, /t\('butler\.history\.onboardingNotice'\)/, '导航应明确个人对话与共享托管的边界');
+  assert.match(zhCN['butler.history.onboardingNotice'], /私人房间 AI 会话同样仅你可见/);
+  assert.ok(enUS['butler.history.onboardingNotice'].trim());
   assert.doesNotMatch(page, /ButlerHostingOverview/, '管家主区不应再渲染重复托管 transcript');
 });
 
@@ -50,7 +58,9 @@ test('房间 AI 使用私人 Pi 会话，AI 托管才复用 sharedAgent 的房�
 
   assert.match(panel, /ROOM_THREAD_STORAGE_KEY = 'rcx-room-codex-threads-v1'/, '私人会话应按账号和房间恢复');
   assert.match(panel, /useCodexWorkspace\.getState\(\)\.send/, 'Pi 私人消息应直接进入个人 thread');
-  assert.match(panel, /仅你可见，不会向当前房间发送消息/, '界面应明确私人可见性');
+  assert.match(panel, /t\('butler\.roomPanel\.privateNote'\)/, '界面应明确私人可见性');
+  assert.match(zhCN['butler.roomPanel.privateNote'], /仅你可见，不会向当前房间发送消息/);
+  assert.ok(enUS['butler.roomPanel.privateNote'].trim());
   assert.doesNotMatch(panel, /useSharedAgent|agentRoomSessionKey|startRoomAgentHosting|HostedConversationTranscript/);
   assert.doesNotMatch(panel, /usePrivateRoomDsh|privateRoomDsh/);
   assert.doesNotMatch(panel, /send\(`?@ai/);

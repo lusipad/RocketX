@@ -6,6 +6,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   AppServerClient,
   type CodexTransport,
@@ -775,8 +777,12 @@ test('零登录本地模式工作区自动水合与设置页 Pi 配置闭环契�
 
   assert.match(history, /'local:workspace'/);
   assert.match(history, /const nativeRuntime = piRuntime/);
-  assert.match(settings, /Pi（内建通用引擎）/);
-  assert.match(settings, /保存配置并立即启用 Pi/);
+  assert.match(settings, /label: t\('settings\.ai\.runtimePiOptionLabel'\)/);
+  assert.equal(zhCN['settings.ai.runtimePiOptionLabel'], 'Pi（内建通用引擎）');
+  assert.ok(enUS['settings.ai.runtimePiOptionLabel'].length > 0);
+  assert.match(settings, /t\('settings\.ai\.saveAndEnablePi'\)/);
+  assert.equal(zhCN['settings.ai.saveAndEnablePi'], '保存配置并立即启用 Pi');
+  assert.ok(enUS['settings.ai.saveAndEnablePi'].length > 0);
   assert.match(settings, /writePiConfig/);
   assert.match(settings, /reconnectRuntime/);
   assert.match(conversation, /const isPi = aiRuntimeProvider === 'pi'/);

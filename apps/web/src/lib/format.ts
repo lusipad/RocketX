@@ -1,6 +1,20 @@
 import { useSyncExternalStore } from 'react';
+import { getLocale, t, type MessageKey } from '../i18n';
+import { formatDate } from '../i18n/format';
 
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const WEEKDAY_KEYS: readonly MessageKey[] = [
+  'nav.date.weekday.0',
+  'nav.date.weekday.1',
+  'nav.date.weekday.2',
+  'nav.date.weekday.3',
+  'nav.date.weekday.4',
+  'nav.date.weekday.5',
+  'nav.date.weekday.6',
+];
+
+function weekdayLabel(dayIndex: number): string {
+  return t(WEEKDAY_KEYS[dayIndex] ?? 'nav.date.weekday.0');
+}
 
 function startOfDay(ms: number): number {
   const d = new Date(ms);
@@ -60,21 +74,33 @@ export function fmtConvTime(ms: number): string {
   const today = startOfDay(Date.now());
   const day = startOfDay(ms);
   if (day === today) return fmtTime(ms);
-  if (day === today - DAY) return '昨天';
-  if (day > today - 7 * DAY) return WEEKDAYS[new Date(ms).getDay()];
+  if (day === today - DAY) return t('nav.date.yesterday');
+  if (day > today - 7 * DAY) return weekdayLabel(new Date(ms).getDay());
   const d = new Date(ms);
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  if (getLocale() === 'zh-CN') {
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  }
+  return formatDate(ms);
 }
 
 /** 消息区日期分割线：今天 / 昨天 / M月D日 周X */
 export function fmtDayDivider(ms: number): string {
   const today = startOfDay(Date.now());
   const day = startOfDay(ms);
-  if (day === today) return '今天';
-  if (day === today - DAY) return '昨天';
+  if (day === today) return t('nav.date.today');
+  if (day === today - DAY) return t('nav.date.yesterday');
   const d = new Date(ms);
-  const base = `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`;
-  return d.getFullYear() === new Date().getFullYear() ? base : `${d.getFullYear()}年${base}`;
+  if (getLocale() === 'zh-CN') {
+    const base = `${d.getMonth() + 1}月${d.getDate()}日 ${weekdayLabel(d.getDay())}`;
+    return d.getFullYear() === new Date().getFullYear() ? base : `${d.getFullYear()}年${base}`;
+  }
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return formatDate(
+    ms,
+    sameYear
+      ? { weekday: 'short', month: 'short', day: 'numeric' }
+      : { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' },
+  );
 }
 
 export function sameDay(a: number, b: number): boolean {
@@ -82,36 +108,38 @@ export function sameDay(a: number, b: number): boolean {
 }
 
 /** 系统消息文案（Rocket.Chat 消息的 t 字段） */
-const ROOM_ROLE_LABELS: Record<string, string> = {
-  owner: '群主',
-  moderator: '管理员',
-  leader: '负责人',
+const ROOM_ROLE_LABEL_KEYS: Record<string, MessageKey> = {
+  owner: 'nav.systemMsg.role.owner',
+  moderator: 'nav.systemMsg.role.moderator',
+  leader: 'nav.systemMsg.role.leader',
 };
 
 const SYSTEM_MESSAGES: Record<string, (user: string, msg: string, role?: string) => string> = {
-  uj: (u) => `${u} 加入了会话`,
-  ul: (u) => `${u} 退出了会话`,
-  ru: (u, m) => `${u} 将 ${m} 移出了会话`,
-  au: (u, m) => `${u} 邀请 ${m} 加入了会话`,
-  r: (u, m) => `${u} 将会话名称修改为 ${m}`,
-  'message_pinned': (u) => `${u} 置顶了一条消息`,
-  'room_changed_topic': (u, m) => `${u} 将话题修改为 ${m}`,
-  'room_changed_description': (u) => `${u} 修改了会话描述`,
-  'room_changed_announcement': (u) => `${u} 修改了群公告`,
+  uj: (u) => t('nav.systemMsg.uj', { user: u }),
+  ul: (u) => t('nav.systemMsg.ul', { user: u }),
+  ru: (u, m) => t('nav.systemMsg.ru', { user: u, target: m }),
+  au: (u, m) => t('nav.systemMsg.au', { user: u, target: m }),
+  r: (u, m) => t('nav.systemMsg.r', { user: u, name: m }),
+  'message_pinned': (u) => t('nav.systemMsg.messagePinned', { user: u }),
+  'room_changed_topic': (u, m) => t('nav.systemMsg.roomChangedTopic', { user: u, topic: m }),
+  'room_changed_description': (u) => t('nav.systemMsg.roomChangedDescription', { user: u }),
+  'room_changed_announcement': (u) => t('nav.systemMsg.roomChangedAnnouncement', { user: u }),
   'subscription-role-added': (_u, m, role) => {
-    const label = role ? ROOM_ROLE_LABELS[role] : undefined;
-    return label ? `${m} 被设置为${label}` : `${m} 的会话角色已更新`;
+    const roleKey = role ? ROOM_ROLE_LABEL_KEYS[role] : undefined;
+    return roleKey
+      ? t('nav.systemMsg.roleAdded', { target: m, role: t(roleKey) })
+      : t('nav.systemMsg.roleUpdated', { target: m });
   },
-  'ut': (u) => `${u} 加入了讨论`,
-  'wm': (u) => `${u}，欢迎加入`,
+  'ut': (u) => t('nav.systemMsg.ut', { user: u }),
+  'wm': (u) => t('nav.systemMsg.wm', { user: u }),
   // 正常情况下这条会被 DiscussionCard 拦下渲染成卡片，
   // 这里兜的是极少数没有 drid 的脏数据（讨论房间被删了）
-  'discussion-created': (u, m) => `${u} 发起了讨论「${m}」`,
+  'discussion-created': (u, m) => t('nav.systemMsg.discussionCreated', { user: u, title: m }),
 };
 
-export function systemMessageText(t: string, username: string, msg: string, role?: string): string {
-  const fn = SYSTEM_MESSAGES[t];
-  return fn ? fn(username, msg, role) : `${username} ${t} ${msg}`.trim();
+export function systemMessageText(type: string, username: string, msg: string, role?: string): string {
+  const fn = SYSTEM_MESSAGES[type];
+  return fn ? fn(username, msg, role) : `${username} ${type} ${msg}`.trim();
 }
 
 /** 字节数 → 人话（消息里的文件卡片和文件面板共用） */

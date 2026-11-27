@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { MessageKey } from '../i18n';
 import type { ButlerSource } from '../lib/butlerContext';
 import { getLocalDataSchema, readLocalData, writeLocalData } from '../lib/localDataContract';
 
@@ -280,22 +281,30 @@ export function eventsInRange(
   return map;
 }
 
-export const REPEAT_LABELS: Record<RepeatRule['type'], string> = {
-  daily: '每天',
-  weekly: '每周',
-  monthly: '每月',
-  yearly: '每年',
-  weekday: '工作日',
-  custom: '自定义',
+export const REPEAT_LABEL_KEYS: Record<RepeatRule['type'], MessageKey> = {
+  daily: 'pages.calendar.repeat.daily',
+  weekly: 'pages.calendar.repeat.weekly',
+  monthly: 'pages.calendar.repeat.monthly',
+  yearly: 'pages.calendar.repeat.yearly',
+  weekday: 'pages.calendar.repeat.weekday',
+  custom: 'pages.calendar.repeat.custom',
 };
 
 /** 星期名，索引 = Date.getDay() */
-export const DAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
+export const DAY_NAME_KEYS: readonly MessageKey[] = [
+  'pages.calendar.dayShort.0',
+  'pages.calendar.dayShort.1',
+  'pages.calendar.dayShort.2',
+  'pages.calendar.dayShort.3',
+  'pages.calendar.dayShort.4',
+  'pages.calendar.dayShort.5',
+  'pages.calendar.dayShort.6',
+];
 
 /** 表头用的星期名，按 WEEK_START 排列（周一起始 → 一 二 三 四 五 六 日） */
-export const WEEK_HEADERS = Array.from(
+export const WEEK_HEADER_KEYS: readonly MessageKey[] = Array.from(
   { length: 7 },
-  (_, i) => DAY_NAMES[(i + WEEK_START) % 7],
+  (_, i) => `pages.calendar.weekHeader.${(i + WEEK_START) % 7}` as MessageKey,
 );
 
 interface CalendarState {

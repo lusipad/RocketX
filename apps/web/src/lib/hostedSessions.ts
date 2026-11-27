@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { t, useLocale, type ResolvedLocale } from '../i18n';
 import {
   agentSessionCardLeaseIsActive,
   agentSessionCardSupersedesLocal,
@@ -7,12 +8,12 @@ import {
 import { agentBackend, type AgentSession, type AgentSessionStatus } from '../agent/session';
 
 export const HOSTED_SESSION_STATUS_LABEL: Record<AgentSessionStatus, string> = {
-  starting: '正在启动',
-  ready: '待命',
-  running: '正在工作',
-  'waiting-approval': '等待审批',
-  interrupted: '已中断',
-  ended: '已结束',
+  get starting() { return t('agent.hosted.status.starting'); },
+  get ready() { return t('agent.hosted.status.ready'); },
+  get running() { return t('agent.hosted.status.running'); },
+  get 'waiting-approval'() { return t('agent.hosted.status.waitingApproval'); },
+  get interrupted() { return t('agent.hosted.status.interrupted'); },
+  get ended() { return t('agent.hosted.status.ended'); },
 };
 
 export interface HostedSessionItem {
@@ -29,37 +30,37 @@ export interface HostedSessionItem {
   remote?: AgentSessionCard;
 }
 
-function projectName(session: AgentSession): string {
+function projectName(session: AgentSession, locale?: ResolvedLocale): string {
   if (session.environmentName?.trim()) return session.environmentName.trim();
   const root = session.workspaceRoots[0];
-  return root?.split(/[\\/]/).filter(Boolean).at(-1) || '未指定项目';
+  return root?.split(/[\\/]/).filter(Boolean).at(-1) || t('agent.hosted.noProject', undefined, locale);
 }
 
-function taskLabel(session: AgentSession): string {
+function taskLabel(session: AgentSession, locale?: ResolvedLocale): string {
   if (session.currentTaskLabel?.trim()) return session.currentTaskLabel.trim();
   if (session.workItem) return `#${session.workItem.id} ${session.workItem.title}`;
-  if (session.status === 'running' || session.status === 'waiting-approval') return '正在处理房间任务';
-  if (session.status === 'interrupted') return '等待恢复';
-  if (session.status === 'ended') return '托管已结束';
-  return '等待房间指令';
+  if (session.status === 'running' || session.status === 'waiting-approval') return t('agent.hosted.workingOnRoom', undefined, locale);
+  if (session.status === 'interrupted') return t('agent.hosted.waitingRecovery', undefined, locale);
+  if (session.status === 'ended') return t('agent.hosted.sessionEnded', undefined, locale);
+  return t('agent.hosted.waitingCommand', undefined, locale);
 }
 
-function localItem(session: AgentSession): HostedSessionItem {
+function localItem(session: AgentSession, locale?: ResolvedLocale): HostedSessionItem {
   return {
     key: session.tmid,
     rid: session.rid,
     roomNameSnapshot: session.roomNameSnapshot,
     backend: agentBackend(session),
     status: session.status,
-    project: projectName(session),
+    project: projectName(session, locale),
     projectPath: session.workspaceRoots[0],
-    task: taskLabel(session),
+    task: taskLabel(session, locale),
     updatedAt: session.updatedAt,
     local: session,
   };
 }
 
-function remoteItem(card: AgentSessionCard, now: number): HostedSessionItem {
+function remoteItem(card: AgentSessionCard, now: number, locale?: ResolvedLocale): HostedSessionItem {
   const status = card.status === 'ended'
     ? 'ended'
     : card.status === 'interrupted' || !agentSessionCardLeaseIsActive(card, now)
@@ -71,9 +72,9 @@ function remoteItem(card: AgentSessionCard, now: number): HostedSessionItem {
     roomNameSnapshot: card.roomNameSnapshot,
     backend: card.backend === 'deepseek' ? 'deepseek' : 'codex',
     status,
-    project: card.environmentName || '未指定项目',
+    project: card.environmentName || t('agent.hosted.noProject', undefined, locale),
     task: card.currentTaskLabel
-      || (card.workItem ? `#${card.workItem.id} ${card.workItem.title}` : status === 'interrupted' ? '等待宿主恢复' : '等待房间指令'),
+      || (card.workItem ? `#${card.workItem.id} ${card.workItem.title}` : status === 'interrupted' ? t('agent.hosted.waitingHostRecovery', undefined, locale) : t('agent.hosted.waitingCommand', undefined, locale)),
     updatedAt: card.leaseExpiresAt,
     remote: card,
   };
@@ -83,15 +84,16 @@ export function hostedSessionItems(
   sessions: Readonly<Record<string, AgentSession>>,
   remoteCards: Readonly<Record<string, AgentSessionCard>>,
   now = Date.now(),
+  locale?: ResolvedLocale,
 ): HostedSessionItem[] {
   const keys = new Set([...Object.keys(sessions), ...Object.keys(remoteCards)]);
   return [...keys]
     .map((key) => {
       const local = sessions[key];
       const remote = remoteCards[key];
-      if (agentSessionCardSupersedesLocal(local, remote, now)) return remoteItem(remote, now);
-      if (local) return localItem(local);
-      return remote ? remoteItem(remote, now) : null;
+      if (agentSessionCardSupersedesLocal(local, remote, now)) return remoteItem(remote, now, locale);
+      if (local) return localItem(local, locale);
+      return remote ? remoteItem(remote, now, locale) : null;
     })
     .filter((item): item is HostedSessionItem => !!item)
     .sort((left, right) => right.updatedAt - left.updatedAt);
@@ -101,6 +103,7 @@ export function useHostedSessionItems(
   sessions: Readonly<Record<string, AgentSession>>,
   remoteCards: Readonly<Record<string, AgentSessionCard>>,
 ): HostedSessionItem[] {
+  const locale = useLocale();
   const [leaseGeneration, setLeaseGeneration] = useState(0);
 
   useEffect(() => {
@@ -126,7 +129,7 @@ export function useHostedSessionItems(
   }, [leaseGeneration, remoteCards, sessions]);
 
   return useMemo(
-    () => hostedSessionItems(sessions, remoteCards),
-    [leaseGeneration, remoteCards, sessions],
+    () => hostedSessionItems(sessions, remoteCards, Date.now(), locale),
+    [leaseGeneration, locale, remoteCards, sessions],
   );
 }

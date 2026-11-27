@@ -38,9 +38,31 @@ import MessageList from './MessageList';
 import Composer from './Composer';
 import ContextMenu from './ContextMenu';
 import { useKernelContributions } from '../kernel/registry';
+import {
+  formatAiDiscussionHandoffDraft,
+  formatChatMessagesForButlerPrompt,
+  formatSharePayloadForChat,
+  hasAiParticipantDrag,
+  hasButlerShareDrag,
+  hasChatToButlerDrag,
+  readAiParticipantDrag,
+  readButlerShareDrag,
+  readChatToButlerDrag,
+  writeAiParticipantDrag,
+} from '../lib/butlerChatBridge';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
+import {
+  listSelectableProjectWorkspaces,
+  useRoomAiParticipants,
+} from '../stores/roomAiParticipants';
+import {
+  forceSynthesizeRoundtableNow,
+  skipCurrentRoundtableSeat,
+  useRoundtableLiveState,
+} from '../agent/roomAiParticipantRuntime';
 import { useUI } from '../stores/ui';
 import { agentSessionCardSupersedesLocal } from '../agent/card';
+import { useT } from '../i18n';
 
 function HeaderButton({
   icon: Icon,
@@ -77,6 +99,7 @@ export default function ChatArea({
   hasUnread: boolean;
   onNextUnread: () => void;
 }) {
+  const t = useT();
   const features = runtimeFeatures();
   const activeRid = useChat((s) => s.activeRid);
   const messageScrollTransaction = useChat((s) => s.messageScrollTransaction);
@@ -87,7 +110,7 @@ export default function ChatArea({
   const requestUpload = useChat((s) => s.requestUpload);
   const sub = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid] : undefined));
   const room = useChat((s) => (s.activeRid ? s.rooms[s.activeRid] : undefined));
-  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || '会话';
+  const rawName = sub?.fname || sub?.name || room?.fname || room?.name || t('chat.common.conversation');
   // 多人直聊也是「群」：它有成员数，也不该拿某个人的头像和在线状态顶上。
   const dmSize = room?.uids?.length ?? room?.usersCount;
   const isMultiDM = sub?.t === 'd' && (dmSize !== undefined ? dmSize > 2 : rawName.includes(','));
@@ -130,8 +153,15 @@ export default function ChatArea({
         .map(([name]) => name)
     : [];
   const [dragging, setDragging] = useState(false);
+  const [draggingShare, setDraggingShare] = useState(false);
+  const [draggingAi, setDraggingAi] = useState(false);
+  const [draggingLauncher, setDraggingLauncher] = useState(false);
   const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null);
   const [agentProjectMenu, setAgentProjectMenu] = useState<{ x: number; y: number } | null>(null);
+  const [roomAiMenu, setRoomAiMenu] = useState<{ x: number; y: number } | null>(null);
+  const roomAiParticipant = useRoomAiParticipants((s) => (activeRid ? s.participants[activeRid] : undefined));
+  const activeRoomAi = roomAiParticipant?.enabled ? roomAiParticipant : undefined;
+  const liveRoundtable = useRoundtableLiveState((s) => (activeRid ? s.runs[activeRid] : undefined));
   const butlerPanelOpen = rightPanel?.kind === 'butler';
   const ButlerPanel = registeredPanels.find((candidate) => candidate.id === 'butler')?.render;
   const ActivePanel = rightPanel && !butlerPanelOpen
@@ -154,15 +184,20 @@ export default function ChatArea({
     const chat = useChat.getState();
     const currentRoom = chat.rooms[activeRid];
     const currentSubscription = chat.subscriptions[activeRid];
-    const title = currentSubscription?.fname || currentSubscription?.name || currentRoom?.fname || currentRoom?.name || '会话';
+    const title = currentSubscription?.fname || currentSubscription?.name || currentRoom?.fname || currentRoom?.name || t('chat.common.conversation');
     void startRoomAgentHosting(activeRid, title, { preferredEnvironmentId: environmentId }).catch((error) => {
-      toast.error(error, '自动开启 AI 托管失败');
+      toast.error(error, t('chat.area.autoHostingFailed'));
     });
   }, [activeRid, features.sharedAgent]);
 
   useEffect(() => {
-    if (!dragging) return;
-    const clearDragging = () => setDragging(false);
+    if (!dragging && !draggingShare && !draggingAi && !draggingLauncher) return;
+    const clearDragging = () => {
+      setDragging(false);
+      setDraggingShare(false);
+      setDraggingAi(false);
+      setDraggingLauncher(false);
+    };
     window.addEventListener('blur', clearDragging);
     window.addEventListener('dragend', clearDragging);
     window.addEventListener('drop', clearDragging);
@@ -171,7 +206,7 @@ export default function ChatArea({
       window.removeEventListener('dragend', clearDragging);
       window.removeEventListener('drop', clearDragging);
     };
-  }, [dragging]);
+  }, [dragging, draggingAi, draggingLauncher, draggingShare]);
 
   useEffect(() => {
     if (wasButlerPanelOpen.current && !butlerPanelOpen) {
@@ -189,9 +224,9 @@ export default function ChatArea({
               <Bot size={32} />
             </div>
             <div>
-              <div className="text-base font-semibold text-ink">当前处于本地使用模式</div>
+              <div className="text-base font-semibold text-ink">{t('chat.area.localModeTitle')}</div>
               <p className="mt-1.5 max-w-md text-xs leading-5 text-ink-3">
-                尚未登录 Rocket.Chat 服务器；AI 管家、统一看板、隔离 Git Worktree 子代理、待办与日历均已就绪，数据保存在本机。
+                {t('chat.area.localModeDesc')}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
@@ -201,7 +236,7 @@ export default function ChatArea({
                   onClick={() => setModule('butler-view')}
                   className="h-9 rounded-xl bg-primary px-4 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
                 >
-                  打开 AI 管家
+                  {t('chat.area.openButler')}
                 </button>
               ) : null}
               <button
@@ -209,14 +244,14 @@ export default function ChatArea({
                 onClick={() => setModule('todos')}
                 className="h-9 rounded-xl border border-line bg-surface-3 px-4 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover hover:text-ink"
               >
-                打开统一看板 / 待办
+                {t('chat.area.openTodos')}
               </button>
               <button
                 type="button"
                 onClick={() => void exitLocalMode()}
                 className="h-9 rounded-xl border border-line bg-surface-3 px-4 text-xs font-medium text-primary shadow-raise transition hover:bg-primary-light"
               >
-                连接 Rocket.Chat
+                {t('chat.area.connectRc')}
               </button>
             </div>
           </div>
@@ -229,13 +264,13 @@ export default function ChatArea({
           <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-line bg-surface-4 shadow-raise">
             <MessageCircle size={30} className="text-primary" />
           </div>
-          <div className="text-sm font-medium text-ink-2">选择一个会话，开始高效沟通</div>
+          <div className="text-sm font-medium text-ink-2">{t('chat.area.emptySelect')}</div>
           <div className="flex items-center gap-1.5 text-xs text-ink-3">
-            <span>提示：</span>
+            <span>{t('chat.area.emptyTipPrefix')}</span>
             <kbd className="rounded-md border border-line bg-surface-4 px-1.5 py-0.5 font-sans text-2xs font-medium text-ink-2 shadow-raise">Ctrl</kbd>
             <span>+</span>
             <kbd className="rounded-md border border-line bg-surface-4 px-1.5 py-0.5 font-sans text-2xs font-medium text-ink-2 shadow-raise">K</kbd>
-            <span>快速切换会话</span>
+            <span>{t('chat.area.emptyTipSuffix')}</span>
           </div>
         </div>
       </main>
@@ -264,16 +299,16 @@ export default function ChatArea({
         }
       : undefined;
   const agentStatus = agentPresence?.status === 'running'
-    ? '正在工作'
+    ? t('chat.area.agent.running')
     : agentPresence?.status === 'waiting-approval'
-      ? '等待审批'
+      ? t('chat.area.agent.waitingApproval')
       : agentPresence?.status === 'starting'
-        ? '正在启动'
+        ? t('chat.area.agent.starting')
         : agentPresence?.status === 'interrupted'
-          ? '已中断'
+          ? t('chat.area.agent.interrupted')
           : agentPresence?.status === 'ready'
-            ? '待命'
-            : '正在提供服务';
+            ? t('chat.area.agent.ready')
+            : t('chat.area.agent.active');
   const agentBusy = ['running', 'starting', 'waiting-approval', 'active'].includes(agentPresence?.status ?? '');
 
   const togglePanel = (panel: Exclude<RightPanel, null>) => {
@@ -283,7 +318,45 @@ export default function ChatArea({
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
+    setDraggingShare(false);
+    setDraggingAi(false);
     if (!canCompose) return;
+    const aiDrag = readAiParticipantDrag(e.dataTransfer);
+    if (aiDrag) {
+      useRoomAiParticipants.getState().enrollFromDrag(activeRid, Boolean(prid), aiDrag);
+      if (e.shiftKey) {
+        useUI.getState().seedComposer(formatAiDiscussionHandoffDraft(aiDrag), 'append');
+        toast.success(
+          t('chat.aiParticipant.enrolledWithHandoffToast', {
+            agent: aiDrag.agentName,
+            room: name,
+          }),
+        );
+      } else {
+        toast.success(
+          t('chat.aiParticipant.enrolledToast', {
+            agent: aiDrag.agentName,
+            room: name,
+          }),
+        );
+      }
+      return;
+    }
+    const shared = readButlerShareDrag(e.dataTransfer);
+    if (shared) {
+      const markdown = formatSharePayloadForChat(shared);
+      if (e.shiftKey) {
+        void useChat
+          .getState()
+          .send(markdown, { rid: activeRid })
+          .then(() => toast.success(t('chat.butlerBridge.sentDirectlyToast')))
+          .catch((err) => toast.error(err, t('chat.butlerBridge.sendFailed')));
+      } else {
+        useUI.getState().seedComposer(markdown, 'append');
+        toast.info(t('chat.butlerBridge.draftInsertedToast'));
+      }
+      return;
+    }
     const files = Array.from(e.dataTransfer.files ?? []);
     if (files.length) requestUpload(files);
   };
@@ -293,7 +366,20 @@ export default function ChatArea({
       <main
         className="relative flex min-w-0 flex-1 flex-col bg-surface-3"
         onDragOver={(e) => {
-          if (canCompose && e.dataTransfer.types.includes('Files')) {
+          if (!canCompose) return;
+          if (hasAiParticipantDrag(e.dataTransfer)) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setDraggingAi(true);
+            return;
+          }
+          if (hasButlerShareDrag(e.dataTransfer)) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setDraggingShare(true);
+            return;
+          }
+          if (e.dataTransfer.types.includes('Files')) {
             e.preventDefault();
             setDragging(true);
           }
@@ -302,6 +388,8 @@ export default function ChatArea({
           const nextTarget = e.relatedTarget;
           if (!(nextTarget instanceof Node) || !e.currentTarget.contains(nextTarget)) {
             setDragging(false);
+            setDraggingShare(false);
+            setDraggingAi(false);
           }
         }}
         onDrop={onDrop}
@@ -311,7 +399,7 @@ export default function ChatArea({
           <button
             onClick={() => togglePanel({ kind: 'info' })}
             className="mr-2.5 shrink-0 rounded-lg transition hover:opacity-80"
-            title="查看群信息"
+            title={t('chat.area.viewRoomInfo')}
           >
             <Avatar
               name={name}
@@ -326,7 +414,7 @@ export default function ChatArea({
               <button
                 onClick={() => togglePanel({ kind: 'info' })}
                 className="min-w-0 truncate text-base font-semibold text-ink transition hover:text-primary"
-                title="查看群信息"
+                title={t('chat.area.viewRoomInfo')}
               >
                 {name}
               </button>
@@ -336,7 +424,7 @@ export default function ChatArea({
                   className={`flex items-center gap-0.5 rounded px-1 text-xs transition hover:bg-fill-hover ${
                     rightPanel?.kind === 'members' ? 'text-primary' : 'text-ink-3'
                   }`}
-                  title="查看群成员"
+                  title={t('chat.area.viewMembers')}
                 >
                   <Users size={14} />
                   {memberCount}
@@ -345,18 +433,18 @@ export default function ChatArea({
               {features.sharedAgent && !agentPresence ? (
                 <div className="flex h-7 shrink-0 overflow-hidden rounded-full border border-line bg-surface-4 text-xs font-medium text-ink-2 shadow-raise transition hover:border-primary/40">
                   <button
-                    aria-label="配置 AI 托管"
-                    title="选择项目并配置共享 AI 托管"
+                    aria-label={t('chat.area.configureAiHosting')}
+                    title={t('chat.area.configureAiHostingTooltip')}
                     onClick={() => setPanel({ kind: 'agent', tmid: agentSessionKey })}
                     className="flex items-center gap-1.5 px-2.5 transition hover:bg-primary-light hover:text-primary"
                   >
                     <Bot size={14} />
-                    AI 托管
+                    {t('chat.area.aiHosting')}
                   </button>
                   <button
                     type="button"
-                    aria-label="选择 AI 托管项目"
-                    title="选择项目或打开托管设置"
+                    aria-label={t('chat.area.selectAiProjectAria')}
+                    title={t('chat.area.selectAiProjectTooltip')}
                     onClick={(event) => {
                       const rect = event.currentTarget.getBoundingClientRect();
                       setAgentProjectMenu({ x: rect.right - 180, y: rect.bottom + 4 });
@@ -369,8 +457,12 @@ export default function ChatArea({
               ) : null}
               {features.sharedAgent && agentPresence ? (
                 <button
-                  aria-label="打开 AI 托管控制面"
-                  title={`打开共享 AI 托管 · ${agentStatus}${agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : ''} · 由 @${agentPresence.username} 托管`}
+                  aria-label={t('chat.area.openAiControlAria')}
+                  title={t('chat.area.openAiControlTooltip', {
+                    status: agentStatus,
+                    env: agentPresence.environmentName ? ` · ${agentPresence.environmentName}` : '',
+                    username: agentPresence.username,
+                  })}
                   onClick={() => setPanel({ kind: 'agent', tmid: agentSessionKey })}
                   className="flex h-7 max-w-[300px] shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-gradient-to-r from-primary-light to-surface-4 px-2.5 text-xs text-primary shadow-raise transition hover:border-primary/50 hover:from-primary-light/90 hover:to-primary-light/50"
                 >
@@ -379,7 +471,7 @@ export default function ChatArea({
                     <span className={`relative inline-flex h-2 w-2 rounded-full ${agentPresence.status === 'interrupted' ? 'bg-ink-3' : agentPresence.status === 'waiting-approval' ? 'bg-warning' : 'bg-primary'}`} />
                   </span>
                   <Bot size={14} className="shrink-0" />
-                  <span className="shrink-0 font-semibold">AI 托管</span>
+                  <span className="shrink-0 font-semibold">{t('chat.area.aiHosting')}</span>
                   <span className="h-3 w-px shrink-0 bg-primary/25" />
                   <span className="shrink-0 text-xs font-medium">{agentStatus}</span>
                   {agentPresence.environmentName ? (
@@ -389,19 +481,70 @@ export default function ChatArea({
                   ) : null}
                 </button>
               ) : null}
+              {activeRoomAi ? (
+                <button
+                  type="button"
+                  draggable
+                  onDragStart={(e) => {
+                    writeAiParticipantDrag(e.dataTransfer, {
+                      source: activeRoomAi.isDiscussion ? 'ai_discussion' : 'butler',
+                      mode: activeRoomAi.mode,
+                      seats: activeRoomAi.seats,
+                      agentKind: activeRoomAi.agentKind,
+                      agentId: activeRoomAi.agentId,
+                      agentName: activeRoomAi.agentName,
+                      discussionRid: activeRid,
+                      discussionName: name,
+                      threadId: activeRoomAi.threadId,
+                      acpSessionKey: activeRoomAi.acpSessionKey,
+                      workspaceRoot: activeRoomAi.workspaceRoot,
+                      decisionSummary: activeRoomAi.latestDecisionSummary,
+                    });
+                  }}
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    setRoomAiMenu({ x: rect.left, y: rect.bottom + 4 });
+                  }}
+                  title={t('chat.aiParticipant.dragHeaderTooltip', {
+                    agent: activeRoomAi.agentName,
+                    policy:
+                      activeRoomAi.replyPolicy === 'every_message'
+                        ? t('chat.aiParticipant.policyEveryMessage')
+                        : t('chat.aiParticipant.policyMentionOnly'),
+                  })}
+                  className="flex h-7 max-w-[280px] shrink-0 cursor-grab items-center gap-1.5 rounded-full border border-primary/30 bg-primary-light/80 px-2.5 text-xs font-medium text-primary shadow-raise transition hover:border-primary/50 hover:bg-primary-light active:cursor-grabbing"
+                >
+                  <Bot size={13} className="shrink-0" />
+                  <span className="truncate">
+                    {activeRoomAi.mode === 'roundtable'
+                      ? t('chat.aiParticipant.roundtableBadgeSummary', {
+                          agent: activeRoomAi.agentName,
+                          count: activeRoomAi.seats?.filter((s) => s.enabled).length ?? 4,
+                        })
+                      : activeRoomAi.agentName}
+                  </span>
+                  <span className="rounded-full bg-surface-4 px-1.5 py-0.5 text-2xs font-medium text-ink-2">
+                    {activeRoomAi.replyPolicy === 'every_message'
+                      ? t('chat.aiParticipant.policyEveryMessage')
+                      : t('chat.aiParticipant.policyMentionOnly')}
+                  </span>
+                </button>
+              ) : null}
             </div>
             {typers.length > 0 ? (
               <div className="truncate text-xs text-primary">
-                {typers.slice(0, 3).join('、')} 正在输入…
+                {t('chat.area.typing', { names: typers.slice(0, 3).join(t('chat.common.listSep')) })}
               </div>
             ) : prid ? (
               <button
                 onClick={() => void openRoom(prid)}
                 className="flex items-center gap-1 truncate text-xs text-ink-3 hover:text-primary"
-                title="回到主会话"
+                title={t('chat.area.backToParent')}
               >
-                <span className="rounded bg-primary-light px-1 text-xs text-primary">讨论</span>
-                来自 {parentRoom?.fname || parentRoom?.name || '主会话'}
+                <span className="rounded bg-primary-light px-1 text-xs text-primary">{t('chat.discussion.badge')}</span>
+                {t('chat.area.fromParent', {
+                  name: parentRoom?.fname || parentRoom?.name || t('chat.area.parentFallback'),
+                })}
               </button>
             ) : (
               room?.topic && <div className="truncate text-xs text-ink-3">{room.topic}</div>
@@ -411,31 +554,31 @@ export default function ChatArea({
             {hasUnread ? (
               <HeaderButton
                 icon={ListRestart}
-                label="下一条未读 (Ctrl+Shift+↓)"
+                label={t('chat.area.nextUnread')}
                 onClick={onNextUnread}
               />
             ) : null}
             <HeaderButton
               icon={Pin}
-              label="置顶消息"
+              label={t('chat.area.pinnedMessages')}
               active={rightPanel?.kind === 'pins'}
               onClick={() => togglePanel({ kind: 'pins' })}
             />
             <HeaderButton
               icon={Search}
-              label="搜索聊天记录"
+              label={t('chat.area.searchMessages')}
               active={rightPanel?.kind === 'search'}
               onClick={() => togglePanel({ kind: 'search' })}
             />
             <HeaderButton
               icon={SquareKanban}
-              label="消息看板"
+              label={t('chat.kanban.boardTitle')}
               active={rightPanel?.kind === 'kanban'}
               onClick={() => togglePanel({ kind: 'kanban' })}
             />
             <HeaderButton
               icon={MoreHorizontal}
-              label="更多"
+              label={t('chat.area.more')}
               active={rightPanel?.kind === 'starred'}
               onClick={() => {
                 setMoreMenu(null);
@@ -452,27 +595,27 @@ export default function ChatArea({
             y={moreMenu.y}
             items={[
               {
-                label: sub?.t === 'd' && !isMultiDM ? '联系人信息' : '群信息',
+                label: sub?.t === 'd' && !isMultiDM ? t('chat.area.contactInfo') : t('chat.area.roomInfo'),
                 icon: Info,
                 onClick: () => togglePanel({ kind: 'info' }),
               },
               {
-                label: '群成员',
+                label: t('chat.area.members'),
                 icon: Users,
                 onClick: () => togglePanel({ kind: 'members' }),
               },
               {
-                label: '标记消息',
+                label: t('chat.area.starredMessages'),
                 icon: Star,
                 onClick: () => togglePanel({ kind: 'starred' }),
               },
               {
-                label: '文件',
+                label: t('chat.area.files'),
                 icon: Files,
                 onClick: () => togglePanel({ kind: 'files' }),
               },
               {
-                label: '提及我的',
+                label: t('chat.area.mentions'),
                 icon: AtSign,
                 onClick: () => togglePanel({ kind: 'mentions' }),
               },
@@ -486,7 +629,7 @@ export default function ChatArea({
             y={agentProjectMenu.y}
             items={[
               ...agentWorkspaces.map((path) => ({
-                label: `${path.name}${path.path === boundAgentWorkspace ? '（此群）' : path.path === preferredAgentWorkspace ? '（默认）' : ''} · ${path.path}`,
+                label: `${path.name}${path.path === boundAgentWorkspace ? t('chat.area.boundRoomSuffix') : path.path === preferredAgentWorkspace ? t('chat.area.defaultEnvSuffix') : ''} · ${path.path}`,
                 icon: FolderOpen,
                 onClick: () => {
                   setRoomHostingWorkspace(activeRid, path.path);
@@ -494,12 +637,72 @@ export default function ChatArea({
                 },
               })),
               {
-                label: '在 AI 管家中管理项目…',
+                label: t('chat.area.manageProjectsInButler'),
                 icon: Bot,
                 onClick: openButlerConversation,
               },
             ]}
             onClose={() => setAgentProjectMenu(null)}
+          />
+        )}
+        {roomAiMenu && activeRoomAi && (
+          <ContextMenu
+            x={roomAiMenu.x}
+            y={roomAiMenu.y}
+            items={[
+              ...(activeRoomAi.mode !== 'roundtable'
+                ? [
+                    {
+                      label: t('chat.aiParticipant.upgradeRoundtableMenu'),
+                      icon: Bot,
+                      onClick: () => {
+                        useRoomAiParticipants.getState().upgradeToRoundtable(activeRid);
+                        toast.success(t('chat.aiParticipant.upgradedRoundtableToast'));
+                      },
+                    },
+                  ]
+                : (activeRoomAi.seats ?? []).map((seat) => ({
+                    label: `${seat.enabled ? '✓ ' : '○ '}${seat.roleTitle}`,
+                    icon: Users,
+                    onClick: () => {
+                      useRoomAiParticipants.getState().toggleSeat(activeRid, seat.seatId);
+                    },
+                  }))),
+              ...listSelectableProjectWorkspaces().slice(0, 4).map((ws) => ({
+                label: `${ws.path === activeRoomAi.workspaceRoot ? '✓ ' : ''}${ws.label} · ${ws.path}`,
+                icon: FolderOpen,
+                onClick: () => {
+                  useRoomAiParticipants.getState().updateParticipant(activeRid, { workspaceRoot: ws.path });
+                },
+              })),
+              {
+                label:
+                  activeRoomAi.replyPolicy === 'every_message'
+                    ? t('chat.aiParticipant.switchToMentionOnly')
+                    : t('chat.aiParticipant.switchToEveryMessage'),
+                icon: AtSign,
+                onClick: () => {
+                  const nextPolicy =
+                    activeRoomAi.replyPolicy === 'every_message'
+                      ? 'mention_only'
+                      : 'every_message';
+                  useRoomAiParticipants
+                    .getState()
+                    .updateParticipant(activeRid, { replyPolicy: nextPolicy });
+                },
+              },
+              {
+                label: t('chat.aiParticipant.removeFromRoom'),
+                icon: Bot,
+                onClick: () => {
+                  useRoomAiParticipants.getState().removeParticipant(activeRid);
+                  toast.info(
+                    t('chat.aiParticipant.removedToast', { agent: activeRoomAi.agentName }),
+                  );
+                },
+              },
+            ]}
+            onClose={() => setRoomAiMenu(null)}
           />
         )}
         <div className="relative flex min-h-0 flex-1 flex-col">
@@ -516,10 +719,29 @@ export default function ChatArea({
               type="button"
               aria-controls="room-butler-panel"
               aria-expanded="false"
-              aria-label="打开房间 AI"
-              title="打开房间 AI"
+              aria-label={t('chat.area.openRoomButler')}
+              title={t('chat.area.openRoomButler')}
               onClick={() => togglePanel({ kind: 'butler' })}
-              className="group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none"
+              onDragOver={(e) => {
+                if (!hasChatToButlerDrag(e.dataTransfer)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'copy';
+                setDraggingLauncher(true);
+              }}
+              onDragLeave={() => setDraggingLauncher(false)}
+              onDrop={(e) => {
+                const payload = readChatToButlerDrag(e.dataTransfer);
+                setDraggingLauncher(false);
+                if (!payload) return;
+                e.preventDefault();
+                e.stopPropagation();
+                setPanel({ kind: 'butler' });
+                useUI.getState().seedRoomButler(activeRid, formatChatMessagesForButlerPrompt(payload));
+              }}
+              className={`group absolute right-4 bottom-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-[var(--shadow-pop)] transition duration-150 hover:scale-105 hover:bg-primary-hover active:scale-95 motion-reduce:transition-none ${
+                draggingLauncher ? 'scale-110 ring-4 ring-primary/40' : ''
+              }`}
             >
               <Bot
                 size={21}
@@ -533,24 +755,67 @@ export default function ChatArea({
         {requiresJoin && (
           <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-primary-light/40 px-4 py-2.5">
             <span className="min-w-0 truncate text-sm text-ink-2">
-              你还不是{prid ? '这个讨论' : '这个频道'}的成员，加入后才会收到新消息提醒
+              {prid ? t('chat.area.joinDiscussionPrompt') : t('chat.area.joinChannelPrompt')}
             </span>
             <button
               onClick={() => void joinRoom(activeRid)}
               className="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
             >
-              加入{prid ? '讨论' : '频道'}
+              {prid ? t('chat.area.joinDiscussionBtn') : t('chat.area.joinChannelBtn')}
             </button>
+          </div>
+        )}
+        {liveRoundtable && (
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-primary/20 bg-primary-light/40 px-4 py-1.5 text-xs">
+            <div className="flex min-w-0 items-center gap-2 text-ink">
+              <Bot size={13} className="shrink-0 animate-pulse text-primary" />
+              <span className="truncate font-medium text-primary">
+                {liveRoundtable.currentSeatTitle}
+              </span>
+              <span className="truncate text-ink-2">
+                {liveRoundtable.activityHint} ({liveRoundtable.stepIndex}/{liveRoundtable.totalSteps})
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => skipCurrentRoundtableSeat(activeRid)}
+                className="rounded border border-line bg-surface-4 px-2 py-0.5 text-xs text-ink-2 transition hover:border-primary/40 hover:text-primary"
+              >
+                {t('chat.aiParticipant.stageSkipBtn')}
+              </button>
+              <button
+                type="button"
+                onClick={() => forceSynthesizeRoundtableNow(activeRid)}
+                className="rounded border border-primary/30 bg-primary-light px-2 py-0.5 text-xs font-medium text-primary transition hover:bg-primary/20"
+              >
+                {t('chat.aiParticipant.stageSynthesizeBtn')}
+              </button>
+            </div>
           </div>
         )}
         {canCompose && <Composer />}
 
-        {dragging && (
+        {draggingAi ? (
+          <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-primary-light/70 backdrop-blur-[1px]">
+            <Bot size={32} className="text-primary" />
+            <span className="text-sm font-medium text-primary">
+              {t('chat.aiParticipant.dropOverlayTitle', { room: name })}
+            </span>
+            <span className="text-xs text-ink-2">{t('chat.aiParticipant.dropOverlayHint')}</span>
+          </div>
+        ) : draggingShare ? (
+          <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-primary-light/70 backdrop-blur-[1px]">
+            <Bot size={32} className="text-primary" />
+            <span className="text-sm font-medium text-primary">{t('chat.butlerBridge.dropOverlayTitle')}</span>
+            <span className="text-xs text-ink-2">{t('chat.butlerBridge.dropOverlayHint')}</span>
+          </div>
+        ) : dragging ? (
           <div className="pointer-events-none absolute inset-2 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-primary-light/60">
             <Upload size={32} className="text-primary" />
-            <span className="text-sm font-medium text-primary">松开即可发送文件</span>
+            <span className="text-sm font-medium text-primary">{t('chat.area.dropFilesHint')}</span>
           </div>
-        )}
+        ) : null}
       </main>
 
       {ActivePanel && <ActivePanel />}

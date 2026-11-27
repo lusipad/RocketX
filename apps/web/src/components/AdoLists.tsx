@@ -14,12 +14,14 @@ import {
   XCircle,
   CalendarPlus,
 } from 'lucide-react';
+import { useI18n, useT, type MessageKey, type TranslateFn } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 import {
   isApproved,
   myPrsOf,
   reviewPrsOf,
   stateBadgeClass,
-  VOTE_LABELS,
+  VOTE_LABEL_KEYS,
   voteColor,
   type Build,
   type PullRequest,
@@ -82,6 +84,7 @@ function ListHeader({
   total: number;
   right?: React.ReactNode;
 }) {
+  const { t, tp } = useI18n();
   return (
     <div className="flex items-center justify-between pb-3">
       <div className="flex h-9 w-80 items-center gap-2 rounded-md bg-fill-1 px-3">
@@ -96,7 +99,9 @@ function ListHeader({
       <div className="flex items-center gap-3">
         {right}
         <span className="text-xs text-ink-3">
-          {keyword ? `匹配 ${count} / ${total}` : `共 ${total} 项`}
+          {keyword
+            ? t('workbench.list.matchedCount', { count, total })
+            : tp(total, 'workbench.list.totalCountOne', 'workbench.list.totalCountOther', { count: total })}
         </span>
       </div>
     </div>
@@ -105,6 +110,7 @@ function ListHeader({
 
 /** 我的工作项：完整列表（类型、状态、优先级、负责人、更新时间都显示出来） */
 export function WorkItemList({ items }: { items: WorkItem[] }) {
+  const { t, locale } = useI18n();
   const pinyinReady = usePinyinReady();
   const features = runtimeFeatures();
   const [keyword, setKeyword] = useState('');
@@ -114,7 +120,10 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
   const state = useUI((s) => s.workItemStateFilter);
   const setState = useUI((s) => s.setWorkItemStateFilter);
 
-  const states = useMemo(() => Array.from(new Set(items.map((w) => w.state))).sort(), [items]);
+  const states = useMemo(
+    () => Array.from(new Set(items.map((w) => w.state))).sort((a, b) => compareLocaleText(a, b, locale)),
+    [items, locale],
+  );
   const stateOptions = useMemo(
     () => [
       DEFAULT_WORK_ITEM_STATE_FILTER,
@@ -162,7 +171,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
       <ListHeader
         keyword={keyword}
         onKeyword={setKeyword}
-        placeholder="搜索标题或 #编号"
+        placeholder={t('workbench.workItemList.searchPlaceholder')}
         count={matched.length}
         total={items.length}
         right={
@@ -174,7 +183,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
             >
               {stateOptions.map((s) => (
                 <option key={s} value={s}>
-                  {stateFilterLabel(s)}
+                  {stateFilterLabel(s, t)}
                 </option>
               ))}
             </select>
@@ -203,8 +212,10 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                     type="button"
                     onClick={() => toggleCollapsed(w.id)}
                     className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-3 hover:text-ink"
-                    title={isCollapsed ? '展开子项' : '折叠子项'}
-                    aria-label={isCollapsed ? `展开工作项 #${w.id}` : `折叠工作项 #${w.id}`}
+                    title={isCollapsed ? t('workbench.tree.expandChildren') : t('workbench.tree.collapseChildren')}
+                    aria-label={isCollapsed
+                      ? t('workbench.tree.expandWorkItemAria', { id: w.id })
+                      : t('workbench.tree.collapseWorkItemAria', { id: w.id })}
                   >
                     {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   </button>
@@ -235,7 +246,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                   </span>
                 )}
                 <span className="w-24 shrink-0 truncate text-xs text-ink-3" title={w.assignedTo}>
-                  {w.assignedTo ?? '未分配'}
+                  {w.assignedTo ?? t('workbench.common.unassigned')}
                 </span>
                 <span className="w-20 shrink-0 truncate text-right text-xs text-ink-3">
                   {w.project}
@@ -249,8 +260,8 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
                 <button
                   type="button"
                   onClick={() => setDiscussionItem(w)}
-                  title={`为工作项 #${w.id} 创建讨论`}
-                  aria-label={`为工作项 #${w.id} 创建讨论`}
+                  title={t('workbench.workItemList.createDiscussionAria', { id: w.id })}
+                  aria-label={t('workbench.workItemList.createDiscussionAria', { id: w.id })}
                   className="flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
                 >
                   <MessageSquarePlus size={14} />
@@ -259,8 +270,8 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
               <button
                 type="button"
                 onClick={() => setCalendarItem(w)}
-                title={`把工作项 #${w.id} 排进日历`}
-                aria-label={`把工作项 #${w.id} 排进日历`}
+                title={t('workbench.workItemList.scheduleInCalendarAria', { id: w.id })}
+                aria-label={t('workbench.workItemList.scheduleInCalendarAria', { id: w.id })}
                 className="mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-3 opacity-60 transition hover:bg-primary-light hover:text-primary md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
               >
                 <CalendarPlus size={14} />
@@ -269,7 +280,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
           );
         })}
         {matched.length === 0 && (
-          <EmptyRow text={items.length ? '没有匹配的工作项' : '当前没有分配给你的未关闭工作项'} />
+          <EmptyRow text={items.length ? t('workbench.workItemList.noMatch') : t('workbench.workItemList.empty')} />
         )}
       </div>
       {features.sharedAgent && discussionItem ? (
@@ -282,7 +293,7 @@ export function WorkItemList({ items }: { items: WorkItem[] }) {
           origin={{
             kind: 'work-item',
             id: String(calendarItem.id),
-            label: `工作项 #${calendarItem.id}`,
+            label: t('workbench.workItemList.calendarOriginLabel', { id: calendarItem.id }),
             ...(calendarItem.project ? { project: calendarItem.project } : {}),
             ...(calendarItem.webUrl ? { webUrl: calendarItem.webUrl } : {}),
           }}
@@ -299,9 +310,9 @@ function workItemMatchesFilter(state: string, filter: string): boolean {
   return state === filter;
 }
 
-function stateFilterLabel(filter: string): string {
-  if (filter === DEFAULT_WORK_ITEM_STATE_FILTER) return '默认（隐藏搁置）';
-  if (filter === '全部') return '全部状态';
+function stateFilterLabel(filter: string, t: TranslateFn): string {
+  if (filter === DEFAULT_WORK_ITEM_STATE_FILTER) return t('workbench.workItemList.filterDefault');
+  if (filter === '全部') return t('workbench.workItemList.filterAll');
   return filter;
 }
 
@@ -323,6 +334,7 @@ function PrRow({
   onSchedule: (pr: PullRequest) => void;
   comparing: boolean;
 }) {
+  const t = useT();
   const approved = isApproved(pr);
   const features = runtimeFeatures();
   return (
@@ -333,8 +345,8 @@ function PrRow({
         href={pr.webUrl}
         target="_blank"
         rel="noreferrer"
-        title={`在 Azure DevOps 中打开 PR !${pr.id}`}
-        aria-label={`在 Azure DevOps 中打开 PR !${pr.id}`}
+        title={t('workbench.pr.openInAdoAria', { id: pr.id })}
+        aria-label={t('workbench.pr.openInAdoAria', { id: pr.id })}
         className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left"
       >
         <GitPullRequest
@@ -356,13 +368,18 @@ function PrRow({
             <span
               key={r.unique || r.name}
               className={`text-xs ${voteColor(r.vote)}`}
-              title={`${r.name}：${VOTE_LABELS[r.vote] ?? '未知'}`}
+              title={t('workbench.pr.reviewerVoteTitle', {
+                name: r.name,
+                vote: t(VOTE_LABEL_KEYS[r.vote] ?? 'workbench.vote.unknown'),
+              })}
             >
               {r.name.slice(0, 4)}
               {r.vote >= 5 ? ' ✓' : r.vote <= -5 ? ' ✕' : ' ·'}
             </span>
           ))}
-          {pr.reviewers.length === 0 && <span className="text-xs text-ink-3">无评审人</span>}
+          {pr.reviewers.length === 0 && (
+            <span className="text-xs text-ink-3">{t('workbench.pr.noReviewers')}</span>
+          )}
         </span>
 
         <span className="w-16 shrink-0 text-right text-xs text-ink-3">
@@ -378,18 +395,18 @@ function PrRow({
         type="button"
         onClick={() => onAsk(pr)}
         disabled={!features.butler}
-        title={features.butler ? '用 AI 管家审查这个 PR' : '当前未启用 AI 管家'}
-        aria-label={`用 AI 管家审查 PR !${pr.id}：${pr.title}`}
+        title={features.butler ? t('workbench.pr.aiReviewTitle') : t('workbench.pr.aiReviewDisabledTitle')}
+        aria-label={t('workbench.pr.aiReviewAria', { id: pr.id, title: pr.title })}
         className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary disabled:cursor-not-allowed disabled:opacity-50"
       >
         <Bot size={13} aria-hidden="true" />
-        AI 审查
+        {t('workbench.pr.aiReviewButton')}
       </button>
       <button
         type="button"
         onClick={() => onCompare(pr)}
-        title={comparing ? '取消选择' : '选它交给 AI 管家比较'}
-        aria-label={comparing ? '取消选择' : '选它交给 AI 管家比较'}
+        title={comparing ? t('workbench.pr.deselectCompare') : t('workbench.pr.selectCompare')}
+        aria-label={comparing ? t('workbench.pr.deselectCompare') : t('workbench.pr.selectCompare')}
         aria-pressed={comparing}
         className={`shrink-0 rounded-md p-1.5 hover:bg-fill-hover hover:text-ink focus:opacity-100 ${
           comparing
@@ -402,8 +419,8 @@ function PrRow({
       <button
         type="button"
         onClick={() => onSchedule(pr)}
-        title={`把 PR #${pr.id} 排进日历`}
-        aria-label={`把 PR #${pr.id} 排进日历`}
+        title={t('workbench.pr.scheduleInCalendarAria', { id: pr.id })}
+        aria-label={t('workbench.pr.scheduleInCalendarAria', { id: pr.id })}
         className="mr-3 shrink-0 rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink focus:opacity-100 md:opacity-0 md:group-hover:opacity-100"
       >
         <CalendarPlus size={14} />
@@ -414,6 +431,7 @@ function PrRow({
 
 /** 拉取请求：待我评审 / 我提的（后者以前拉了数据却根本没渲染） */
 export function PullRequestList({ prs, account }: { prs: PullRequest[]; account: string }) {
+  const { t, tp } = useI18n();
   const pinyinReady = usePinyinReady();
   const [keyword, setKeyword] = useState('');
   // 子 tab 提到全局 store：切到别的页面再回来不重置（issue #7/#17 同一诉求）
@@ -432,7 +450,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
   const askButler = (pr: PullRequest): void => {
     askButlerAboutPullRequests(
       [pr],
-      `看看这个 PR：改动重点、风险、我该先看哪里。PR 编号 ${pr.id}。`,
+      t('workbench.pr.aiReviewPrompt', { id: pr.id }),
     );
   };
 
@@ -465,26 +483,28 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
     );
   }, [source, keyword, pinyinReady]);
 
+  const approvedMineCount = useMemo(() => mine.filter(isApproved).length, [mine]);
+
   return (
     <>
       <div className="flex items-center gap-1 pb-3">
         {(
           [
-            { key: 'review' as const, label: '待我评审', n: review.length },
-            { key: 'mine' as const, label: '我提的', n: mine.length },
+            { key: 'review' as const, labelKey: 'workbench.pr.tab.review' as const, n: review.length },
+            { key: 'mine' as const, labelKey: 'workbench.pr.tab.mine' as const, n: mine.length },
           ]
-        ).map((t) => (
+        ).map((item) => (
           <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
+            key={item.key}
+            onClick={() => setTab(item.key)}
             className={`flex h-8 items-center gap-1.5 rounded-md px-3 text-sm transition ${
-              tab === t.key
+              tab === item.key
                 ? 'bg-primary-light font-medium text-primary'
                 : 'text-ink-2 hover:bg-fill-hover'
             }`}
           >
-            {t.label}
-            <span className="text-xs text-ink-3">{t.n}</span>
+            {t(item.labelKey)}
+            <span className="text-xs text-ink-3">{item.n}</span>
           </button>
         ))}
       </div>
@@ -492,15 +512,16 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
       {comparing.length === 1 && (
         <div className="mb-2 flex items-center justify-between rounded-md border border-primary/30 bg-primary-light/20 px-3 py-1.5 text-xs text-ink-2">
           <span>
-            已选 <span className="font-medium text-ink">!{comparing[0].id}</span> {comparing[0].title}
-            <span className="ml-2 text-ink-3">再选一个就交给 Codex 比较</span>
+            {t('workbench.pr.selectedLabel')}{' '}
+            <span className="font-medium text-ink">!{comparing[0].id}</span> {comparing[0].title}
+            <span className="ml-2 text-ink-3">{t('workbench.pr.selectSecondHint')}</span>
           </span>
           <button
             type="button"
             onClick={() => setComparing([])}
             className="shrink-0 px-1.5 py-0.5 text-ink-3 hover:text-ink"
           >
-            取消
+            {t('common.cancel')}
           </button>
         </div>
       )}
@@ -508,14 +529,16 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
       <ListHeader
         keyword={keyword}
         onKeyword={setKeyword}
-        placeholder="搜索标题、仓库或 !编号"
+        placeholder={t('workbench.pr.searchPlaceholder')}
         count={filtered.length}
         total={source.length}
         right={
-          tab === 'mine' && mine.some(isApproved) ? (
+          tab === 'mine' && approvedMineCount > 0 ? (
             <span className="flex items-center gap-1 text-xs text-success">
               <CheckCircle2 size={14} />
-              {mine.filter(isApproved).length} 个已通过评审
+              {tp(approvedMineCount, 'workbench.pr.approvedCountOne', 'workbench.pr.approvedCountOther', {
+                count: approvedMineCount,
+              })}
             </span>
           ) : undefined
         }
@@ -536,10 +559,10 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
           <EmptyRow
             text={
               source.length
-                ? '没有匹配的 PR'
+                ? t('workbench.pr.noMatch')
                 : tab === 'review'
-                  ? '没有等你评审的 PR'
-                  : '你没有进行中的 PR'
+                  ? t('workbench.pr.emptyReview')
+                  : t('workbench.pr.emptyMine')
             }
           />
         )}
@@ -551,7 +574,7 @@ export function PullRequestList({ prs, account }: { prs: PullRequest[]; account:
           origin={{
             kind: 'pull-request',
             id: String(calendarPr.id),
-            label: `PR #${calendarPr.id}`,
+            label: t('workbench.pr.calendarOriginLabel', { id: calendarPr.id }),
             ...(calendarPr.webUrl ? { webUrl: calendarPr.webUrl } : {}),
           }}
           onClose={() => setCalendarPr(null)}
@@ -572,11 +595,11 @@ export function BuildStatusIcon({ build, size = 15 }: { build: Build; size?: num
   return <MinusCircle size={size} className="shrink-0 text-ink-3" />;
 }
 
-const BUILD_RESULT_LABELS: Record<string, string> = {
-  succeeded: '成功',
-  failed: '失败',
-  partiallySucceeded: '部分成功',
-  canceled: '已取消',
+const BUILD_RESULT_LABEL_KEYS: Record<string, MessageKey> = {
+  succeeded: 'workbench.build.result.succeeded',
+  failed: 'workbench.build.result.failed',
+  partiallySucceeded: 'workbench.build.result.partiallySucceeded',
+  canceled: 'workbench.build.result.canceled',
 };
 
 export function matchesBuildKeyword(build: Build, keyword: string): boolean {
@@ -590,6 +613,7 @@ export function matchesBuildKeyword(build: Build, keyword: string): boolean {
 
 /** 构建：完整列表（构建号、项目、触发人、结果都显示） */
 export function BuildList({ builds }: { builds: Build[] }) {
+  const t = useT();
   const pinyinReady = usePinyinReady();
   const [keyword, setKeyword] = useState('');
   const failedOnly = useUI((s) => s.buildsFailedOnly);
@@ -608,7 +632,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
       <ListHeader
         keyword={keyword}
         onKeyword={setKeyword}
-        placeholder="搜索流水线、构建号、项目或 PR 编号"
+        placeholder={t('workbench.build.searchPlaceholder')}
         count={filtered.length}
         total={builds.length}
         right={
@@ -622,7 +646,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
               }`}
             >
               <XCircle size={14} />
-              只看失败（{failedCount}）
+              {t('workbench.build.failedOnly', { count: failedCount })}
             </button>
           ) : undefined
         }
@@ -631,10 +655,10 @@ export function BuildList({ builds }: { builds: Build[] }) {
       <div className="flex-1 overflow-y-auto rounded-2xl border border-line bg-surface-4 shadow-card">
         {filtered.length > 0 && (
           <div className="flex items-center gap-3 border-b border-line bg-surface-2/50 px-4 py-2.5 text-xs font-medium text-ink-3">
-            <span className="min-w-0 flex-1 pl-5">构建</span>
-            <span className="w-24 shrink-0">关联 PR</span>
-            <span className="w-16 shrink-0 text-right">状态</span>
-            <span className="w-16 shrink-0 text-right">时间</span>
+            <span className="min-w-0 flex-1 pl-5">{t('workbench.build.col.build')}</span>
+            <span className="w-24 shrink-0">{t('workbench.build.col.linkedPr')}</span>
+            <span className="w-16 shrink-0 text-right">{t('workbench.build.col.status')}</span>
+            <span className="w-16 shrink-0 text-right">{t('workbench.build.col.time')}</span>
             <span className="w-[14px] shrink-0" aria-hidden="true" />
           </div>
         )}
@@ -654,7 +678,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
                 <span className="block truncate text-sm text-ink">{b.definition}</span>
                 <span className="mt-0.5 block truncate text-xs text-ink-3">
                   {b.buildNumber} · {b.project}
-                  {b.requestedFor ? ` · ${b.requestedFor} 触发` : ''}
+                  {b.requestedFor ? t('workbench.build.triggeredBySuffix', { user: b.requestedFor }) : ''}
                 </span>
               </span>
             </a>
@@ -684,8 +708,10 @@ export function BuildList({ builds }: { builds: Build[] }) {
               }`}
             >
               {b.status === 'inProgress' || b.status === 'notStarted'
-                ? '进行中'
-                : (BUILD_RESULT_LABELS[b.result] ?? b.result)}
+                ? t('workbench.build.inProgress')
+                : BUILD_RESULT_LABEL_KEYS[b.result]
+                  ? t(BUILD_RESULT_LABEL_KEYS[b.result])
+                  : b.result}
             </span>
             <span className="w-16 shrink-0 text-right text-xs text-ink-3">
               {relTime(b.finishTime || b.queueTime)}
@@ -696,7 +722,7 @@ export function BuildList({ builds }: { builds: Build[] }) {
           </div>
         ))}
         {filtered.length === 0 && (
-          <EmptyRow text={builds.length ? '没有匹配的构建' : '你最近没有发起过构建'} />
+          <EmptyRow text={builds.length ? t('workbench.build.noMatch') : t('workbench.build.empty')} />
         )}
       </div>
     </>

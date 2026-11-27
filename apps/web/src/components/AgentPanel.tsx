@@ -25,6 +25,8 @@ import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
 import PanelShell from './PanelShell';
 import ButlerErrandInputCard from './ButlerErrandInputCard';
+import { t as rawT, useI18n } from '../i18n';
+import { formatTime } from '../i18n/format';
 
 function approvalSummary(method: string, params: unknown): string {
   const value = typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
@@ -35,7 +37,7 @@ function approvalSummary(method: string, params: unknown): string {
   }
   const permissionLines = permissionRequestSummary(value.permissions ?? value.additionalPermissions);
   if (permissionLines.length > 0) return permissionLines.join('\n');
-  if (typeof value.grantRoot === 'string') return `写入目录：${value.grantRoot}`;
+  if (typeof value.grantRoot === 'string') return rawT('agent.codexApproval.writeDir', { path: value.grantRoot });
   if (typeof value.reason === 'string') return value.reason;
   return method;
 }
@@ -45,15 +47,15 @@ function projectName(path: string): string {
 }
 
 function backendLabel(backend: AgentBackend): string {
-  return backend === 'deepseek' ? 'DeepSeek (历史)' : 'Pi';
+  return backend === 'deepseek' ? rawT('agent.panel.backendDeepseek') : 'Pi';
 }
 
 function backendDisplayName(backend: AgentBackend | null): string {
-  return backend ? backendLabel(backend) : '无 AI';
+  return backend ? backendLabel(backend) : rawT('agent.panel.backendNone');
 }
 
 function permissionPresetLabel(permissionPreset?: 'ask' | 'auto' | 'full'): string {
-  return permissionPreset === 'ask' ? '询问审批' : permissionPreset === 'auto' ? '替我审批' : permissionPreset === 'full' ? '完全访问' : '未写入权限';
+  return permissionPreset === 'ask' ? rawT('agent.panel.perm.ask') : permissionPreset === 'auto' ? rawT('agent.panel.perm.auto') : permissionPreset === 'full' ? rawT('agent.panel.perm.full') : rawT('agent.panel.perm.unset');
 }
 
 function codexRuntimeSummary(
@@ -61,11 +63,20 @@ function codexRuntimeSummary(
   effort?: string | null,
   permissionPreset?: 'ask' | 'auto' | 'full',
 ): string {
-  return `${model || '未写入模型'} · ${effort ?? '未写入推理'} · ${permissionPresetLabel(permissionPreset)}`;
+  return rawT('agent.panel.runtimeSummary', {
+    model: model || rawT('agent.panel.noModel'),
+    effort: effort ?? rawT('agent.panel.noEffort'),
+    perm: permissionPresetLabel(permissionPreset),
+  });
 }
 
 function effortLabel(effort: string): string {
-  return ({ low: '低', medium: '中', high: '高', xhigh: '超高' } as Record<string, string>)[effort] ?? effort;
+  return ({
+    low: rawT('agent.panel.effort.low'),
+    medium: rawT('agent.panel.effort.medium'),
+    high: rawT('agent.panel.effort.high'),
+    xhigh: rawT('agent.panel.effort.xhigh'),
+  } as Record<string, string>)[effort] ?? effort;
 }
 
 function remoteBackend(card: AgentSessionCard): AgentBackend {
@@ -79,6 +90,7 @@ export default function AgentPanel({
   sessionKey?: string;
   resizable?: boolean;
 } = {}) {
+  const { t, locale } = useI18n();
   const [projectOverride, setProjectOverride] = useState<string>();
   const [runtimeModelOverride, setRuntimeModelOverride] = useState<string>();
   const [runtimeEffortOverride, setRuntimeEffortOverride] = useState<string | null>();
@@ -166,8 +178,8 @@ export default function AgentPanel({
 
   useEffect(() => {
     if (!desktopRuntime || selectedBackend !== 'codex' || !currentProject || models.length > 0) return;
-    void refreshCatalog().catch((reason) => toast.error(reason, '读取 AI 托管模型失败'));
-  }, [currentProject, desktopRuntime, models.length, refreshCatalog, selectedBackend]);
+    void refreshCatalog().catch((reason) => toast.error(reason, t('agent.panel.loadModelsFailed')));
+  }, [currentProject, desktopRuntime, models.length, refreshCatalog, selectedBackend, t]);
 
   if (!tmid || !rid) return null;
   const roomSession = tmid.startsWith('room:');
@@ -180,12 +192,12 @@ export default function AgentPanel({
     : null;
   const statusLabel = visibleSession
     ? {
-        starting: '正在启动',
-        ready: '待命',
-        running: '正在工作',
-        'waiting-approval': '等待审批',
-        interrupted: '已中断',
-        ended: '已结束',
+        starting: t('agent.hosted.status.starting'),
+        ready: t('agent.hosted.status.ready'),
+        running: t('agent.hosted.status.running'),
+        'waiting-approval': t('agent.hosted.status.waitingApproval'),
+        interrupted: t('agent.hosted.status.interrupted'),
+        ended: t('agent.hosted.status.ended'),
       }[visibleSession.status]
     : '';
   const currentBackend = visibleSession && visibleSession.status !== 'ended'
@@ -206,34 +218,36 @@ export default function AgentPanel({
     ? requestedHostingEffort
     : hostingModelDetails?.defaultReasoningEffort ?? requestedHostingEffort;
   const hostingPermissionPreset = runtimePermissionOverride ?? permissionPreset;
-  const nextCodexRuntimeSummary = `开启配置：${codexRuntimeSummary(
-    hostingModel,
-    hostingEffort,
-    hostingPermissionPreset,
-  )}`;
+  const nextCodexRuntimeSummary = t('agent.panel.nextRuntimeSummary', {
+    summary: codexRuntimeSummary(
+      hostingModel,
+      hostingEffort,
+      hostingPermissionPreset,
+    ),
+  });
   const activeCodexRuntimeSummary = session
     ? codexRuntimeSummary(session.runtimeModel, session.runtimeEffort, session.runtimePermissionPreset)
-    : '未加载当前托管会话快照';
+    : t('agent.panel.noActiveSnapshot');
   const startBlockReason = !selectedBackend
-    ? '当前未启用 AI，请在设置中启用 Pi。'
+    ? t('agent.panel.block.noAi')
     : !selectedProject
-      ? '这台设备尚未添加托管项目；项目目录是本机配置，不会随账号自动同步。'
+      ? t('agent.panel.block.noProject')
       : !hostingModel
-        ? '尚未读取到可用 Pi 模型，请检查 Pi 配置或稍后重试。'
+        ? t('agent.panel.block.noModel')
         : null;
   const backendSummary = currentBackend === 'deepseek'
-    ? '历史 DSH 托管会话（只读保留）'
+    ? t('agent.panel.legacyDshReadonly')
     : currentBackend === 'codex'
       ? (session ? activeCodexRuntimeSummary : nextCodexRuntimeSummary)
-      : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。';
+      : t('agent.panel.noAiSummary');
 
   const addHostingProject = async (): Promise<void> => {
-    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 AI 托管项目' });
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: t('agent.panel.pickProjectTitle') });
     if (typeof path !== 'string') return;
     const environmentState = useAgentEnvironments.getState();
     const environment = environmentState.ensureEnvironment({ path });
     if (environmentIsBusy(environment.id, environmentState.bindings)) {
-      throw new Error('这个项目正被活动讨论使用，请先结束对应的 AI 托管');
+      throw new Error(t('agent.panel.projectBusyError'));
     }
     if (!environment.enabled) {
       useAgentEnvironments.getState().updateEnvironment(environment.id, { enabled: true });
@@ -249,7 +263,7 @@ export default function AgentPanel({
         <span className="flex items-center gap-2">
           {!roomSession ? (
             <button
-              title="返回话题"
+              title={t('agent.panel.backToThread')}
               onClick={() => setPanel({ kind: 'thread', mid: tmid })}
               className="rounded p-1 text-ink-2 hover:bg-fill-hover"
             >
@@ -257,13 +271,13 @@ export default function AgentPanel({
             </button>
           ) : null}
           <Bot size={16} className="text-primary" />
-          AI 托管
+          {t('agent.panel.title')}
         </span>
       }
     >
       <div className="flex items-center justify-between gap-3 border-b border-line bg-fill-1 px-4 py-2.5 text-xs">
         <div className="min-w-0">
-          <div className="font-medium text-ink">AI 托管配置</div>
+          <div className="font-medium text-ink">{t('agent.panel.configHeading')}</div>
           <div className="mt-0.5 truncate text-ink-3" title={`${backendDisplayName(currentBackend)} · ${backendSummary}`}>
             {backendDisplayName(currentBackend)} · {backendSummary}
           </div>
@@ -273,7 +287,7 @@ export default function AgentPanel({
           onClick={() => openButlerConversation(tmid)}
           className="shrink-0 rounded-md border border-line bg-surface px-2.5 py-1.5 text-ink-2 hover:bg-fill-hover"
         >
-          在 AI 管家中查看
+          {t('agent.panel.openInButler')}
         </button>
       </div>
       {error ? <div className="border-b border-line bg-danger/10 px-4 py-2 text-xs text-danger">{error}</div> : null}
@@ -283,38 +297,38 @@ export default function AgentPanel({
             <Bot size={28} />
           </div>
           <div>
-            <div className="font-medium text-ink">@{remoteSession.hostUsername} 正在另一台设备托管</div>
+            <div className="font-medium text-ink">{t('agent.panel.remoteHostingTitle', { username: remoteSession.hostUsername })}</div>
             <div className="mt-1 text-xs leading-5 text-ink-3">
-              这是当前房间的同一条托管会话；本设备不会重复启动 AI。
+              {t('agent.panel.remoteHostingDesc')}
             </div>
           </div>
           <div className="w-full max-w-sm space-y-3 rounded-lg border border-line bg-fill-1 p-4 text-left text-sm">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-ink-3">状态</span>
-              <span className="text-xs text-ink">{remoteSession.status === 'interrupted' ? '已中断' : '正在工作'}</span>
+              <span className="text-ink-3">{t('agent.panel.statusLabel')}</span>
+              <span className="text-xs text-ink">{remoteSession.status === 'interrupted' ? t('agent.hosted.status.interrupted') : t('agent.hosted.status.running')}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span className="text-ink-3">后端</span>
+              <span className="text-ink-3">{t('agent.panel.backendLabel')}</span>
               <span className="text-xs text-ink">{backendLabel(remoteBackend(remoteSession))}</span>
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span className="text-ink-3">项目</span>
+              <span className="text-ink-3">{t('agent.panel.projectLabel')}</span>
               <span className="truncate text-xs text-ink" title={remoteSession.environmentName}>
-                {remoteSession.environmentName || '未指定项目'}
+                {remoteSession.environmentName || t('agent.hosted.noProject')}
               </span>
             </div>
             <div className="flex items-start justify-between gap-3">
-              <span className="shrink-0 text-ink-3">当前任务</span>
+              <span className="shrink-0 text-ink-3">{t('agent.panel.currentTaskLabel')}</span>
               <span className="text-right text-xs text-ink">
                 {remoteSession.currentTaskLabel
-                  || (remoteSession.workItem ? `#${remoteSession.workItem.id} ${remoteSession.workItem.title}` : '等待房间指令')}
+                  || (remoteSession.workItem ? `#${remoteSession.workItem.id} ${remoteSession.workItem.title}` : t('agent.hosted.waitingCommand'))}
               </span>
             </div>
           </div>
           <div className="text-xs text-ink-3">
             {remoteSession.status === 'interrupted'
-              ? '请由当前宿主设备恢复后，再继续发送 @ai 指令。'
-              : '房间成员仍可在消息中使用 @ai；恢复和结束由当前宿主设备控制。'}
+              ? t('agent.panel.remoteInterruptedHint')
+              : t('agent.panel.remoteActiveHint')}
           </div>
         </div>
       ) : !session || session.status === 'ended' ? (
@@ -326,43 +340,43 @@ export default function AgentPanel({
           <div>
             <div className="font-medium text-ink">
               {binding
-                ? `为工作项 #${binding.workItemId} 开启 AI 托管`
+                ? t('agent.panel.startForWorkItem', { id: binding.workItemId })
                 : roomSession
-                  ? '在当前房间开启 AI 托管'
-                  : '在当前话题开启 AI 托管'}
+                  ? t('agent.panel.startForRoom')
+                  : t('agent.panel.startForThread')}
             </div>
             <div className="mt-1 text-xs leading-5 text-ink-3">
-              房间侧栏和 AI 管家引用同一条托管会话；AI 托管只使用专用工作项目。
+              {t('agent.panel.singleSessionHint')}
             </div>
           </div>
           {!desktopRuntime ? (
             <div className="rounded-md border border-line bg-fill-1 px-3 py-2 text-xs text-ink-3">
-              共享 Agent 仅支持 RocketX 桌面端。
+              {t('agent.shared.desktopOnly')}
             </div>
           ) : (
             <>
               <div className="w-full max-w-sm">
                 <div className="mb-3 text-left text-xs text-ink-3">
-                  <span className="mb-1 block">运行时：{backendDisplayName(selectedBackend)}</span>
+                  <span className="mb-1 block">{t('agent.panel.runtimeLine', { name: backendDisplayName(selectedBackend) })}</span>
                   <div className="mt-1 text-ink-3">
                     {selectedBackend === 'codex'
                       ? nextCodexRuntimeSummary
-                      : '当前启动为“无 AI”，只能查看既有托管信息，不能新开会话。'}
+                      : t('agent.panel.noAiSummary')}
                   </div>
                 </div>
                 <label className="block text-left text-xs text-ink-3">
-                  <span className="mb-1 block">托管项目</span>
+                  <span className="mb-1 block">{t('agent.panel.hostedProjectLabel')}</span>
                   <select
-                    aria-label="AI 托管项目"
+                    aria-label={t('agent.panel.hostedProjectAria')}
                     value={selectedProject ?? ''}
                     onChange={(event) => setProjectOverride(event.target.value)}
                     className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
                   >
-                    {!selectedProject ? <option value="">尚未添加项目</option> : null}
+                    {!selectedProject ? <option value="">{t('agent.panel.noProjectsOption')}</option> : null}
                     {availableProjects.map((environment) => (
                       <option key={environment.id} value={environment.path}>
                         {environment.name || projectName(environment.path)}
-                        {environment.path === roomProject ? '（此群）' : environment.path === currentProject ? '（当前）' : ''}
+                        {environment.path === roomProject ? t('agent.panel.roomTag') : environment.path === currentProject ? t('agent.panel.currentTag') : ''}
                       </option>
                     ))}
                   </select>
@@ -370,9 +384,9 @@ export default function AgentPanel({
                 {selectedBackend === 'codex' ? (
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     <label className="col-span-2 block text-left text-xs text-ink-3">
-                      <span className="mb-1 block">模型</span>
+                      <span className="mb-1 block">{t('agent.panel.modelLabel')}</span>
                       <select
-                        aria-label="AI 托管模型"
+                        aria-label={t('agent.panel.modelAria')}
                         value={hostingModel}
                         onChange={(event) => {
                           const model = models.find((item) => item.model === event.target.value || item.id === event.target.value);
@@ -381,16 +395,16 @@ export default function AgentPanel({
                         }}
                         className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
                       >
-                        {models.length === 0 ? <option value="">正在读取模型…</option> : null}
+                        {models.length === 0 ? <option value="">{t('agent.panel.loadingModelsOption')}</option> : null}
                         {models.filter((model) => !model.hidden).map((model) => (
                           <option key={model.id} value={model.model}>{model.displayName}</option>
                         ))}
                       </select>
                     </label>
                     <label className="block text-left text-xs text-ink-3">
-                      <span className="mb-1 block">推理强度</span>
+                      <span className="mb-1 block">{t('agent.panel.reasoningEffortLabel')}</span>
                       <select
-                        aria-label="AI 托管推理强度"
+                        aria-label={t('agent.panel.reasoningEffortAria')}
                         value={hostingEffort ?? ''}
                         onChange={(event) => setRuntimeEffortOverride(event.target.value || null)}
                         disabled={!hostingModelDetails || hostingModelDetails.supportedReasoningEfforts.length === 0}
@@ -404,16 +418,16 @@ export default function AgentPanel({
                       </select>
                     </label>
                     <label className="block text-left text-xs text-ink-3">
-                      <span className="mb-1 block">权限</span>
+                      <span className="mb-1 block">{t('agent.panel.permissionLabel')}</span>
                       <select
-                        aria-label="AI 托管权限"
+                        aria-label={t('agent.panel.permissionAria')}
                         value={hostingPermissionPreset}
                         onChange={(event) => setRuntimePermissionOverride(event.target.value as AgentSession['runtimePermissionPreset'])}
                         className="h-9 w-full rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
                       >
-                        <option value="ask">询问审批</option>
-                        <option value="auto">替我审批</option>
-                        <option value="full">完全访问</option>
+                        <option value="ask">{t('agent.panel.perm.ask')}</option>
+                        <option value="auto">{t('agent.panel.perm.auto')}</option>
+                        <option value="full">{t('agent.panel.perm.full')}</option>
                       </select>
                     </label>
                   </div>
@@ -427,7 +441,7 @@ export default function AgentPanel({
                 }
                 onClick={() => {
                   if (!selectedProject) {
-                    void addHostingProject().catch((reason) => toast.error(reason, '无法添加托管项目'));
+                    void addHostingProject().catch((reason) => toast.error(reason, t('agent.panel.addProjectFailed')));
                     return;
                   }
                   if (!selectedBackend) return;
@@ -454,7 +468,7 @@ export default function AgentPanel({
                     })
                     .catch((startError) => {
                       setStartFailure(startError instanceof Error ? startError.message : String(startError));
-                      toast.error(startError, '开启 AI 托管失败');
+                      toast.error(startError, t('agent.panel.startFailedToast'));
                     })
                     .finally(() => setStartingTmid((current) => (current === tmid ? null : current)));
                 }}
@@ -467,16 +481,16 @@ export default function AgentPanel({
                     ? <Play size={14} />
                     : <Bot size={14} />}
                 {starting
-                  ? '正在开启…'
+                  ? t('agent.panel.startingBtn')
                   : !selectedBackend
-                    ? '当前未启用 AI'
+                    ? t('agent.hosting.aiDisabled')
                     : !selectedProject
-                      ? '添加托管项目'
-                      : '开启 AI 托管'}
+                      ? t('agent.panel.addProjectBtn')
+                      : t('agent.panel.startHostingBtn')}
               </button>
               {startFailure ? (
                 <div role="alert" className="w-full max-w-sm rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-left text-xs leading-5 text-danger">
-                  无法开启 AI 托管：{startFailure}
+                  {t('agent.panel.startFailurePrefix', { error: startFailure })}
                 </div>
               ) : startBlockReason ? (
                 <div role="status" className="w-full max-w-sm rounded-md border border-line bg-fill-1 px-3 py-2 text-left text-xs leading-5 text-ink-3">
@@ -491,18 +505,18 @@ export default function AgentPanel({
         <>
           <div className="space-y-3 border-b border-line p-4 text-sm">
             <div className="flex items-center justify-between">
-              <span className="text-ink-3">状态</span>
+              <span className="text-ink-3">{t('agent.panel.statusLabel')}</span>
               <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{statusLabel}</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-ink-3">后端</span>
+              <span className="text-ink-3">{t('agent.panel.backendLabel')}</span>
               <span className="rounded bg-fill-1 px-2 py-0.5 text-xs text-ink">{backendLabel(agentBackend(session))}</span>
             </div>
             <div className="text-xs text-ink-3">
-              {currentBackend === 'deepseek' ? '历史 DSH 托管会话（只读保留）' : activeCodexRuntimeSummary}
+              {currentBackend === 'deepseek' ? t('agent.panel.legacyDshReadonly') : activeCodexRuntimeSummary}
             </div>
             <div className="flex items-center justify-between gap-3">
-              <span className="text-ink-3">指挥范围</span>
+              <span className="text-ink-3">{t('agent.panel.commandScopeLabel')}</span>
               <button
                 onClick={() =>
                   void setAccess(
@@ -513,19 +527,19 @@ export default function AgentPanel({
                 className="flex items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2"
               >
                 <Users size={14} />
-                {session.access === 'host-only' ? '仅自己' : '房间成员'}
+                {session.access === 'host-only' ? t('agent.panel.accessHostOnly') : t('agent.panel.accessRoomMembers')}
               </button>
             </div>
             {session.codexThreadId ? (
               <div className="flex items-center justify-between gap-3">
-                <span className="text-ink-3">Codex 任务</span>
+                <span className="text-ink-3">{t('agent.panel.codexTaskLabel')}</span>
                 <div className="flex min-w-0 items-center gap-1.5">
                   <button
-                    title={`复制 codex resume ${session.codexThreadId}，在 Codex 命令行里接着这次对话`}
+                    title={t('agent.panel.copyResumeTitle', { threadId: session.codexThreadId })}
                     onClick={() => {
                       void navigator.clipboard
                         .writeText(`codex resume ${session.codexThreadId}`)
-                        .then(() => toast.success('已复制。建议结束托管后再在 Codex 里继续，两边同时写同一次对话会打架'));
+                        .then(() => toast.success(t('agent.panel.copiedResumeHint')));
                     }}
                     className="flex min-w-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
                   >
@@ -533,32 +547,32 @@ export default function AgentPanel({
                     <span className="truncate">codex resume</span>
                   </button>
                   <button
-                    title="在 Codex App 打开新任务并填好托管记录，由你按回车发出"
+                    title={t('agent.panel.openCodexAppTitle')}
                     disabled={transferring || session.status === 'running'}
                     onClick={() => {
                       setTransferring(true);
                       void transferToCodexApp(tmid)
                         .then((result) => {
                           if (result === 'unavailable') {
-                            throw new Error('无法打开 Codex App，也无法复制对话记录');
+                            throw new Error(t('agent.panel.openAndCopyUnavailable'));
                           }
                           toast.success(
                             result === 'opened-existing'
-                              ? '已在 Codex App 接续当前任务'
+                              ? t('agent.panel.codexOpenedExisting')
                               : result === 'opened'
-                              ? '已打开 Codex App，完整记录已填入，请确认后发送'
+                              ? t('agent.panel.codexOpenedFilled')
                               : result === 'opened-with-copy'
-                                ? '对话较长：已打开 Codex App 并复制完整记录，请粘贴后发送'
-                                : 'Codex App 打开失败，完整记录已复制',
+                                ? t('agent.panel.codexOpenedWithCopy')
+                                : t('agent.shared.openFailedCopied'),
                           );
                         })
-                        .catch((error) => toast.error(error, '在 Codex App 打开失败'))
+                        .catch((error) => toast.error(error, t('agent.panel.openCodexAppFailed')))
                         .finally(() => setTransferring(false));
                     }}
                     className="flex shrink-0 items-center gap-1 rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
                   >
                     {transferring ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
-                    在 Codex App 打开
+                    {t('agent.panel.openInCodexAppBtn')}
                   </button>
                 </div>
               </div>
@@ -568,8 +582,10 @@ export default function AgentPanel({
             </div>
             {!providerCompatible ? (
               <div className="rounded-md bg-warning-light px-2.5 py-2 text-xs leading-5 text-ink-2">
-                这条托管会话使用 {backendLabel(agentBackend(session))}；当前执行引擎为 {backendDisplayName(selectedBackend)}。
-                会话记录仍保留，切回对应引擎并重启后可恢复。
+                {t('agent.panel.incompatibleRuntimeNotice', {
+                  sessionBackend: backendLabel(agentBackend(session)),
+                  selectedBackend: backendDisplayName(selectedBackend),
+                })}
               </div>
             ) : null}
             <label className="flex items-start gap-2 rounded-md bg-fill-1 px-2.5 py-2 text-xs text-ink-2">
@@ -585,9 +601,9 @@ export default function AgentPanel({
                 className="mt-0.5"
               />
               <span>
-                <span className="font-medium text-ink">进入本房间时自动开启托管</span>
+                <span className="font-medium text-ink">{t('agent.panel.autoHostLabel')}</span>
                 <span className="mt-0.5 block text-xs text-ink-3">
-                  仅在这台设备生效；已有其他人托管时不会抢占。
+                  {t('agent.panel.autoHostHint')}
                 </span>
               </span>
             </label>
@@ -595,17 +611,17 @@ export default function AgentPanel({
               {session.status === 'interrupted' ? (
                 <button
                   disabled={resuming || !providerCompatible}
-                  title={!providerCompatible ? `需要启用 ${backendLabel(agentBackend(session))} 后恢复` : undefined}
+                  title={!providerCompatible ? t('agent.panel.resumeRequiresTitle', { backend: backendLabel(agentBackend(session)) }) : undefined}
                   onClick={() => {
                     setResumingTmid(tmid);
                     void resume(tmid)
-                      .catch((resumeError) => toast.error(resumeError, '恢复 AI 托管失败'))
+                      .catch((resumeError) => toast.error(resumeError, t('agent.panel.resumeFailedToast')))
                       .finally(() => setResumingTmid((current) => (current === tmid ? null : current)));
                   }}
                   className="flex flex-1 items-center justify-center gap-1 rounded border border-primary px-2 py-1.5 text-xs text-primary disabled:opacity-50"
                 >
                   {resuming ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-                  {resuming ? '恢复中…' : '恢复'}
+                  {resuming ? t('agent.panel.resumingBtn') : t('agent.panel.resumeBtn')}
                 </button>
               ) : null}
               <button
@@ -613,7 +629,7 @@ export default function AgentPanel({
                 onClick={() => void end(tmid)}
                 className="flex flex-1 items-center justify-center gap-1 rounded border border-line px-2 py-1.5 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
               >
-                <Square size={12} /> 结束
+                <Square size={12} /> {t('agent.panel.endBtn')}
               </button>
             </div>
           </div>
@@ -622,27 +638,27 @@ export default function AgentPanel({
             <div className="space-y-3 border-b border-line bg-warning-light/30 p-4">
               {members.map((request) => (
                 <div key={request.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
-                  <div className="font-medium text-ink">@{request.command.username} 请求指挥 Agent</div>
+                  <div className="font-medium text-ink">{t('agent.panel.memberRequestTitle', { username: request.command.username })}</div>
                   <div className="mt-1 line-clamp-3 text-ink-3">{request.command.text}</div>
                   <div className="mt-3 flex gap-2">
                     <button
                       onClick={() => void approveMember(request.id, true)}
                       className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-white"
                     >
-                      <Check size={12} /> 放行本次任务
+                      <Check size={12} /> {t('agent.panel.allowMemberTaskBtn')}
                     </button>
                     <button
                       onClick={() => void approveMember(request.id, false)}
                       className="flex items-center gap-1 rounded border border-line px-2 py-1 text-ink-2"
                     >
-                      <X size={12} /> 拒绝
+                      <X size={12} /> {t('agent.nativeScene.decision.decline')}
                     </button>
                   </div>
                 </div>
               ))}
               {approvals.map((approval) => (
                 <div key={approval.id} className="rounded-md border border-line bg-surface-3 p-3 text-xs">
-                  <div className="font-medium text-ink">等你在这台电脑上批准</div>
+                  <div className="font-medium text-ink">{t('agent.panel.approvalWaitingTitle')}</div>
                   <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all text-ink-3">
                     {approvalSummary(approval.method, approval.params)}
                   </pre>
@@ -651,21 +667,21 @@ export default function AgentPanel({
                       onClick={() => void resolveApproval(approval.id, 'decline')}
                       className="flex items-center gap-1 rounded border border-line px-2 py-1 text-ink-2"
                     >
-                      <X size={12} /> 拒绝
+                      <X size={12} /> {t('agent.nativeScene.decision.decline')}
                     </button>
                     {approval.method.startsWith('item/') ? (
                       <button
                         onClick={() => void resolveApproval(approval.id, 'accept-session')}
                         className="flex items-center gap-1 rounded border border-line px-2 py-1 text-ink-2"
                       >
-                        <Check size={12} /> 本次任务允许
+                        <Check size={12} /> {t('agent.panel.allowSessionBtn')}
                       </button>
                     ) : null}
                     <button
                       onClick={() => void resolveApproval(approval.id, 'accept')}
                       className="flex items-center gap-1 rounded bg-primary px-2 py-1 text-white"
                     >
-                      <Check size={12} /> 允许一次
+                      <Check size={12} /> {t('agent.panel.allowOnceBtn')}
                     </button>
                   </div>
                 </div>
@@ -681,14 +697,14 @@ export default function AgentPanel({
           )}
 
           <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="mb-2 text-xs font-medium text-ink-2">它做了哪些操作</div>
+            <div className="mb-2 text-xs font-medium text-ink-2">{t('agent.panel.tracesHeading')}</div>
             {traces.length === 0 ? (
-              <div className="py-8 text-center text-xs text-ink-3">还没有人下过指令。在这个话题里发一条 @ai 开头的消息，它就开始干活。</div>
+              <div className="py-8 text-center text-xs text-ink-3">{t('agent.panel.tracesEmpty')}</div>
             ) : (
               <div className="space-y-2">
                 {traces.map((item) => (
                   <div key={item.id} className="rounded bg-fill-1 px-2.5 py-2 text-xs text-ink-2">
-                    <span className="mr-2 text-ink-3">{new Date(item.at).toLocaleTimeString()}</span>
+                    <span className="mr-2 text-ink-3">{formatTime(item.at, undefined, locale)}</span>
                     {item.text}
                   </div>
                 ))}

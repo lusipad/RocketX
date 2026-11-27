@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { FileText, Reply, X } from 'lucide-react';
 import { useChat } from '../stores/chat';
+import { useT } from '../i18n';
 import { stripAgentSessionMarker } from '../agent/card';
 import { stripQuotePrefix } from '../lib/messageText';
 import { shouldSendMessage } from '../lib/sendKeys';
@@ -15,6 +16,7 @@ function fmtSize(bytes: number): string {
 
 /** 粘贴/拖拽文件后的发送确认弹窗（飞书交互：先预览再发送） */
 export default function UploadConfirm({ caption, onSent }: { caption?: string; onSent?: () => void }) {
+  const t = useT();
   const pendingFiles = useChat((s) => s.pendingFiles);
   const pendingUploadMessage = useChat((s) => s.pendingUploadMessage);
   const confirmUpload = useChat((s) => s.confirmUpload);
@@ -25,7 +27,7 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
   const sendOnEnter = usePrefs((s) => s.prefs.sendOnEnter);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const name = sub?.fname || sub?.name || '当前会话';
+  const name = sub?.fname || sub?.name || t('chat.common.currentConversation');
   const dialogRef = useDialogBehavior(cancelUpload, !!pendingFiles);
 
   useEffect(() => {
@@ -80,15 +82,15 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`发送文件给 ${name}`}
+        aria-label={t('chat.uploadConfirm.dialogAria', { name })}
         tabIndex={-1}
         className="w-[420px] rounded-xl bg-surface-4 shadow-2xl"
       >
         <header className="flex items-center justify-between px-5 pt-4 pb-2">
-          <span className="text-base font-semibold text-ink">发送给 {name}</span>
+          <span className="text-base font-semibold text-ink">{t('chat.uploadConfirm.title', { name })}</span>
           <button
             onClick={cancelUpload}
-            aria-label="关闭文件发送确认"
+            aria-label={t('chat.uploadConfirm.closeAria')}
             className="flex h-7 w-7 items-center justify-center rounded text-ink-2 hover:bg-fill-hover"
           >
             <X size={16} />
@@ -99,8 +101,13 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
           <div className="mx-5 mb-1 flex items-center gap-1.5 truncate rounded bg-fill-1 px-2.5 py-1.5 text-xs text-ink-3">
             <Reply size={14} className="shrink-0" />
             <span className="truncate">
-              将作为回复发送 · {replyTo.u.name || replyTo.u.username}：
-              {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg ?? '')) || '[卡片消息]'}
+              {t('chat.uploadConfirm.replyPreview', {
+                author: replyTo.u.name || replyTo.u.username,
+                text:
+                  stripQuotePrefix(stripAgentSessionMarker(replyTo.msg ?? '')) ||
+                  t('chat.projection.cardMessage'),
+              })}
+
             </span>
           </div>
         )}
@@ -127,12 +134,12 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
 
         <textarea
           autoFocus
-          aria-label="图片说明"
+          aria-label={t('chat.uploadConfirm.captionAria')}
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={onMessageKeyDown}
           rows={3}
-          placeholder="添加说明（可选）"
+          placeholder={t('chat.uploadConfirm.captionPlaceholder')}
           className="mx-5 mb-3 block w-[calc(100%-2.5rem)] resize-none rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-3 focus:border-primary"
         />
 
@@ -141,14 +148,14 @@ export default function UploadConfirm({ caption, onSent }: { caption?: string; o
             onClick={cancelUpload}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void sendPending()}
             disabled={busy}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-40"
           >
-            {busy ? '发送中…' : `发送（${pendingFiles.length}）`}
+            {busy ? t('chat.forward.sending') : t('chat.uploadConfirm.sendCount', { count: pendingFiles.length })}
           </button>
         </footer>
       </div>

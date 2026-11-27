@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type {
   ButlerAssistantDigest,
   ButlerMemoryEntry,
@@ -80,12 +81,12 @@ export interface PersonalAssistantSnapshot {
 function kindTitle(kind: PersonalAssistantBriefKind, dateKey: string): string {
   switch (kind) {
     case 'morning_brief':
-      return `晨间个人简报 (${dateKey})`;
+      return t('agent.assistant.morningBriefTitle', { dateKey });
     case 'evening_review':
-      return `晚间复盘与收尾 (${dateKey})`;
+      return t('agent.assistant.eveningReviewTitle', { dateKey });
     case 'focus_digest':
     default:
-      return `当前聚焦摘要 (${dateKey})`;
+      return t('agent.assistant.focusDigestTitle', { dateKey });
   }
 }
 
@@ -171,7 +172,7 @@ export function generatePersonalAssistantBrief(
 
   const commitments: PersonalAssistantCommitment[] = [];
   for (const todo of openTodos) {
-    const label = todo.title || todo.note || todo.excerpt || '未命名待办';
+    const label = todo.title || todo.note || todo.excerpt || t('agent.assistant.unnamedTodo');
     if (todo.committedTo?.trim()) {
       commitments.push({
         todoId: todo.id,
@@ -195,37 +196,37 @@ export function generatePersonalAssistantBrief(
   const focusCandidates: Array<{ score: number; item: PersonalAssistantFocusItem }> = [];
   for (const todo of openTodos) {
     const card = cardById.get(todo.id);
-    const title = todo.title || todo.note || todo.excerpt || '未命名待办';
+    const title = todo.title || todo.note || todo.excerpt || t('agent.assistant.unnamedTodo');
     const priority = todo.priority ?? 3;
     let score = (6 - Math.min(5, Math.max(1, priority))) * 15;
     const reasons: string[] = [];
 
     if (todo.due && todo.due < today) {
       score += 45;
-      reasons.push(`已逾期（截止 ${todo.due}）`);
+      reasons.push(t('agent.assistant.reason.overdue', { due: todo.due ?? '' }));
     } else if (todo.due === today) {
       score += 35;
-      reasons.push('今日截止');
+      reasons.push(t('agent.assistant.reason.dueToday'));
     }
     if (card?.state.waitState === 'waiting_approval') {
       score += 40;
-      reasons.push('待审批确认');
+      reasons.push(t('agent.assistant.reason.waitingApproval'));
     } else if (card?.state.waitState === 'blocked') {
       score += 30;
-      reasons.push('当前受阻');
+      reasons.push(t('agent.assistant.reason.blocked'));
     } else if (card?.state.stage === 'verifying') {
       score += 25;
-      reasons.push('待完成核验');
+      reasons.push(t('agent.assistant.reason.verifying'));
     } else if (card?.state.stage === 'in_progress') {
       score += 20;
-      reasons.push('进行中');
+      reasons.push(t('agent.assistant.reason.inProgress'));
     }
     if (todo.committedTo?.trim()) {
       score += 15;
-      reasons.push(`已承诺 ${todo.committedTo.trim()}`);
+      reasons.push(t('agent.assistant.reason.committedTo', { person: todo.committedTo.trim() }));
     }
     if (reasons.length === 0) {
-      reasons.push(`优先级 P${priority}`);
+      reasons.push(t('agent.assistant.reason.priority', { priority }));
     }
 
     focusCandidates.push({
@@ -274,67 +275,73 @@ export function generatePersonalAssistantBrief(
 
   const actionItems: string[] = [];
   if (metrics.waitingApprovalCount > 0) {
-    actionItems.push(`优先处理 ${metrics.waitingApprovalCount} 项待审批操作，解除工作流等待`);
+    actionItems.push(t('agent.assistant.action.approvals', { count: metrics.waitingApprovalCount }));
   }
   if (overdueTodos.length > 0) {
-    actionItems.push(`清点并重新排期 ${overdueTodos.length} 项已逾期待办`);
+    actionItems.push(t('agent.assistant.action.overdue', { count: overdueTodos.length }));
   }
   if (kind === 'morning_brief' && dueTodayTodos.length > 0) {
-    actionItems.push(`锁定今日到期的 ${dueTodayTodos.length} 项关键交付并推进首轮执行`);
+    actionItems.push(t('agent.assistant.action.dueToday', { count: dueTodayTodos.length }));
   }
   if (kind === 'evening_review') {
     actionItems.push(
-      `回顾今日已完成 ${completedTodayTodos.length} 项待办与 ${completedTodayEvents} 项日程，将关键结论沉淀至长期记忆`,
+      t('agent.assistant.action.eveningSummary', { todos: completedTodayTodos.length, events: completedTodayEvents }),
     );
   }
   if (commitments.some((c) => c.direction === 'waiting_for')) {
     const waitingCount = commitments.filter((c) => c.direction === 'waiting_for').length;
-    actionItems.push(`跟进 ${waitingCount} 项等待他人回复的承诺事项`);
+    actionItems.push(t('agent.assistant.action.waitingFor', { count: waitingCount }));
   }
   if (actionItems.length === 0) {
-    actionItems.push('当前节奏平稳，可按聚焦列表顺序推进下一项高优先级任务');
+    actionItems.push(t('agent.assistant.action.steady'));
   }
 
   const title = kindTitle(kind, today);
   const mdLines: string[] = [
     `# ${title}`,
     '',
-    '## 核心指标概览',
-    `- 未完成待办：**${metrics.openTodos}**（逾期 **${metrics.overdueTodos}** / 今日截止 **${metrics.dueTodayTodos}** / 今日已完成 **${metrics.completedTodayTodos}**）`,
-    `- 今日日程：**${metrics.todayEvents}** 项（已完成 **${metrics.completedTodayEvents}**）`,
-    `- 活跃工作流：**${metrics.activeWorkflows}**（ACP 会话 **${metrics.acpActiveSessions}** / 待审批 **${metrics.waitingApprovalCount}** / 受阻 **${metrics.blockedCount}**）`,
+    t('agent.assistant.md.metricsHeading'),
+    t('agent.assistant.md.todosLine', { open: metrics.openTodos, overdue: metrics.overdueTodos, dueToday: metrics.dueTodayTodos, completedToday: metrics.completedTodayTodos }),
+    t('agent.assistant.md.eventsLine', { total: metrics.todayEvents, completed: metrics.completedTodayEvents }),
+    t('agent.assistant.md.workflowsLine', { active: metrics.activeWorkflows, acp: metrics.acpActiveSessions, approvals: metrics.waitingApprovalCount, blocked: metrics.blockedCount }),
     '',
-    '## 重点聚焦事项',
+    t('agent.assistant.md.focusHeading'),
     ...(focusItems.length > 0
       ? focusItems.map((item) => `- **${item.title}** — ${item.reason}`)
-      : ['- 暂无未完成焦点任务']),
+      : [t('agent.assistant.md.focusEmpty')]),
     '',
-    '## 承诺与协同跟进',
+    t('agent.assistant.md.commitmentsHeading'),
     ...(commitments.length > 0
-      ? commitments.map((c) =>
-          c.direction === 'committed_to'
-            ? `- [我承诺 -> ${c.person}] ${c.title}${c.due ? `（截止 ${c.due}）` : ''}`
-            : `- [等待回复 <- ${c.person}] ${c.title}${c.due ? `（截止 ${c.due}）` : ''}`,
-        )
-      : ['- 暂无记录在案的对外承诺或等待事项']),
+      ? commitments.map((c) => {
+          const duePart = c.due ? t('agent.assistant.md.duePart', { due: c.due }) : '';
+          return c.direction === 'committed_to'
+            ? t('agent.assistant.md.committedLine', { person: c.person, title: c.title, duePart })
+            : t('agent.assistant.md.waitingForLine', { person: c.person, title: c.title, duePart });
+        })
+      : [t('agent.assistant.md.commitmentsEmpty')]),
     '',
-    '## 今日日程安排',
+    t('agent.assistant.md.scheduleHeading'),
     ...(schedule.length > 0
       ? schedule.map((ev) => {
-          const time = ev.allDay ? '全天' : [ev.startTime, ev.endTime].filter(Boolean).join('-') || '未定时间';
+          const time = ev.allDay ? t('agent.assistant.md.allDay') : [ev.startTime, ev.endTime].filter(Boolean).join('-') || t('agent.assistant.md.unscheduled');
           return `- [${ev.done ? 'x' : ' '}] ${time} · ${ev.title}`;
         })
-      : ['- 今日暂无日程安排']),
+      : [t('agent.assistant.md.scheduleEmpty')]),
     '',
-    '## 活跃工作流与会话',
+    t('agent.assistant.md.workflowsHeading'),
     ...(activeWorkflows.length > 0
       ? activeWorkflows.map(
           (w) =>
-            `- \`${w.runtime}\` **${w.title}**（状态：${w.status}${w.pendingApprovals ? `，待审批 ${w.pendingApprovals} 项` : ''}）`,
+            t('agent.assistant.md.workflowLine', {
+              runtime: w.runtime,
+              title: w.title,
+              status: w.status,
+              approvalsPart: w.pendingApprovals ? t('agent.assistant.md.workflowPendingApprovals', { count: w.pendingApprovals }) : '',
+            }),
         )
-      : ['- 当前没有运行中的后台或 ACP 工作流']),
+      : [t('agent.assistant.md.workflowsEmpty')]),
     '',
-    '## 下一步行动建议',
+    t('agent.assistant.md.actionsHeading'),
     ...actionItems.map((item) => `- ${item}`),
   ];
 
@@ -362,20 +369,20 @@ export function buildAssistantAiSynthesisPrompt(
       ? snapshot.relevantMemories
           .map((m) => `- (${m.category}) ${m.title}: ${m.content}`)
           .join('\n')
-      : '- （暂无已召回的长期记忆）';
+      : t('agent.assistant.synth.noMemories');
 
   return [
-    `请作为我的个人工作助理，基于以下实时本地工作快照为我生成一份精炼、可执行的「${snapshot.title}」深度分析与行动排序：`,
+    t('agent.assistant.synth.intro', { title: snapshot.title }),
     '',
     snapshot.markdown,
     '',
-    '## 相关长期记忆与工作习惯',
+    t('agent.assistant.synth.memoriesHeading'),
     memoryLines,
     '',
-    '输出要求：',
-    '1. 指出今天最容易被忽略但影响最大的 1-2 个风险或承诺缺口；',
-    '2. 给出按时间段/优先级排列的具体执行顺序；',
-    '3. 如需我确认或交给本地 ACP Agent / 管家派工执行的事项，明确列出可直接派发的子任务建议。',
+    t('agent.assistant.synth.reqsTitle'),
+    t('agent.assistant.synth.req1'),
+    t('agent.assistant.synth.req2'),
+    t('agent.assistant.synth.req3'),
   ].join('\n');
 }
 

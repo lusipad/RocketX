@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { ensureHttpOrigin, httpFetch, isTauri } from './http';
 import { loadWorkbenchConfig, type WorkbenchConfig } from './ado';
 import { AdoRequestTimeoutError, directReadRepositoryFile, type DirectConfig } from './adoDirect';
@@ -38,7 +39,7 @@ const DEFAULT_RUNTIME: WorkspaceConfigSourceRuntime = {
   loadWorkbench: loadWorkbenchConfig,
   readAdoFile: directReadRepositoryFile,
   readUncFile: async (path) => {
-    if (!isTauri) throw new Error('UNC 共享配置仅支持 RocketX 桌面端');
+    if (!isTauri) throw new Error(t('auth.workspaceSource.uncDesktopOnly'));
     const { invoke } = await import('@tauri-apps/api/core');
     return invoke<string>('read_workspace_config_unc', { path });
   },
@@ -49,7 +50,7 @@ function parseFetchedWorkspaceConfig(text: string, label: string): WorkspaceConf
     return parseWorkspaceConfig(text);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${label}不是合法的工作区配置：${message}`);
+    throw new Error(t('auth.workspaceSource.invalidConfig', { label, message }));
   }
 }
 
@@ -70,15 +71,15 @@ function normalizeAdoRefFromUrl(version: string | null, versionType: string | nu
   const rawVersion = version?.trim();
   const rawType = versionType?.trim().toLowerCase();
   if (rawType === 'branch') {
-    if (!rawVersion) throw new Error('ADO 链接缺少分支名');
+    if (!rawVersion) throw new Error(t('auth.workspaceSource.adoMissingBranch'));
     return rawVersion.startsWith('refs/') ? rawVersion : `refs/heads/${rawVersion}`;
   }
   if (rawType === 'tag') {
-    if (!rawVersion) throw new Error('ADO 链接缺少标签名');
+    if (!rawVersion) throw new Error(t('auth.workspaceSource.adoMissingTag'));
     return rawVersion.startsWith('refs/') ? rawVersion : `refs/tags/${rawVersion}`;
   }
   if (rawType === 'commit') {
-    if (!rawVersion) throw new Error('ADO 链接缺少提交 SHA');
+    if (!rawVersion) throw new Error(t('auth.workspaceSource.adoMissingCommit'));
     return rawVersion;
   }
   if (!rawVersion) return 'refs/heads/main';
@@ -105,7 +106,7 @@ function ensureAdoBaseMatchesCurrentConnection(linkBase: string, workbench: Work
     configured.origin.toLowerCase() !== target.origin.toLowerCase()
     || configuredPath !== targetPath
   ) {
-    throw new Error(`ADO 链接不属于当前工作台连接：当前是 ${configuredBase}`);
+    throw new Error(t('auth.workspaceSource.adoWrongConnection', { current: configuredBase }));
   }
 }
 
@@ -122,7 +123,7 @@ function parseAdoRepositoryFileUrl(target: string, workbench: WorkbenchConfig | 
     const project = decodeSegment(segments[gitIndex - 1]);
     const repository = decodeSegment(segments[gitIndex + 1]);
     const path = url.searchParams.get('path');
-    if (!path) throw new Error('ADO 仓库文件链接缺少 path 参数');
+    if (!path) throw new Error(t('auth.workspaceSource.adoMissingPath'));
     const adoBase = `${url.origin}/${segments.slice(0, gitIndex - 1).join('/')}`;
     ensureAdoBaseMatchesCurrentConnection(adoBase, workbench);
     return {
@@ -149,7 +150,7 @@ function parseAdoRepositoryFileUrl(target: string, workbench: WorkbenchConfig | 
     const project = decodeSegment(segments[apisIndex - 1]);
     const repository = decodeSegment(segments[repositoriesIndex + 1]);
     const path = url.searchParams.get('path');
-    if (!path) throw new Error('ADO Items API 链接缺少 path 参数');
+    if (!path) throw new Error(t('auth.workspaceSource.adoItemsMissingPath'));
     const adoBase = `${url.origin}/${segments.slice(0, apisIndex - 1).join('/')}`;
     ensureAdoBaseMatchesCurrentConnection(adoBase, workbench);
     return {
@@ -170,24 +171,24 @@ export function parseWorkspaceConfigRemoteInput(
   workbench: WorkbenchConfig | null = loadWorkbenchConfig(),
 ): WorkspaceConfigRemoteSource {
   const trimmed = target.trim();
-  if (!trimmed) throw new Error('请先填写配置来源');
+  if (!trimmed) throw new Error(t('auth.workspaceSource.emptyTarget'));
   if (/^\\\\/.test(trimmed)) return { kind: 'unc', path: normalizeUncWorkspacePath(trimmed) };
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    throw new Error('请输入可访问的 URL、ADO 仓库文件链接，或 \\\\server\\share\\... 形式的 UNC 路径');
+    throw new Error(t('auth.workspaceSource.invalidTarget'));
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
-    throw new Error('配置来源只支持 http/https、ADO 链接或 UNC 共享路径');
+    throw new Error(t('auth.workspaceSource.unsupportedProtocol'));
   }
   if (url.username || url.password) {
-    throw new Error('配置来源地址不能内嵌用户名密码');
+    throw new Error(t('auth.workspaceSource.noEmbeddedCredentials'));
   }
   const looksLikeAdo = /\/_git\/|\/_apis\/git\/repositories\//i.test(url.pathname);
   if (looksLikeAdo) {
     const parsed = parseAdoRepositoryFileUrl(trimmed, workbench);
-    if (!parsed) throw new Error('目前只支持 ADO 仓库文件页面链接或 Git Items API 单文件链接');
+    if (!parsed) throw new Error(t('auth.workspaceSource.unsupportedAdoUrl'));
     return { kind: 'ado', ado: parsed };
   }
   return { kind: 'url', url: trimmed };
@@ -199,7 +200,7 @@ export function adoIdentityForWorkbench(
 ): WorkspaceSourceAdoIdentity & { adoBase: string; auth: NonNullable<WorkbenchConfig['auth']> } {
   const adoBase = normalizedAdoBase(workbench?.adoBase);
   if (!adoBase) {
-    throw new Error('请先在“工作台”里配置当前 Azure DevOps 连接，再从 ADO 仓库读取团队配置');
+    throw new Error(t('auth.workspaceSource.workbenchNotConfigured'));
   }
   return {
     project: source.project,
@@ -234,8 +235,8 @@ export async function fetchWorkspaceConfig(
   const url = target.trim();
   await runtime.ensureOrigin(url);
   const response = await runtime.fetch(url);
-  if (!response.ok) throw new Error(`团队配置返回 HTTP ${response.status}`);
-  return parseFetchedWorkspaceConfig(await response.text(), '团队配置文件');
+  if (!response.ok) throw new Error(t('auth.workspaceSource.httpError', { status: response.status }));
+  return parseFetchedWorkspaceConfig(await response.text(), t('auth.workspaceSource.label.teamFile'));
 }
 
 export function remoteWorkspaceConfigSource(source: WorkspaceSource | null): WorkspaceConfigRemoteSource | null {
@@ -260,7 +261,7 @@ export async function fetchWorkspaceConfigFromSource(
   if (source.kind === 'unc') {
     const path = normalizeUncWorkspacePath(source.path);
     return {
-      config: parseFetchedWorkspaceConfig(await runtime.readUncFile(path), 'UNC 共享配置文件'),
+      config: parseFetchedWorkspaceConfig(await runtime.readUncFile(path), t('auth.workspaceSource.label.uncFile')),
       source: { kind: 'unc', path },
     };
   }
@@ -279,12 +280,12 @@ export async function fetchWorkspaceConfigFromSource(
       effectiveSource,
     );
     return {
-      config: parseFetchedWorkspaceConfig(text, 'ADO 仓库文件'),
+      config: parseFetchedWorkspaceConfig(text, t('auth.workspaceSource.label.adoFile')),
       source: { kind: 'ado', ado: effectiveSource },
     };
   } catch (error) {
     if (error instanceof AdoRequestTimeoutError) {
-      throw new Error(`读取 ADO 团队配置超时（${Math.ceil(error.timeoutMs / 1_000)} 秒）`);
+      throw new Error(t('auth.workspaceSource.adoTimeout', { seconds: Math.ceil(error.timeoutMs / 1_000) }));
     }
     throw error;
   }

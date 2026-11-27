@@ -1,4 +1,5 @@
 import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { stripAgentSessionMarker } from '../agent/card';
 import { stripQuotePrefix } from './messageText';
 
@@ -18,9 +19,9 @@ export const KANBAN_EVENT_TYPE = 'rcx-kanban';
 export const KANBAN_BOARD_TYPE = 'rcx-kanban-board';
 
 export const KANBAN_COLUMNS = [
-  { key: 'todo', name: '待办' },
-  { key: 'doing', name: '进行中' },
-  { key: 'done', name: '已完成' },
+  { key: 'todo', get name() { return t('chat.kanban.col.todo'); } },
+  { key: 'doing', get name() { return t('chat.kanban.col.doing'); } },
+  { key: 'done', get name() { return t('chat.kanban.col.done'); } },
 ] as const;
 
 export type KanbanColumn = (typeof KANBAN_COLUMNS)[number]['key'];
@@ -117,12 +118,12 @@ export function aggregateBoard(messages: RcMessage[]): KanbanCard[] {
 
 /** 事件消息的正文（官方客户端在话题里看到的人话） */
 export function kanbanEventText(ev: { op: 'create' | 'move' | 'remove'; title?: string; column?: KanbanColumn }): string {
-  if (ev.op === 'create') return `📋 新建看板卡片「${ev.title ?? ''}」`;
+  if (ev.op === 'create') return t('chat.kanban.event.create', { title: ev.title ?? '' });
   if (ev.op === 'move') {
     const name = KANBAN_COLUMNS.find((c) => c.key === ev.column)?.name ?? '';
-    return `📋 把卡片「${ev.title ?? ''}」移到 ${name}`;
+    return t('chat.kanban.event.move', { title: ev.title ?? '', column: name });
   }
-  return `📋 删除看板卡片「${ev.title ?? ''}」`;
+  return t('chat.kanban.event.remove', { title: ev.title ?? '' });
 }
 
 export function kanbanEventAttachment(ev: Record<string, unknown>): RcMessageAttachment {
@@ -133,5 +134,5 @@ export function kanbanEventAttachment(ev: Record<string, unknown>): RcMessageAtt
 export function cardTitleFromMessage(m: RcMessage): string {
   const text = stripQuotePrefix(stripAgentSessionMarker(m.msg ?? '')).trim();
   const compact = text.replace(/\s+/g, ' ');
-  return compact ? (compact.length > 80 ? `${compact.slice(0, 79)}…` : compact) : '（无文字消息）';
+  return compact ? (compact.length > 80 ? `${compact.slice(0, 79)}…` : compact) : t('chat.kanban.noTextMessage');
 }

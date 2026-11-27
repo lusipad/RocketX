@@ -1,5 +1,7 @@
 import { tsMs } from '@rcx/rc-client';
 import { create } from 'zustand';
+import { t } from '../i18n';
+import { desktopNotify } from '../lib/notify';
 import { runCodexAutomation, type CodexAutomationOptions } from '../agent/codexAutomation';
 import {
   registerScheduledTaskAdapter,
@@ -30,7 +32,10 @@ import {
 } from '../lib/codexAutomationFiles';
 import { checkWatchers, type ButlerEventCard, type ButlerWatcherSnapshot } from '../lib/butlerWatchers';
 import { useChat } from './chat';
+import { isTauriRuntime } from '../lib/client';
+import { inspectNativeWorkspaceGit } from '../platform/desktopCommands';
 import { useCodexWorkspace } from './codexWorkspace';
+import { useWorkLedger } from './workLedger';
 import { useAuth } from './auth';
 
 const ROUTINES_KEY = 'rcx-codex-automations-v1:routines';
@@ -56,7 +61,31 @@ export interface IntervalRoutineTrigger {
   };
 }
 
-export type RoutineTrigger = DailyRoutineTrigger | IntervalRoutineTrigger;
+export type EventRoutineType =
+  | 'rc_mention'
+  | 'ado_assigned'
+  | 'git_dirty_reminder'
+  | 'work_card_blocked';
+
+export interface EventRoutineTrigger {
+  kind: 'event';
+  eventType: EventRoutineType;
+  filter?: string;
+}
+
+export interface RoutineQuietHours {
+  start: string;
+  end: string;
+}
+
+export interface RoutineNotificationDecision {
+  shouldNotifyDesktop: boolean;
+  shouldDigest: boolean;
+  requiresRoomConfirmation: boolean;
+  reason: string;
+}
+
+export type RoutineTrigger = DailyRoutineTrigger | IntervalRoutineTrigger | EventRoutineTrigger;
 export type RoutineKind = 'cron' | 'heartbeat';
 
 export interface RoutineRun {
@@ -65,7 +94,7 @@ export interface RoutineRun {
   status: 'ok' | 'error';
   text: string;
   threadId?: string;
-  triggerReason?: 'manual' | 'schedule';
+  triggerReason?: 'manual' | 'schedule' | 'event';
   readAt?: number;
   archived?: boolean;
 }
@@ -111,6 +140,8 @@ export interface Routine<TTrigger extends RoutineTrigger = RoutineTrigger> {
   model?: string;
   reasoningEffort?: string;
   notificationPolicy?: ScheduledTaskNotificationPolicy;
+  quietHours?: RoutineQuietHours;
+  notifyRoomId?: string;
   nativeTarget?: string;
   enabled: boolean;
   createdAt: number;
@@ -167,6 +198,8 @@ interface RoutineState {
       | 'model'
       | 'reasoningEffort'
       | 'notificationPolicy'
+      | 'quietHours'
+      | 'notifyRoomId'
     >>,
     reason?: string,
   ) => void;
@@ -178,8 +211,20 @@ interface RoutineState {
   dismissCard: (id: string) => void;
   runNow: (
     id: string,
-    options?: { triggerReason?: string },
+    options?: { triggerReason?: 'manual' | 'schedule' | 'event' | string },
   ) => Promise<boolean>;
+  dryRunRoutine: (id: string, now?: number) => {
+    found: boolean;
+    wouldRun: boolean;
+    triggerKind: 'daily' | 'interval' | 'event' | 'rrule' | 'none';
+    notificationPreview: RoutineNotificationDecision;
+    promptPreview: string;
+    reason: string;
+  };
+  triggerEventRoutines: (
+    eventType: EventRoutineType,
+    payload?: { text?: string; source?: string },
+  ) => Promise<number>;
   tick: (now?: number) => Promise<void>;
 }
 
@@ -257,6 +302,7 @@ export function dueRoutines(
 ): Routine<RoutineTrigger>[] {
   return routines.filter((routine) => {
     if (!routine.enabled) return false;
+    if (routine.trigger?.kind === 'event') return false;
     if (routine.trigger?.kind === 'daily' && routine.lastFiredDate === localDate(now)) return false;
     const rrule = routine.rrule ?? rruleFromTrigger(routine.trigger);
     if (!rrule) return false;
@@ -278,6 +324,23 @@ function normalizeTrigger(value: unknown): RoutineTrigger | undefined {
     everyMinutes?: unknown;
     window?: unknown;
   };
+  if (
+    trigger.kind === 'event'
+    && (
+      (trigger as { eventType?: unknown }).eventType === 'rc_mention'
+      || (trigger as { eventType?: unknown }).eventType === 'ado_assigned'
+      || (trigger as { eventType?: unknown }).eventType === 'git_dirty_reminder'
+      || (trigger as { eventType?: unknown }).eventType === 'work_card_blocked'
+    )
+  ) {
+    const rawFilter = (trigger as { filter?: unknown }).filter;
+    const filter = typeof rawFilter === 'string' && rawFilter.trim() ? rawFilter.trim() : undefined;
+    return {
+      kind: 'event',
+      eventType: (trigger as { eventType: EventRoutineType }).eventType,
+      ...(filter ? { filter } : {}),
+    };
+  }
   if (trigger.kind === 'daily' && typeof trigger.time === 'string') {
     return {
       kind: 'daily',
@@ -307,13 +370,65 @@ function normalizeTrigger(value: unknown): RoutineTrigger | undefined {
 }
 
 function rruleFromTrigger(trigger: RoutineTrigger | undefined): string | undefined {
+  if (!trigger || trigger.kind === 'event') return undefined;
   if (!trigger) return undefined;
   return trigger.kind === 'daily'
     ? dailyTriggerToRrule(trigger.time, trigger.days)
     : intervalTriggerToRrule(trigger.everyMinutes, trigger.window);
 }
 
+function parseHhMmMinutes(value: string): number | null {
+  const match = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+export function isWithinQuietHours(quietHours: RoutineQuietHours | undefined, nowDate: Date = new Date()): boolean {
+  if (!quietHours) return false;
+  const start = parseHhMmMinutes(quietHours.start);
+  const end = parseHhMmMinutes(quietHours.end);
+  if (start === null || end === null || start === end) return false;
+  const current = nowDate.getHours() * 60 + nowDate.getMinutes();
+  return start < end ? (current >= start && current < end) : (current >= start || current < end);
+}
+
+const IMPORTANT_UPDATE_RE = /(?:urgent|blocker|blocked|failed|error|alert|overdue|critical|审批|阻塞|失败|告警|紧急|异常)/iu;
+
+export function evaluateNotificationPolicy(
+  routine: Pick<Routine, 'notificationPolicy' | 'quietHours' | 'notifyRoomId'>,
+  run: Pick<RoutineRun, 'status' | 'text'>,
+  nowDate: Date = new Date(),
+): RoutineNotificationDecision {
+  const policy = routine.notificationPolicy ?? 'all_runs';
+  const requiresRoomConfirmation = Boolean(routine.notifyRoomId?.trim());
+  if (policy === 'silent') {
+    return { shouldNotifyDesktop: false, shouldDigest: false, requiresRoomConfirmation, reason: 'silent' };
+  }
+  if (policy === 'digest_only') {
+    return { shouldNotifyDesktop: false, shouldDigest: true, requiresRoomConfirmation, reason: 'digest_only' };
+  }
+  if (isWithinQuietHours(routine.quietHours, nowDate)) {
+    return { shouldNotifyDesktop: false, shouldDigest: true, requiresRoomConfirmation, reason: 'quiet_hours' };
+  }
+  if (policy === 'failed_runs_only') {
+    const notify = run.status === 'error';
+    return { shouldNotifyDesktop: notify, shouldDigest: notify, requiresRoomConfirmation, reason: notify ? 'failed_run' : 'suppressed_ok_run' };
+  }
+  if (policy === 'important_updates') {
+    const important = run.status === 'error' || IMPORTANT_UPDATE_RE.test(run.text);
+    return { shouldNotifyDesktop: important, shouldDigest: important, requiresRoomConfirmation, reason: important ? 'important_update' : 'routine_no_urgent_signal' };
+  }
+  return { shouldNotifyDesktop: true, shouldDigest: true, requiresRoomConfirmation, reason: 'all_runs' };
+}
+
 function cloneTrigger(trigger: RoutineTrigger): RoutineTrigger {
+  if (trigger.kind === 'event') {
+    return {
+      kind: 'event',
+      eventType: trigger.eventType,
+      ...(trigger.filter ? { filter: trigger.filter } : {}),
+    };
+  }
   return trigger.kind === 'daily'
     ? { kind: 'daily', time: trigger.time, ...(trigger.days ? { days: [...trigger.days] } : {}) }
     : {
@@ -373,7 +488,7 @@ function routineFromTemplate(
     contractVersion: 1,
     runs: [],
   };
-  routine.versions = [routineVersion(routine, 1, createdAt, '创建例行照看')];
+  routine.versions = [routineVersion(routine, 1, createdAt, t('agent.routines.verCreateRoutine'))];
   return routine;
 }
 
@@ -442,7 +557,7 @@ function normalizeRoutine(value: unknown): Routine | undefined {
     contractVersion: currentVersion,
     versions: versions.length
       ? versions
-      : [routineVersion(normalized, currentVersion, routine.createdAt, '创建已安排任务')],
+      : [routineVersion(normalized, currentVersion, routine.createdAt, t('agent.routines.verCreateScheduled'))],
   };
 }
 
@@ -542,11 +657,11 @@ function automationFromRoutine(routine: Routine): CodexAutomationDefinition {
     ? workspace.defaultWorkspaceRoot
     : routine.workspaceRoot || workspace.workspaceRoot;
   if (routine.kind !== 'heartbeat' && !workspaceRoot) {
-    throw new Error('已安排任务必须选择 Codex 工作区');
+    throw new Error(t('agent.routines.workspaceRequired'));
   }
   const prompt = routine.prompt?.trim()
-    || (routine.skillName ? `$${routine.skillName}\n执行已安排任务“${routine.name}”。` : '');
-  if (!prompt) throw new Error('已安排任务说明不能为空');
+    || (routine.skillName ? `$${routine.skillName}\n${t('agent.routines.skillFallbackPrompt', { name: routine.name })}` : '');
+  if (!prompt) throw new Error(t('agent.routines.emptyPrompt'));
   return {
     version: 1,
     id: routine.id,
@@ -586,8 +701,8 @@ function watcherSnapshot(seenKeys: string[]): ButlerWatcherSnapshot {
 
 function emptyPrecheckResult(routine: Routine): string {
   return routine.precheck === 'new-mentions'
-    ? '当前没有新的 @ 需要整理。'
-    : '选定房间从上次整理后没有新消息。';
+    ? t('agent.routines.noNewMentions')
+    : t('agent.routines.noNewMessages');
 }
 
 function knownSkillDisabled(skillName: string): boolean {
@@ -725,8 +840,9 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   syncNative: async (id, rollback) => {
     if (!codexAutomationFilesAvailable()) return;
     const routine = get().routines.find((item) => item.id === id);
-    if (!routine) throw new Error(`没有找到已安排任务 ${id}`);
-    if (routine.workTemplate) throw new Error('工作方法从项目工作台手动创建工作，不能直接启用定时执行');
+    if (!routine) throw new Error(t('agent.routines.notFound', { id }));
+    if (routine.workTemplate) throw new Error(t('agent.routines.workMethodNoAuto'));
+    if (routine.trigger?.kind === 'event') return;
     try {
       await writeCodexAutomationFile(automationFromRoutine(routine));
       set({ nativeStatus: 'ready', nativeError: undefined });
@@ -763,14 +879,14 @@ export const useRoutines = create<RoutineState>((set, get) => ({
 
   setEnabled: (id, enabled) => {
     const target = get().routines.find((routine) => routine.id === id);
-    if (enabled && target?.workTemplate) throw new Error('请从项目工作台使用工作方法');
+    if (enabled && target?.workTemplate) throw new Error(t('agent.routines.workMethodUseWorkbench'));
     if (enabled && target?.skillName && knownSkillDisabled(target.skillName)) return;
     const routines = get().routines.map((routine) => routine.id === id ? { ...routine, enabled } : routine);
     set({ routines });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
     if (!enabled) {
       pruneScheduledRoutine(id);
-      routineAbortControllers.get(id)?.abort(new Error('用户停用已安排任务'));
+      routineAbortControllers.get(id)?.abort(new Error(t('agent.routines.userDisabled')));
     }
   },
 
@@ -799,18 +915,20 @@ export const useRoutines = create<RoutineState>((set, get) => ({
     set({ routines, unloadedTemplateIds });
     persist(routines, get().eventCards, get().seenKeys, unloadedTemplateIds);
     pruneScheduledRoutine(id);
-    routineAbortControllers.get(id)?.abort(new Error('用户删除已安排任务'));
+    routineAbortControllers.get(id)?.abort(new Error(t('agent.routines.userDeleted')));
   },
 
   addRoutine: (routine) => {
     if (routine.trigger?.kind === 'interval' && !validIntervalMinutes(routine.trigger.everyMinutes)) {
-      throw new RangeError(`interval 不能低于 ${MIN_INTERVAL_MINUTES} 分钟`);
+      throw new RangeError(t('agent.routines.minInterval', { min: MIN_INTERVAL_MINUTES }));
     }
     const trigger = normalizeTrigger(routine.trigger);
-    if (routine.trigger && !trigger) throw new RangeError('运行计划无效');
-    const rrule = routine.workTemplate ? undefined : normalizeRrule(routine.rrule ?? rruleFromTrigger(trigger) ?? '');
+    if (routine.trigger && !trigger) throw new RangeError(t('agent.routines.invalidSchedule'));
+    const rrule = (routine.workTemplate || trigger?.kind === 'event')
+      ? undefined
+      : normalizeRrule(routine.rrule ?? rruleFromTrigger(trigger) ?? '');
     if (routine.kind === 'heartbeat' && !routine.targetThreadId?.trim()) {
-      throw new Error('回到现有会话的任务必须选择目标会话');
+      throw new Error(t('agent.routines.targetSessionRequired'));
     }
     const base = {
       ...routine,
@@ -827,21 +945,21 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       contractVersion: currentVersion,
       versions: base.versions?.length
         ? base.versions.slice(-20)
-        : [routineVersion(base, currentVersion, base.createdAt, '创建例行照看')],
+        : [routineVersion(base, currentVersion, base.createdAt, t('agent.routines.verCreateRoutine'))],
     };
     const routines = [normalized, ...get().routines.filter((item) => item.id !== normalized.id)];
     set({ routines });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
   },
 
-  updateContract: (id, patch, reason = '与管家调整') => {
+  updateContract: (id, patch, reason = t('agent.routines.defaultAdjustReason')) => {
     const at = routineNow();
     const routines = get().routines.map((routine) => {
       if (routine.id !== id) return routine;
       const hasTriggerPatch = Object.prototype.hasOwnProperty.call(patch, 'trigger');
       const trigger = hasTriggerPatch ? normalizeTrigger(patch.trigger) : routine.trigger;
-      if (hasTriggerPatch && patch.trigger && !trigger) throw new RangeError('运行计划无效');
-      const rrule = normalizeRrule(
+      if (hasTriggerPatch && patch.trigger && !trigger) throw new RangeError(t('agent.routines.invalidSchedule'));
+      const rrule = trigger?.kind === 'event' ? undefined : normalizeRrule(
         patch.rrule
           ?? (hasTriggerPatch ? rruleFromTrigger(trigger) : undefined)
           ?? routine.rrule
@@ -856,7 +974,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         ...(patch.params?.rooms ? { params: { rooms: [...patch.params.rooms] } } : {}),
       };
       if (next.kind === 'heartbeat' && !next.targetThreadId?.trim()) {
-        throw new Error('回到现有会话的任务必须选择目标会话');
+        throw new Error(t('agent.routines.targetSessionRequired'));
       }
       const version = (routine.contractVersion ?? routine.versions?.at(-1)?.version ?? 1) + 1;
       return {
@@ -864,7 +982,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         updatedAt: at,
         contractVersion: version,
         versions: [
-          ...(routine.versions ?? [routineVersion(routine, 1, routine.createdAt, '从旧版本迁移')]),
+          ...(routine.versions ?? [routineVersion(routine, 1, routine.createdAt, t('agent.routines.migratedVersion'))]),
           routineVersion(next, version, at, reason),
         ].slice(-20),
       };
@@ -884,7 +1002,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       skillName: target.skillName,
       prompt: target.prompt,
       params: target.params,
-    }, `回退到 v${version}`);
+    }, t('agent.routines.rollbackVersion', { version }));
   },
 
   removeRoutine: (id) => {
@@ -938,14 +1056,14 @@ export const useRoutines = create<RoutineState>((set, get) => ({
   runNow: async (id, options) => {
     const routine = get().routines.find((item) => item.id === id);
     if (!routine) return false;
-    if (routine.workTemplate) throw new Error('请从项目工作台使用此方法，创建关联工作后执行');
+    if (routine.workTemplate) throw new Error(t('agent.routines.workMethodCreateWorkFirst'));
     const at = routineNow();
     if (!useAuth.getState().user?._id) {
       const run: RoutineRun = {
         id: crypto.randomUUID(),
         at,
         status: 'error',
-        text: '登录后才能运行已安排任务。',
+        text: t('agent.routines.loginRequired'),
       };
       const routines = get().routines.map((item) => item.id === id
         ? { ...item, runs: [run, ...item.runs].slice(0, RUN_LIMIT) }
@@ -959,7 +1077,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         id: crypto.randomUUID(),
         at,
         status: 'error',
-        text: `Skill「${routine.skillName}」已停用或已卸载，请先到“插件”重新启用。`,
+        text: t('agent.routines.skillDisabledOrMissing', { name: routine.skillName }),
       };
       let routines: Routine[] = [];
       set((state) => {
@@ -1002,19 +1120,19 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         .reduce((latest, item) => Math.max(latest, item.at), 0);
       const taskText = [
         ...(routine.skillName ? [`$${routine.skillName}`] : []),
-        `执行已安排任务“${routine.name}”，直接输出结果。`,
+        t('agent.routines.execPromptTitle', { name: routine.name }),
         ...(previousSuccessfulRunAt > 0
-          ? [`该任务上次成功运行时间：${new Date(previousSuccessfulRunAt).toISOString()}。`]
-          : ['这是该任务首次成功运行前的检查。']),
+          ? [t('agent.routines.lastSuccessAt', { iso: new Date(previousSuccessfulRunAt).toISOString() })]
+          : [t('agent.routines.firstCheck')]),
         ...(routine.params?.rooms?.length
-          ? [`只处理这些房间：${routine.params.rooms.join('、')}。`]
+          ? [t('agent.routines.onlyRooms', { rooms: routine.params.rooms.join(t('agent.common.listSep')) })]
           : []),
-        ...(routine.prompt ? ['', '请按以下自定义要求执行：', routine.prompt] : []),
+        ...(routine.prompt ? ['', t('agent.routines.customReqHeading'), routine.prompt] : []),
       ].join('\n');
       const result = await routineCodexRunner({
         workspaceRoot: routine.workspaceRoot || workspace.workspaceRoot,
         text: taskText,
-        name: `自动化 · ${routine.name}`,
+        name: t('agent.routines.automationName', { name: routine.name }),
         model: routine.model || workspace.selectedModel || undefined,
         effort: routine.reasoningEffort ?? workspace.selectedEffort,
         permissionPreset: workspace.permissionPreset,
@@ -1028,7 +1146,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         status: 'ok',
         text: result.text,
         ...(result.threadId ? { threadId: result.threadId } : {}),
-        triggerReason: options?.triggerReason === 'schedule' ? 'schedule' : 'manual',
+        triggerReason: options?.triggerReason === 'schedule' ? 'schedule' : options?.triggerReason === 'event' ? 'event' : 'manual',
       };
     } catch (error) {
       run = {
@@ -1036,7 +1154,7 @@ export const useRoutines = create<RoutineState>((set, get) => ({
         at,
         status: 'error',
         text: error instanceof Error ? error.message : String(error),
-        triggerReason: options?.triggerReason === 'schedule' ? 'schedule' : 'manual',
+        triggerReason: options?.triggerReason === 'schedule' ? 'schedule' : options?.triggerReason === 'event' ? 'event' : 'manual',
       };
     } finally {
       routineAbortControllers.delete(id);
@@ -1046,10 +1164,75 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       routines = state.routines.map((item) => item.id === id
         ? { ...item, runs: [run, ...item.runs].slice(0, RUN_LIMIT) }
         : item);
+      queueMicrotask(() => {
+        const decision = evaluateNotificationPolicy(routine, run, new Date(at));
+        if (decision.shouldNotifyDesktop) {
+          void desktopNotify({
+            title: routine.name,
+            body: run.text.slice(0, 160),
+            tag: `routine:${routine.id}`,
+          }).catch(() => {});
+        }
+      });
       return { routines, runningIds: state.runningIds.filter((runningId) => runningId !== id) };
     });
     persist(routines, get().eventCards, get().seenKeys, get().unloadedTemplateIds);
     return true;
+  },
+
+  dryRunRoutine: (id, now = routineNow()) => {
+    const routine = get().routines.find((item) => item.id === id);
+    if (!routine) {
+      return {
+        found: false,
+        wouldRun: false,
+        triggerKind: 'none',
+        notificationPreview: {
+          shouldNotifyDesktop: false,
+          shouldDigest: false,
+          requiresRoomConfirmation: false,
+          reason: 'not_found',
+        },
+        promptPreview: '',
+        reason: 'not_found',
+      };
+    }
+    const precheckPassed = shouldRunRoutine(routine, now);
+    const triggerKind = routine.trigger?.kind ?? (routine.rrule ? 'rrule' : 'none');
+    const promptPreview = [
+      ...(routine.skillName ? [`$${routine.skillName}`] : []),
+      routine.prompt || '',
+    ].filter(Boolean).join('\n');
+    const notificationPreview = evaluateNotificationPolicy(
+      routine,
+      { status: 'ok', text: promptPreview || routine.name },
+      new Date(now),
+    );
+    return {
+      found: true,
+      wouldRun: routine.enabled && precheckPassed,
+      triggerKind,
+      notificationPreview,
+      promptPreview,
+      reason: !routine.enabled ? 'paused' : !precheckPassed ? 'precheck_skipped' : 'ready',
+    };
+  },
+
+  triggerEventRoutines: async (eventType, payload) => {
+    const candidates = get().routines.filter((routine) => {
+      if (!routine.enabled || routine.workTemplate) return false;
+      if (routine.trigger?.kind !== 'event') return false;
+      if (routine.trigger.eventType !== eventType) return false;
+      const filter = routine.trigger.filter?.trim().toLowerCase();
+      if (!filter) return true;
+      return (payload?.text ?? '').toLowerCase().includes(filter);
+    });
+    let launched = 0;
+    for (const candidate of candidates) {
+      const ran = await get().runNow(candidate.id, { triggerReason: 'event' });
+      if (ran) launched += 1;
+    }
+    return launched;
   },
 
   tick: async (now = routineNow()) => {
@@ -1065,6 +1248,56 @@ export const useRoutines = create<RoutineState>((set, get) => ({
       const seenKeys = [...new Set([...get().seenKeys, ...watched.map((card) => card.dedupeKey)])];
       set({ eventCards, seenKeys });
       persist(get().routines, eventCards, seenKeys, get().unloadedTemplateIds);
+    }
+    if (watched.length > 0) {
+      void get().triggerEventRoutines('rc_mention', {
+        text: watched.map((w) => `${w.title} ${w.detail}`).join('\n'),
+        source: 'watcher',
+      }).catch(() => {});
+    }
+    const activeEventRoutines = get().routines.filter(
+      (routine) => routine.enabled && !routine.workTemplate && routine.trigger?.kind === 'event',
+    );
+    if (activeEventRoutines.some((routine) => routine.trigger?.kind === 'event' && routine.trigger.eventType === 'work_card_blocked')) {
+      const blockedCards = useWorkLedger.getState().cards.filter(
+        (card) => card.state.waitState === 'blocked' && card.state.stage !== 'done',
+      );
+      const seenSet = new Set(get().seenKeys);
+      const freshBlocked = blockedCards.filter(
+        (card) => !seenSet.has(`event:work_card_blocked:${card.id}:${card.updatedAt}`),
+      );
+      if (freshBlocked.length > 0) {
+        const nextSeen = [
+          ...get().seenKeys,
+          ...freshBlocked.map((card) => `event:work_card_blocked:${card.id}:${card.updatedAt}`),
+        ].slice(-500);
+        set({ seenKeys: nextSeen });
+        persist(get().routines, get().eventCards, nextSeen, get().unloadedTemplateIds);
+        void get().triggerEventRoutines('work_card_blocked', {
+          text: freshBlocked.map((card) => `${card.title} ${card.state.waitReason ?? ''}`).join('\n'),
+          source: 'work_ledger',
+        }).catch(() => {});
+      }
+    }
+    if (
+      isTauriRuntime()
+      && activeEventRoutines.some((routine) => routine.trigger?.kind === 'event' && routine.trigger.eventType === 'git_dirty_reminder')
+    ) {
+      const wsRoot = useCodexWorkspace.getState().workspaceRoot?.trim();
+      if (wsRoot) {
+        void inspectNativeWorkspaceGit(wsRoot).then((snap) => {
+          if (!snap.dirtyFiles.length) return;
+          const gitKey = `event:git_dirty:${localDate(now)}:${wsRoot}:${snap.dirtyFiles.length}`;
+          if (get().seenKeys.includes(gitKey)) return;
+          const nextSeen = [...get().seenKeys, gitKey].slice(-500);
+          set({ seenKeys: nextSeen });
+          persist(get().routines, get().eventCards, nextSeen, get().unloadedTemplateIds);
+          return get().triggerEventRoutines('git_dirty_reminder', {
+            text: `${snap.branch ?? 'HEAD'} (${snap.dirtyFiles.length}): ${snap.dirtyFiles.slice(0, 5).join(', ')}`,
+            source: 'git',
+          });
+        }).catch(() => {});
+      }
     }
     const due = dueRoutines(get().routines, now);
     enqueueScheduledRoutines(due, now);
@@ -1144,7 +1377,7 @@ registerScheduledTaskAdapter({
       updatedAt: now,
       runs: [],
     };
-    if (!routine.name || !routine.prompt) throw new Error('任务名称和说明不能为空');
+    if (!routine.name || !routine.prompt) throw new Error(t('agent.routines.nameAndPromptRequired'));
     state.addRoutine(routine);
     await useRoutines.getState().syncNative(routine.id, null);
     return { status: 'created', task: scheduledTaskSnapshot(routine) };
@@ -1158,9 +1391,9 @@ registerScheduledTaskAdapter({
     await state.hydrateNative();
     state = useRoutines.getState();
     const current = state.routines.find((routine) => routine.id === input.id && !routine.workTemplate);
-    if (!current) throw new Error(`没有找到已安排任务 ${input.id}`);
+    if (!current) throw new Error(t('agent.routines.notFound', { id: input.id }));
     const patch = routinePatch(input);
-    if (Object.keys(patch).length > 0) state.updateContract(input.id, patch, '由 Codex 更新');
+    if (Object.keys(patch).length > 0) state.updateContract(input.id, patch, t('agent.routines.updatedByCodex'));
     if (input.status) state.setEnabled(input.id, input.status === 'ACTIVE');
     await useRoutines.getState().syncNative(input.id, current);
     const updated = useRoutines.getState().routines.find((routine) => routine.id === input.id)!;
@@ -1175,7 +1408,7 @@ registerScheduledTaskAdapter({
     await state.hydrateNative();
     state = useRoutines.getState();
     const current = state.routines.find((routine) => routine.id === id && !routine.workTemplate);
-    if (!current) throw new Error(`没有找到已安排任务 ${id}`);
+    if (!current) throw new Error(t('agent.routines.notFound', { id }));
     await state.deleteNative(id);
     state.removeRoutine(id);
     return { status: 'deleted', id };
@@ -1187,7 +1420,7 @@ registerScheduledTaskAdapter({
       state = useRoutines.getState();
     }
     if (!state.routines.some((routine) => routine.id === id)) {
-      throw new Error(`没有找到已安排任务 ${id}`);
+      throw new Error(t('agent.routines.notFound', { id }));
     }
     const admitted = await state.runNow(id, { triggerReason: 'manual' });
     const updated = useRoutines.getState().routines.find((routine) => routine.id === id)!;

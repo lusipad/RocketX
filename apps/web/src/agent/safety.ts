@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type {
   AdditionalPermissionProfile,
   GrantedPermissionProfile,
@@ -25,14 +26,14 @@ function normalizedPath(value: string): string {
   const replaced = value.trim().replaceAll('\\', '/');
   const drive = /^[a-z]:\//i.exec(replaced)?.[0].toLowerCase() ?? '';
   const absolute = drive || replaced.startsWith('/');
-  if (!absolute) throw new Error('工作区路径必须是绝对路径');
+  if (!absolute) throw new Error(t('agent.safety.absolutePath'));
   const prefix = drive || '/';
   const source = drive ? replaced.slice(drive.length) : replaced.slice(1);
   const parts: string[] = [];
   for (const part of source.split('/')) {
     if (!part || part === '.') continue;
     if (part === '..') {
-      if (parts.length === 0) throw new Error('工作区路径越过根目录');
+      if (parts.length === 0) throw new Error(t('agent.safety.escapesRoot'));
       parts.pop();
     } else {
       parts.push(part);
@@ -52,12 +53,12 @@ export function pathIsSensitive(path: string): boolean {
 
 export function assertAllowedWorkspacePath(path: string, roots: readonly string[]): void {
   const target = normalizedPath(path);
-  if (pathIsSensitive(target)) throw new Error('Agent 不允许访问敏感路径');
+  if (pathIsSensitive(target)) throw new Error(t('agent.safety.sensitivePath'));
   const allowed = roots.some((root) => {
     const normalizedRoot = normalizedPath(root);
     return target === normalizedRoot || target.startsWith(`${normalizedRoot}/`);
   });
-  if (!allowed) throw new Error('Agent 只能访问会话工作区白名单');
+  if (!allowed) throw new Error(t('agent.safety.outsideWorkspace'));
 }
 
 export function commandMentionsSensitivePath(command: string): boolean {
@@ -77,7 +78,7 @@ export function validatePermissionRequest(
   value: AdditionalPermissionProfile | RequestPermissionProfile,
   roots: readonly string[],
 ): GrantedPermissionProfile {
-  if (value.network?.enabled === true) throw new Error('Agent 不允许为工具开启网络访问');
+  if (value.network?.enabled === true) throw new Error(t('agent.safety.networkForbidden'));
   const fileSystem = value.fileSystem;
   if (!fileSystem) return {};
 
@@ -86,7 +87,7 @@ export function validatePermissionRequest(
     for (const path of paths) assertAllowedWorkspacePath(path, roots);
   }
   for (const entry of fileSystem.entries ?? []) {
-    if (entry.path.type !== 'path') throw new Error('Agent 只允许审批明确的工作区路径');
+    if (entry.path.type !== 'path') throw new Error(t('agent.safety.explicitPathOnly'));
     assertAllowedWorkspacePath(entry.path.path, roots);
   }
 
@@ -104,17 +105,17 @@ export function permissionRequestSummary(value: unknown): string[] {
     !Array.isArray(network) &&
     (network as Record<string, unknown>).enabled === true
   ) {
-    lines.push('网络：请求开启');
+    lines.push(t('agent.safety.networkRequested'));
   }
   const fileSystem = permission.fileSystem;
   if (typeof fileSystem !== 'object' || fileSystem === null || Array.isArray(fileSystem)) return lines;
   const fields = fileSystem as Record<string, unknown>;
   for (const [label, paths] of [
-    ['读取', fields.read],
-    ['写入', fields.write],
+    [t('agent.safety.readLabel'), fields.read],
+    [t('agent.safety.writeLabel'), fields.write],
   ] as const) {
     if (!Array.isArray(paths)) continue;
-    for (const path of paths) if (typeof path === 'string') lines.push(`${label}：${path}`);
+    for (const path of paths) if (typeof path === 'string') lines.push(t('agent.safety.pathEntry', { label, path }));
   }
   if (Array.isArray(fields.entries)) {
     for (const rawEntry of fields.entries) {
@@ -124,8 +125,8 @@ export function permissionRequestSummary(value: unknown): string[] {
       if (typeof path !== 'object' || path === null || Array.isArray(path)) continue;
       const exact = path as Record<string, unknown>;
       if (exact.type !== 'path' || typeof exact.path !== 'string') continue;
-      if (entry.access === 'read') lines.push(`读取：${exact.path}`);
-      if (entry.access === 'write') lines.push(`写入：${exact.path}`);
+      if (entry.access === 'read') lines.push(t('agent.safety.pathEntry', { label: t('agent.safety.readLabel'), path: exact.path }));
+      if (entry.access === 'write') lines.push(t('agent.safety.pathEntry', { label: t('agent.safety.writeLabel'), path: exact.path }));
     }
   }
   return [...new Set(lines)];
@@ -157,14 +158,14 @@ export function redactAgentOutput(text: string): { text: string; redacted: numbe
   for (const pattern of SECRET_PATTERNS) {
     value = value.replace(pattern, () => {
       redacted += 1;
-      return '[已脱敏]';
+      return t('agent.safety.redacted');
     });
   }
   value = value.replace(
     /\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*[:=]\s*([^\s,;]{8,})/gi,
     (_match, label: string) => {
       redacted += 1;
-      return `${label}=[已脱敏]`;
+      return `${label}=${t('agent.safety.redacted')}`;
     },
   );
   return { text: value, redacted };

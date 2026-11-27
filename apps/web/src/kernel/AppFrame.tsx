@@ -3,8 +3,10 @@ import { Blocks } from 'lucide-react';
 import { appManager } from './installed';
 import IframeSandbox from './sandbox/iframe';
 import { bridgeHost } from './runtime';
+import { useT } from '../i18n';
 
 export function AppModule({ appId }: { appId: string }) {
+  const t = useT();
   const app = appManager().get(appId);
   useEffect(() => {
     if (app?.enabled && app.manifest.runtime === 'iframe') bridgeHost.emit(appId, 'app.activated');
@@ -12,14 +14,14 @@ export function AppModule({ appId }: { appId: string }) {
   if (!app || !app.enabled) {
     return (
       <div className="flex min-w-0 flex-1 items-center justify-center text-sm text-ink-3">
-        应用已停用或卸载
+        {t('settings.kernel.appDisabledOrUninstalled')}
       </div>
     );
   }
   if (app.manifest.runtime !== 'iframe') {
     return (
       <div className="flex min-w-0 flex-1 items-center justify-center text-sm text-ink-3">
-        这个应用没有可显示的界面
+        {t('settings.kernel.appNoUi')}
       </div>
     );
   }

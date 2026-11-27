@@ -10,6 +10,7 @@ import { personName, useAliases } from '../stores/aliases';
 import { settleScopedResult } from '../lib/scopedResult';
 import Avatar from './Avatar';
 import Dialog from './Dialog';
+import { useT } from '../i18n';
 
 /**
  * 用户搜索（300ms 防抖），排除自己。
@@ -127,6 +128,7 @@ export function StartDMDialog({
   draft?: string;
   onOpened?: (rid: string) => void;
 }) {
+  const t = useT();
   const startDM = useChat((s) => s.startDM);
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
@@ -157,7 +159,7 @@ export function StartDMDialog({
       onOpened?.(rid);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '发起会话失败');
+      setError(err instanceof Error ? err.message : t('chat.newChat.dmFailed'));
       setBusy(false);
     }
   };
@@ -166,30 +168,34 @@ export function StartDMDialog({
 
   return (
     <DialogShell
-      title="发起聊天"
-      hint="选一个人就是私聊；选多个人直接开群聊，不用起名字。"
+      title={t('chat.newChat.dmTitle')}
+      hint={t('chat.newChat.dmHint')}
       onClose={onClose}
       footer={
         <>
           <span className="mr-auto text-xs text-ink-3">
             {count === 0
-              ? '点头像选人，或直接点某一行开始私聊'
+              ? t('chat.newChat.dmFooterZero')
               : count === 1
-                ? '已选 1 人 · 将开始私聊'
-                : `已选 ${count} 人 · 将开始多人群聊`}
+                ? t('chat.newChat.dmFooterOne')
+                : t('chat.newChat.dmFooterMulti', { count })}
           </span>
           <button
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void open([...selected.keys()])}
             disabled={count === 0 || busy}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? '打开中…' : count > 1 ? `开始群聊（${count}）` : '开始聊天'}
+            {busy
+              ? t('chat.common.opening')
+              : count > 1
+                ? t('chat.newChat.startGroupChatCount', { count })
+                : t('chat.newChat.startChatBtn')}
           </button>
         </>
       }
@@ -216,7 +222,7 @@ export function StartDMDialog({
             autoFocus
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索用户，支持拼音（如 zhangsan / zs）"
+            placeholder={t('chat.newChat.searchUsersPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
@@ -244,14 +250,14 @@ export function StartDMDialog({
                 className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border transition ${
                   checked ? 'border-primary bg-primary text-white' : 'border-line bg-surface-4'
                 }`}
-                title={checked ? '取消选择' : '选中，可多选开群聊'}
+                title={checked ? t('chat.newChat.unselectUser') : t('chat.newChat.selectUserForGroup')}
               >
                 {checked && <Check size={12} strokeWidth={3} />}
               </button>
               <button
                 onClick={() => (count > 0 ? toggle(u) : void open([u.username]))}
                 className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                title={count > 0 ? '加入/移出本次群聊' : '直接私聊'}
+                title={count > 0 ? t('chat.newChat.toggleInGroup') : t('chat.newChat.directChat')}
               >
                 <Avatar name={shownName} username={u.username} size={32} />
                 <span className="min-w-0">
@@ -264,7 +270,7 @@ export function StartDMDialog({
         })}
         {users.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '未找到匹配的用户' : '输入用户名或姓名搜索'}
+            {keyword ? t('chat.newChat.noMatchingUsers') : t('chat.newChat.searchPrompt')}
           </div>
         )}
       </div>
@@ -289,6 +295,7 @@ export function CreateGroupDialog({
   /** /create --private 预选 */
   initialPrivate?: boolean;
 }) {
+  const t = useT();
   const createGroup = useChat((s) => s.createGroup);
   const createTeam = useChat((s) => s.createTeam);
   const aliases = useAliases((s) => s.aliases);
@@ -321,16 +328,16 @@ export function CreateGroupDialog({
       else await createGroup(groupName, [...selected.keys()], priv);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建失败');
+      setError(err instanceof Error ? err.message : t('chat.newChat.createFailed'));
       setBusy(false);
     }
   };
 
   return (
-    <DialogShell title={isTeam ? '创建团队' : '创建群组'} onClose={onClose}>
+    <DialogShell title={isTeam ? t('chat.newChat.createTeamTitle') : t('chat.newChat.createGroupTitle')} onClose={onClose}>
       {isTeam && (
         <div className="mx-5 mb-2 rounded-md bg-fill-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
-          团队是一组频道的集合：创建后可以在团队下继续新建频道，成员共享。
+          {t('chat.newChat.teamHint')}
         </div>
       )}
       <div className="space-y-2.5 px-5 pb-2">
@@ -338,7 +345,7 @@ export function CreateGroupDialog({
           autoFocus
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder={isTeam ? '团队名称（必填）' : '群组名称（必填）'}
+          placeholder={isTeam ? t('chat.newChat.teamNamePlaceholder') : t('chat.newChat.groupNamePlaceholder')}
           className="h-9 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
         />
         {selected.size > 0 && (
@@ -361,7 +368,7 @@ export function CreateGroupDialog({
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索并添加成员"
+            placeholder={t('chat.newChat.searchAddMembers')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
@@ -403,14 +410,14 @@ export function CreateGroupDialog({
             className="accent-primary"
           />
           <Lock size={12} />
-          {isTeam ? '私有团队（仅受邀成员可见）' : '私有群组（仅受邀成员可见）'}
+          {isTeam ? t('chat.newChat.privateTeam') : t('chat.newChat.privateGroup')}
         </label>
         <button
           onClick={() => void doCreate()}
           disabled={!name.trim() || busy}
           className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {busy ? '创建中…' : '创建'}
+          {busy ? t('chat.common.creating') : t('chat.common.create')}
         </button>
       </div>
     </DialogShell>

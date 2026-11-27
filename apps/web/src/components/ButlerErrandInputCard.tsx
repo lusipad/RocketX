@@ -6,6 +6,7 @@ import type { McpElicitationStringSchema } from '../agent/protocol/generated/v2/
 import type { McpServerElicitationRequestParams } from '../agent/protocol/generated/v2/McpServerElicitationRequestParams';
 import type { ToolRequestUserInputParams } from '../agent/protocol/generated/v2/ToolRequestUserInputParams';
 import type { CodexHostInput } from '../agent/codexHostInput';
+import { useT } from '../i18n';
 import {
   safeButlerExternalUrl,
   type ButlerErrandInputResponse,
@@ -55,10 +56,11 @@ function FieldLabel({ name, schema, required }: {
   schema: McpElicitationPrimitiveSchema;
   required: boolean;
 }) {
+  const t = useT();
   return (
     <div>
       <span className="font-medium text-ink">{'title' in schema && schema.title ? schema.title : name}</span>
-      {required ? <span className="ml-1 text-danger" aria-label="必填">*</span> : null}
+      {required ? <span className="ml-1 text-danger" aria-label={t('butler.errandInput.requiredAria')}>*</span> : null}
       {'description' in schema && schema.description ? (
         <div className="mt-0.5 text-xs leading-4 text-ink-3">{schema.description}</div>
       ) : null}
@@ -73,6 +75,7 @@ export default function ButlerErrandInputCard({
   input: CodexHostInput;
   onResolve: (response: ButlerErrandInputResponse) => void | Promise<void>;
 }) {
+  const t = useT();
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [otherAnswers, setOtherAnswers] = useState<Record<string, string>>({});
   const mcpParams = input.method === 'mcpServer/elicitation/request'
@@ -147,13 +150,13 @@ export default function ButlerErrandInputCard({
                         onChange={(event) => setAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
                         className="accent-primary"
                       />
-                      <span className="text-xs text-ink">其他</span>
+                      <span className="text-xs text-ink">{t('butler.errandInput.otherOption')}</span>
                     </label>
                   ) : null}
                   {answers[question.id] === OTHER_VALUE ? (
                     <input
                       type={question.isSecret ? 'password' : 'text'}
-                      aria-label={`${question.header || question.question}的其他回答`}
+                      aria-label={t('butler.errandInput.otherAnswerAria', { label: question.header || question.question })}
                       autoComplete="off"
                       value={otherAnswers[question.id] ?? ''}
                       onChange={(event) => setOtherAnswers((current) => ({ ...current, [question.id]: event.target.value }))}
@@ -182,7 +185,7 @@ export default function ButlerErrandInputCard({
           className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"
         >
           <Send size={12} aria-hidden="true" />
-          回答并继续
+          {t('butler.errandInput.answerAndContinue')}
         </button>
       </div>
     );
@@ -196,13 +199,13 @@ export default function ButlerErrandInputCard({
         <p className="text-xs leading-5 text-ink">{mcpParams.message}</p>
         {url ? (
           <a href={url} target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline">
-            在浏览器中完成 <ExternalLink size={11} aria-hidden="true" />
+            {t('butler.errandInput.completeInBrowser')} <ExternalLink size={11} aria-hidden="true" />
           </a>
-        ) : <div className="mt-2 text-xs text-danger">服务返回的地址不安全，不能打开。</div>}
+        ) : <div className="mt-2 text-xs text-danger">{t('butler.errandInput.unsafeUrl')}</div>}
         {error ? <div className="mt-2 text-xs text-danger" role="alert">{error}</div> : null}
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" disabled={!url || submitting} onClick={() => void submit({ action: 'accept', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-white disabled:opacity-45">我已完成</button>
-          <button type="button" disabled={submitting} onClick={() => void submit({ action: 'cancel', content: null, _meta: null })} className="inline-flex h-8 items-center gap-1 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45"><X size={12} />取消</button>
+          <button type="button" disabled={!url || submitting} onClick={() => void submit({ action: 'accept', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-xs font-medium text-white disabled:opacity-45">{t('butler.errandInput.done')}</button>
+          <button type="button" disabled={submitting} onClick={() => void submit({ action: 'cancel', content: null, _meta: null })} className="inline-flex h-8 items-center gap-1 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45"><X size={12} />{t('common.cancel')}</button>
         </div>
       </div>
     );
@@ -212,11 +215,11 @@ export default function ButlerErrandInputCard({
     return (
       <div className="rounded-lg border border-primary/35 bg-primary-light/30 p-3" data-testid="butler-mcp-unsupported-input">
         <p className="text-xs leading-5 text-ink">{mcpParams.message}</p>
-        <p className="mt-1 text-xs leading-4 text-ink-3">这个表单不是标准 MCP 字段，RocketX 不会猜测或代填。</p>
+        <p className="mt-1 text-xs leading-4 text-ink-3">{t('butler.errandInput.unsupportedFormDesc')}</p>
         {error ? <div className="mt-2 text-xs text-danger" role="alert">{error}</div> : null}
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" disabled={submitting} onClick={() => void submit({ action: 'decline', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">不提供</button>
-          <button type="button" disabled={submitting} onClick={() => void submit({ action: 'cancel', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">取消请求</button>
+          <button type="button" disabled={submitting} onClick={() => void submit({ action: 'decline', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">{t('butler.errandInput.decline')}</button>
+          <button type="button" disabled={submitting} onClick={() => void submit({ action: 'cancel', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">{t('butler.errandInput.cancelRequest')}</button>
         </div>
       </div>
     );
@@ -254,7 +257,7 @@ export default function ButlerErrandInputCard({
               {field.type === 'boolean' ? (
                 <span className="mt-2 flex items-center gap-2">
                   <input type="checkbox" checked={formValues[name] === true} onChange={(event) => setValue(name, event.target.checked)} className="accent-primary" />
-                  <span>是</span>
+                  <span>{t('common.yes')}</span>
                 </span>
               ) : field.type === 'array' ? (
                 <span className="mt-2 block space-y-1.5">
@@ -280,7 +283,7 @@ export default function ButlerErrandInputCard({
                 </span>
               ) : options.length > 0 ? (
                 <select value={typeof formValues[name] === 'string' ? formValues[name] : ''} onChange={(event) => setValue(name, event.target.value || undefined)} className={fieldClass}>
-                  <option value="">请选择</option>
+                  <option value="">{t('butler.errandInput.selectPlaceholder')}</option>
                   {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </select>
               ) : field.type === 'number' || field.type === 'integer' ? (
@@ -305,7 +308,10 @@ export default function ButlerErrandInputCard({
               )}
               {field.type === 'array' && (field.minItems !== undefined || field.maxItems !== undefined) ? (
                 <span className="mt-1 block text-xs text-ink-3">
-                  选择 {numberLimit(field.minItems) ?? 0}–{numberLimit(field.maxItems) ?? '不限'} 项
+                  {t('butler.errandInput.arrayLimitRange', {
+                    min: numberLimit(field.minItems) ?? 0,
+                    max: numberLimit(field.maxItems) ?? t('butler.errandInput.unlimited'),
+                  })}
                 </span>
               ) : null}
             </label>
@@ -314,8 +320,8 @@ export default function ButlerErrandInputCard({
       </div>
       {error ? <div className="mt-2 text-xs text-danger" role="alert">{error}</div> : null}
       <div className="mt-3 flex flex-wrap gap-2">
-        <button type="button" disabled={!complete || submitting} onClick={() => void submit({ action: 'accept', content: formValues, _meta: null })} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"><Send size={12} />提交并继续</button>
-        <button type="button" disabled={submitting} onClick={() => void submit({ action: 'decline', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">不提供</button>
+        <button type="button" disabled={!complete || submitting} onClick={() => void submit({ action: 'accept', content: formValues, _meta: null })} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-45"><Send size={12} />{t('butler.errandInput.submitAndContinue')}</button>
+        <button type="button" disabled={submitting} onClick={() => void submit({ action: 'decline', content: null, _meta: null })} className="inline-flex h-8 items-center rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-45">{t('butler.errandInput.decline')}</button>
       </div>
     </div>
   );

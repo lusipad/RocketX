@@ -1,4 +1,6 @@
 import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
+import { t } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 
 /**
  * RocketX 原生值班表。
@@ -77,15 +79,19 @@ export function aggregateOncall(messages: RcMessage[]): OncallShift[] {
     else shifts.delete(ev.shiftId);
   }
   return [...shifts.values()].sort(
-    (a, b) => a.date.localeCompare(b.date) || a.shift.localeCompare(b.shift),
+    (a, b) => a.date.localeCompare(b.date) || compareLocaleText(a.shift, b.shift),
   );
 }
 
 export function oncallEventText(ev: { op: 'add' | 'remove'; shift?: OncallShift }): string {
   if (ev.op === 'add' && ev.shift) {
-    return `📅 排班：${ev.shift.date} ${ev.shift.shift} → @${ev.shift.username}`;
+    return t('chat.oncall.event.add', {
+      date: ev.shift.date,
+      shift: ev.shift.shift,
+      username: ev.shift.username,
+    });
   }
-  return '📅 取消一条排班';
+  return t('chat.oncall.event.remove');
 }
 
 export function oncallEventAttachment(ev: Record<string, unknown>): RcMessageAttachment {
@@ -94,8 +100,8 @@ export function oncallEventAttachment(ev: Record<string, unknown>): RcMessageAtt
 
 /** 发布到主频道的文本快照 */
 export function oncallSummaryText(shifts: OncallShift[]): string {
-  if (shifts.length === 0) return '📅 团队值班表：暂无排班';
-  const lines = ['📅 团队值班表'];
+  if (shifts.length === 0) return t('chat.oncall.summary.empty');
+  const lines = [t('chat.oncall.summary.header')];
   for (const s of shifts) lines.push(`${s.date} · ${s.shift} · @${s.username}`);
   return lines.join('\n');
 }

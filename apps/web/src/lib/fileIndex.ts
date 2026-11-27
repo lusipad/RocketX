@@ -1,4 +1,5 @@
 import { tsMs, type RcRoomFile, type RoomType } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { pinyinMatch } from './pinyin';
 
 export const FILE_INDEX_VERSION = 1;
@@ -53,7 +54,7 @@ export function indexRoomFiles(
 ): FileIndexStateV1 {
   const room: IndexedRoomFilesV1 = {
     rid,
-    roomName: roomName || '会话',
+    roomName: roomName || t('nav.search.roomFallback'),
     indexedAt,
     files: files.slice(0, MAX_FILES_PER_ROOM).map(metadataOf),
   };

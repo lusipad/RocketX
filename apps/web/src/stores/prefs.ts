@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { create } from 'zustand';
 import type { RcPreferences } from '@rcx/rc-client';
 import { rest, savePreferences } from '../lib/client';
@@ -14,7 +15,7 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('请求超时，服务器没有响应')), ms),
+      setTimeout(() => reject(new Error(t('nav.prefs.timeout'))), ms),
     ),
   ]);
 }
@@ -127,7 +128,7 @@ export const usePrefs = create<PrefsState>((set, get) => ({
         // 拉取失败用本地镜像兜底而不是裸 DEFAULTS——否则用户关掉的通知开关
         // 重启后又恢复默认（issue #351）。error 仍要设置，设置页据此显示「重试」。
         const nativeCache = await loadNativePrefsCache();
-        set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...nativeCache }, error: humanError(err, '无法加载偏好设置') });
+        set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...nativeCache }, error: humanError(err, t('nav.prefs.loadFailed')) });
       } finally {
         inflight = null;
       }
@@ -151,7 +152,7 @@ export const usePrefs = create<PrefsState>((set, get) => ({
       await mergeNativePrefsCache(patch);
     } catch (err) {
       set({ prefs: prev }); // 失败回滚
-      toast.error(err, '设置保存失败');
+      toast.error(err, t('nav.prefs.saveFailed'));
     }
   },
 }));

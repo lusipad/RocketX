@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t, useI18nStore } from '../i18n';
 import type { CascadeTemplateItem } from '../lib/adoDirect';
 
 export interface WiTemplate {
@@ -138,6 +139,12 @@ export function saveHierarchyLayout(layout: HierarchyLayout): void {
   }
 }
 
+const HIERARCHY_TEMPLATES = new WeakSet<WiTemplate>();
+
+export function isHierarchyTemplate(template?: WiTemplate): boolean {
+  return !!template && (HIERARCHY_TEMPLATES.has(template) || template.name === t('workbench.templates.hierarchyName'));
+}
+
 function hierarchyTemplate(types: string[], layout: HierarchyLayout = 'feature-split'): WiTemplate {
   const taskAtEnd = types.at(-1)?.toLocaleLowerCase() === 'task' && types.length > 1;
   // 「仅故事层」= 只留 故事层+Task 两级；过程模板没有末级 Task 时该开关无意义,保持完整层级
@@ -156,14 +163,16 @@ function hierarchyTemplate(types: string[], layout: HierarchyLayout = 'feature-s
     const task = effective.at(-1)!;
     if (split) {
       items.push(
-        { type: task, title: '【开发】{title}', parent },
-        { type: task, title: '【测试】{title}', parent },
+        { type: task, title: t('workbench.templates.devTaskTitle'), parent },
+        { type: task, title: t('workbench.templates.testTaskTitle'), parent },
       );
     } else {
       items.push({ type: task, title: '{title}', parent });
     }
   }
-  return { name: '层级工作项', items };
+  const template: WiTemplate = { name: t('workbench.templates.hierarchyName'), items };
+  HIERARCHY_TEMPLATES.add(template);
+  return template;
 }
 
 function hierarchyForLayout(
@@ -178,10 +187,15 @@ function hierarchyForLayout(
   return layout.startsWith('epic') ? full : withoutEpicLevel(full);
 }
 
+function isSplitTaskTemplateItem(item: CascadeTemplateItem): boolean {
+  return item.title.startsWith('【')
+    || (item.title !== '{title}' && item.title.includes('{title}'));
+}
+
 /** 结构预览:「Feature → User Story → 【开发】Task + 【测试】Task」 */
 export function hierarchyPreview(template: WiTemplate): string {
-  const chain = template.items.filter((item) => !item.title.startsWith('【'));
-  const tasks = template.items.filter((item) => item.title.startsWith('【'));
+  const chain = template.items.filter((item) => !isSplitTaskTemplateItem(item));
+  const tasks = template.items.filter((item) => isSplitTaskTemplateItem(item));
   const chainText = chain.map((item) => item.type).join(' → ');
   if (tasks.length === 0) return chainText;
   const taskText = tasks
@@ -230,12 +244,14 @@ export function preferredWorkItemType(availableTypes: string[]): string {
 
 // 「Feature 全套」「UserStory + Tasks」两个死级联已被可配置的「层级工作项」
 // 取代(六种形态,见 HierarchyLayout);内置只留单项创建,自定义级联走远程模板。
-const BUILTIN: WiTemplate[] = [
-  {
-    name: '单个工作项',
-    items: [{ type: '{type}', title: '{title}' }],
-  },
-];
+export function getBuiltinWiTemplates(): WiTemplate[] {
+  return [
+    {
+      name: t('workbench.templates.singleName'),
+      items: [{ type: '{type}', title: '{title}' }],
+    },
+  ];
+}
 
 const URL_KEY = 'rcx-wi-template-url';
 const CACHE_KEY = 'rcx-wi-template-cache';
@@ -276,7 +292,7 @@ export const useWiTemplates = create<WiTemplatesState>((set, get) => {
     remote: cached,
     loading: false,
     error: null,
-    templates: cached?.templates ?? BUILTIN,
+    templates: cached?.templates ?? getBuiltinWiTemplates(),
     defaultProject: cached?.defaultProject,
 
     setUrl: (url) => {
@@ -285,7 +301,7 @@ export const useWiTemplates = create<WiTemplatesState>((set, get) => {
       if (url) void get().fetch();
       else {
         localStorage.removeItem(CACHE_KEY);
-        set({ remote: null, templates: BUILTIN, defaultProject: undefined });
+        set({ remote: null, templates: getBuiltinWiTemplates(), defaultProject: undefined });
       }
     },
 
@@ -313,7 +329,7 @@ export const useWiTemplates = create<WiTemplatesState>((set, get) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const text = await res.text();
         const data = JSON.parse(text) as WiTemplatesConfig;
-        if (!data.templates?.length) throw new Error('模板列表为空');
+        if (!data.templates?.length) throw new Error(t('workbench.templates.emptyList'));
         localStorage.setItem(CACHE_KEY, text);
         set({
           remote: data,
@@ -326,4 +342,10 @@ export const useWiTemplates = create<WiTemplatesState>((set, get) => {
       }
     },
   };
+});
+
+useI18nStore.subscribe((state, prev) => {
+  if (state.locale !== prev.locale && !useWiTemplates.getState().remote) {
+    useWiTemplates.setState({ templates: getBuiltinWiTemplates() });
+  }
 });

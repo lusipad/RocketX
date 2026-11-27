@@ -1,5 +1,6 @@
 import type { AppPermission, RcxAppManifest } from '../manifest';
 import type { PermissionGate } from '../permission';
+import { t } from '../../i18n';
 
 export interface CapabilityContext {
   appId: string;
@@ -19,7 +20,7 @@ export class CapabilityBus {
   constructor(private permissions: PermissionGate) {}
 
   register(method: string, permission: AppPermission, handler: CapabilityHandler): () => void {
-    if (this.handlers.has(method)) throw new Error(`能力 ${method} 已注册`);
+    if (this.handlers.has(method)) throw new Error(t('settings.kernel.bus.alreadyRegistered', { method }));
     this.handlers.set(method, { permission, handler });
     return () => this.handlers.delete(method);
   }
@@ -31,8 +32,8 @@ export class CapabilityBus {
   async call(method: string, params: unknown, context: CapabilityContext): Promise<unknown> {
     const registration = this.handlers.get(method);
     if (!registration) {
-      await this.permissions.deny(context.appId, method, '未知能力');
-      throw new Error(`未知能力: ${method}`);
+      await this.permissions.deny(context.appId, method, t('settings.kernel.bus.unknownCapabilityReason'));
+      throw new Error(t('settings.kernel.bus.unknownCapability', { method }));
     }
     await this.permissions.authorize(context.appId, registration.permission, method);
     return registration.handler(params, context);

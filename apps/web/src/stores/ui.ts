@@ -82,7 +82,7 @@ function persistedModuleValue(parsed: unknown): unknown {
 export function readPersistedModule(storage: ModuleStorage | undefined = browserStorage()): ModuleKey {
   if (!storage || typeof storage.getItem !== 'function') return 'messages';
   const rawCheck = storage.getItem(UI_MODULE_STORAGE_KEY);
-  if (!rawCheck && storage?.getItem('rcx-local-mode-v1') === '1' && runtimeFeatures().butler) {
+  if (!rawCheck && storage?.getItem('rcx-local-mode') === '1' && runtimeFeatures().butler) {
     return 'butler-view';
   }
   if (!storage) return 'messages';
@@ -185,10 +185,14 @@ interface UIState {
   retainedUnreadRid: string | null;
   switcherOpen: boolean;
   switcherCommandCenter: boolean;
-  /** 命令帮助「点击插入」往输入框播种的命令；nonce 保证同一命令重复插入也能触发 */
-  composerSeed: { text: string; nonce: number } | null;
+  /** 命令帮助「点击插入」或管家卡片「填入草稿」往输入框播种文本；nonce 保证重复操作也能触发 */
+  composerSeed: { text: string; nonce: number; mode?: 'command' | 'append' } | null;
+  /** 从聊天消息拖入或发送给群内驻场管家的预填上下文 */
+  roomButlerDraftSeed: { rid: string; text: string; nonce: number } | null;
   /** Codex 工作区的一级视图。 */
   butlerView: ButlerWorkspaceView;
+  /** 管家辅助与进化中心当前子标签 */
+  assistantTab: 'briefing' | 'cognition' | 'skills' | 'memories' | 'archive';
   /** 从房间跳转时需要聚焦的同一条 AI 托管会话。 */
   selectedHostedSessionKey: string | null;
   /** 在 ACP 工作台预选或聚焦的本地 Agent ID。 */
@@ -212,9 +216,11 @@ interface UIState {
   retainUnread: (rid: string | null) => void;
   setSwitcherOpen: (open: boolean) => void;
   openCommandCenter: () => void;
-  seedComposer: (text: string) => void;
+  seedComposer: (text: string, mode?: 'command' | 'append') => void;
+  seedRoomButler: (rid: string, text: string) => void;
   openButlerConversation: (focusSessionKey?: string) => void;
-  openButlerAssistant: () => void;
+  openButlerAssistant: (tab?: 'briefing' | 'cognition' | 'skills' | 'memories' | 'archive') => void;
+  setAssistantTab: (tab: 'briefing' | 'cognition' | 'skills' | 'memories' | 'archive') => void;
   openAcpHub: (agentId?: string | null) => void;
   setButlerView: (view: ButlerWorkspaceView) => void;
   setSelectedHostedSessionKey: (sessionKey: string | null) => void;
@@ -239,7 +245,9 @@ export const useUI = create<UIState>((set) => ({
   switcherOpen: false,
   switcherCommandCenter: false,
   composerSeed: null,
+  roomButlerDraftSeed: null,
   butlerView: 'conversation',
+  assistantTab: 'briefing',
   selectedHostedSessionKey: null,
   selectedAcpAgentId: null,
   aiRuntimeProvider: getAiRuntimeProvider(),
@@ -273,8 +281,10 @@ export const useUI = create<UIState>((set) => ({
   setSwitcherOpen: (open) =>
     set({ switcherOpen: open, ...(open ? {} : { switcherCommandCenter: false }) }),
   openCommandCenter: () => set({ switcherOpen: true, switcherCommandCenter: true }),
-  seedComposer: (text) =>
-    set((state) => ({ composerSeed: { text, nonce: (state.composerSeed?.nonce ?? 0) + 1 } })),
+  seedComposer: (text, mode = 'command') =>
+    set((state) => ({ composerSeed: { text, nonce: (state.composerSeed?.nonce ?? 0) + 1, mode } })),
+  seedRoomButler: (rid, text) =>
+    set((state) => ({ roomButlerDraftSeed: { rid, text, nonce: (state.roomButlerDraftSeed?.nonce ?? 0) + 1 } })),
   openButlerConversation: (focusSessionKey?: string) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
@@ -284,15 +294,17 @@ export const useUI = create<UIState>((set) => ({
       selectedHostedSessionKey: focusSessionKey ?? null,
     });
   },
-  openButlerAssistant: () => {
+  openButlerAssistant: (tab) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });
-    set({
+    set((state) => ({
       module: 'butler-view',
       butlerView: 'assistant',
+      assistantTab: tab ?? state.assistantTab,
       selectedHostedSessionKey: null,
-    });
+    }));
   },
+  setAssistantTab: (tab) => set({ assistantTab: tab }),
   openAcpHub: (agentId) => {
     if (!runtimeFeatures().butler) return;
     persistUIState({ module: 'butler-view' });

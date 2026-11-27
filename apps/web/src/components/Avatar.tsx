@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '../i18n';
 import { useAuth } from '../stores/auth';
 import { observeNearViewport } from '../lib/nearViewport';
 import AuthImage from './AuthImage';
@@ -44,6 +45,7 @@ export default function Avatar({
    * 消息列表里所有人的头像 URL 全变 —— 桌面端的 blobCache 以 path 为 key，于是整屏头像
    * 重新 fetch 一遍，旧的 objectURL 还从不 revoke，每换一次泄漏一批。
    */
+  const t = useT();
   const version = useAuth((s) => s.avatarVersion);
   const myUsername = useAuth((s) => s.user?.username);
   const localMode = useAuth((s) => s.localMode);
@@ -95,7 +97,7 @@ export default function Avatar({
     <span
       className="absolute right-0 bottom-0 rounded-full border-2 border-surface-4"
       style={{ width: dotSize, height: dotSize, background: dotColor }}
-      title={status === 'away' ? '离开' : status === 'busy' ? '忙碌' : status === 'offline' ? '离线' : '在线'}
+      title={status === 'away' ? t('nav.presence.away') : status === 'busy' ? t('nav.presence.busy') : status === 'offline' ? t('nav.presence.offline') : t('nav.presence.online')}
     />
   ) : null;
 

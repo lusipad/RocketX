@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { isTauriRuntime } from './client';
 
 export type CodexAutomationStatus = 'ACTIVE' | 'PAUSED';
@@ -91,11 +92,11 @@ export function parseCodexAutomationToml(content: string): CodexAutomationDefini
 
   const required = ['id', 'name', 'prompt', 'status', 'rrule'] as const;
   const missing = required.filter((key) => !values.has(key));
-  if (missing.length > 0) throw new Error(`Codex automation.toml 缺少 ${missing.join('、')}`);
+  if (missing.length > 0) throw new Error(t('agent.codexAutomationFiles.missingFields', { fields: missing.join(t('agent.common.listSep')) }));
 
   const status = stringValue(values, 'status') as CodexAutomationStatus;
   if (status !== 'ACTIVE' && status !== 'PAUSED') {
-    throw new Error(`Codex automation.toml 的 status 无效：${status}`);
+    throw new Error(t('agent.codexAutomationFiles.invalidStatus', { status }));
   }
   const cwds = values.has('cwds') ? stringArrayValue(values, 'cwds') : [];
   const createdAt = scalarValue(values.get('created_at')) ?? Date.now();
@@ -157,14 +158,14 @@ export function serializeCodexAutomationToml(definition: CodexAutomationDefiniti
 
 function stringValue(values: ReadonlyMap<string, string>, key: string): string {
   const raw = values.get(key);
-  if (!raw) throw new Error(`Codex automation.toml 缺少 ${key}`);
+  if (!raw) throw new Error(t('agent.codexAutomationFiles.missingKey', { key }));
   try {
     const parsed = JSON.parse(raw);
     if (typeof parsed === 'string') return parsed;
   } catch {
     // 统一走下面的字段错误。
   }
-  throw new Error(`Codex automation.toml 的 ${key} 不是字符串`);
+  throw new Error(t('agent.codexAutomationFiles.notString', { key }));
 }
 
 function stringArrayValue(values: ReadonlyMap<string, string>, key: string): string[] {
@@ -176,7 +177,7 @@ function stringArrayValue(values: ReadonlyMap<string, string>, key: string): str
   } catch {
     // 统一走下面的字段错误。
   }
-  throw new Error(`Codex automation.toml 的 ${key} 不是字符串数组`);
+  throw new Error(t('agent.codexAutomationFiles.notStringArray', { key }));
 }
 
 function scalarValue(raw: string | undefined): number | string | undefined {

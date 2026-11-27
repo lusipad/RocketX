@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export type StartupStage =
   | 'idle'
   | 'platform-ready'
@@ -85,7 +87,7 @@ function withTimeout<T>(
     const timer = setTimeout(
       () => {
         controller.abort();
-        reject(new Error(`${label}超时，请重试`));
+        reject(new Error(t('auth.startup.stepTimeout', { label })));
       },
       timeoutMs,
     );
@@ -132,12 +134,12 @@ export function createStartupCoordinator({
     onState(state);
     let stage: StartupStage = 'idle';
     const assertCurrent = (signal?: AbortSignal): void => {
-      if (signal?.aborted) throw new Error('启动任务已取消');
-      if (runGeneration !== generation) throw new Error('启动任务已被新一轮重试取代');
+      if (signal?.aborted) throw new Error(t('auth.startup.aborted'));
+      if (runGeneration !== generation) throw new Error(t('auth.startup.superseded'));
     };
     try {
       publish(runGeneration, stage, 'platform');
-      await withTimeout((signal) => Promise.resolve(steps.preparePlatform(signal)), 0, '平台准备');
+      await withTimeout((signal) => Promise.resolve(steps.preparePlatform(signal)), 0, t('auth.startup.step.platform'));
       stage = 'platform-ready';
       publish(runGeneration, stage);
 
@@ -146,7 +148,7 @@ export function createStartupCoordinator({
       stage = 'account-scope-ready';
       publish(runGeneration, stage);
       publish(runGeneration, stage, 'auth');
-      await withTimeout((signal) => steps.restoreAuth(signal), limits.auth, '登录恢复');
+      await withTimeout((signal) => steps.restoreAuth(signal), limits.auth, t('auth.startup.step.auth'));
       assertCurrent();
 
       const auth = steps.readAuth();
@@ -159,10 +161,10 @@ export function createStartupCoordinator({
       publish(runGeneration, stage);
 
       publish(runGeneration, stage, 'account');
-      await withTimeout((signal) => Promise.resolve(steps.hydrateAccount(auth.userId!, signal)), limits.account, '账号数据恢复');
+      await withTimeout((signal) => Promise.resolve(steps.hydrateAccount(auth.userId!, signal)), limits.account, t('auth.startup.step.account'));
       assertCurrent();
       publish(runGeneration, stage, 'core');
-      await withTimeout((signal) => steps.loadCoreData(signal), limits.core, '核心数据加载');
+      await withTimeout((signal) => steps.loadCoreData(signal), limits.core, t('auth.startup.step.core'));
       assertCurrent();
       stage = 'core-data-ready';
       publish(runGeneration, stage);
@@ -170,15 +172,15 @@ export function createStartupCoordinator({
       publish(runGeneration, stage);
 
       publish(runGeneration, stage, 'runtime');
-      await withTimeout((signal) => steps.initializeRuntime(signal), limits.runtime, '本地运行时探测');
+      await withTimeout((signal) => steps.initializeRuntime(signal), limits.runtime, t('auth.startup.step.runtime'));
       assertCurrent();
       publish(runGeneration, stage, 'kernel');
-      await withTimeout((signal) => steps.initializeKernel(signal), limits.kernel, '扩展内核启动');
+      await withTimeout((signal) => steps.initializeKernel(signal), limits.kernel, t('auth.startup.step.kernel'));
       assertCurrent();
       stage = 'kernel-ready';
       publish(runGeneration, stage);
       publish(runGeneration, stage, 'background');
-      await withTimeout((signal) => steps.startBackground(signal), limits.background, '后台任务启动');
+      await withTimeout((signal) => steps.startBackground(signal), limits.background, t('auth.startup.step.background'));
       assertCurrent();
       publish(runGeneration, 'background-ready');
     } catch (error) {

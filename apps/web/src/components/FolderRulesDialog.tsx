@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
+import { useI18n, type MessageKey } from '../i18n';
 import {
-  RULE_LABELS,
   ruleMatches,
   useFolders,
   type Folder,
@@ -14,10 +14,16 @@ import Dialog from './Dialog';
 
 const MODES: RuleMode[] = ['prefix', 'contains', 'regex'];
 
-const PLACEHOLDER: Record<RuleMode, string> = {
-  prefix: '如 WI —— 匹配「WI-1234 登录报错」',
-  contains: '如 发布 —— 匹配任何名字里带「发布」的会话',
-  regex: '如 ^WI-\\d+ —— 正则，忽略大小写',
+const MODE_LABEL_KEYS: Record<RuleMode, MessageKey> = {
+  prefix: 'chat.folderRules.mode.prefix',
+  contains: 'chat.folderRules.mode.contains',
+  regex: 'chat.folderRules.mode.regex',
+};
+
+const PLACEHOLDER_KEYS: Record<RuleMode, MessageKey> = {
+  prefix: 'chat.folderRules.placeholder.prefix',
+  contains: 'chat.folderRules.placeholder.contains',
+  regex: 'chat.folderRules.placeholder.regex',
 };
 
 /**
@@ -31,6 +37,7 @@ export default function FolderRulesDialog({
   folder: Folder;
   onClose: () => void;
 }) {
+  const { t, tp } = useI18n();
   const setRules = useFolders((s) => s.setRules);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
@@ -60,7 +67,9 @@ export default function FolderRulesDialog({
     const clean = rules.filter((r) => r.value.trim());
     setRules(folder.id, clean);
     toast.success(
-      clean.length ? `规则已保存，自动归入 ${matched.length} 个会话` : '规则已清空',
+      clean.length
+        ? tp(matched.length, 'chat.folderRules.savedOne', 'chat.folderRules.savedOther')
+        : t('chat.folderRules.cleared'),
     );
     onClose();
   };
@@ -77,8 +86,8 @@ export default function FolderRulesDialog({
 
   return (
     <Dialog
-      title={`「${folder.name}」的分组规则`}
-      hint="命中规则的会话会自动进入该分组，不影响你手工拖进来的会话。"
+      title={t('chat.folderRules.title', { name: folder.name })}
+      hint={t('chat.folderRules.hint')}
       width={520}
       onClose={onClose}
       footer={
@@ -87,14 +96,14 @@ export default function FolderRulesDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={save}
             disabled={badRegex}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-40"
           >
-            保存规则
+            {t('chat.folderRules.save')}
           </button>
         </>
       }
@@ -109,7 +118,7 @@ export default function FolderRulesDialog({
             >
               {MODES.map((m) => (
                 <option key={m} value={m}>
-                  {RULE_LABELS[m]}
+                  {t(MODE_LABEL_KEYS[m])}
                 </option>
               ))}
             </select>
@@ -117,14 +126,14 @@ export default function FolderRulesDialog({
               autoFocus={i === 0}
               value={r.value}
               onChange={(e) => update(i, { value: e.target.value })}
-              placeholder={PLACEHOLDER[r.mode]}
+              placeholder={t(PLACEHOLDER_KEYS[r.mode])}
               className="h-8 min-w-0 flex-1 rounded-md border border-line px-2.5 text-sm outline-none focus:border-primary"
             />
             <button
               onClick={() => setLocal((rs) => rs.filter((_, idx) => idx !== i))}
               disabled={rules.length === 1}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-danger disabled:opacity-30"
-              title="删除这条规则"
+              title={t('chat.folderRules.deleteRule')}
             >
               <Trash2 size={14} />
             </button>
@@ -136,17 +145,17 @@ export default function FolderRulesDialog({
           className="flex items-center gap-1 text-xs text-primary hover:underline"
         >
           <Plus size={14} />
-          添加规则（多条之间是「或」）
+          {t('chat.folderRules.addRule')}
         </button>
 
-        {badRegex && <div className="text-xs text-danger">正则写错了，检查一下语法</div>}
+        {badRegex && <div className="text-xs text-danger">{t('chat.folderRules.invalidRegex')}</div>}
       </div>
 
       {/* 命中预览 */}
       <div className="mx-5 mb-3 rounded-md border border-line bg-fill-1 p-2.5">
         <div className="mb-1.5 text-xs text-ink-3">
-          当前命中 <span className="font-medium text-primary">{matched.length}</span> 个会话
-          {matched.length === 0 && rules.some((r) => r.value.trim()) && '（没匹配到，检查一下规则）'}
+          {tp(matched.length, 'chat.folderRules.matchedOne', 'chat.folderRules.matchedOther')}
+          {matched.length === 0 && rules.some((r) => r.value.trim()) && t('chat.folderRules.noMatchHint')}
         </div>
         <div className="max-h-32 space-y-0.5 overflow-y-auto">
           {matched.slice(0, 20).map((c) => (
@@ -155,7 +164,7 @@ export default function FolderRulesDialog({
             </div>
           ))}
           {matched.length > 20 && (
-            <div className="text-xs text-ink-3">…还有 {matched.length - 20} 个</div>
+            <div className="text-xs text-ink-3">{t('chat.folderRules.moreCount', { count: matched.length - 20 })}</div>
           )}
         </div>
       </div>

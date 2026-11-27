@@ -13,9 +13,10 @@ import ForwardDialog from './ForwardDialog';
 import { SkeletonList } from './Skeleton';
 import { askButlerAboutMessages } from '../kernel/butler';
 import {
-  BUTLER_EXTRACT_COMMITMENTS_PROMPT,
-  BUTLER_SUMMARIZE_PROMPT,
+  getButlerExtractCommitmentsPrompt,
+  getButlerSummarizePrompt,
 } from '../lib/butlerPrompts';
+import { useI18n } from '../i18n';
 import { messagesToMarkdown } from '../lib/messageOutput';
 import { saveTextFile } from '../lib/exportText';
 import { useKernelContributions } from '../kernel/registry';
@@ -100,6 +101,7 @@ export default function MessageList({
   rid: string;
   transaction: MessageScrollTransaction | null;
 }) {
+  const { t, tp } = useI18n();
   const features = runtimeFeatures();
   const extensionRenderers = useKernelContributions('message.renderer');
   // 跨过零点后「今天/昨天」分割线要跟着变
@@ -311,7 +313,7 @@ export default function MessageList({
         })
         .catch((err: unknown) => {
           anchor.current = null;
-          toast.error(err, '加载更早消息失败');
+          toast.error(err, t('chat.messageList.loadOlderFailed'));
         })
         .finally(() => setLoadingOlder(false));
     }
@@ -488,20 +490,20 @@ export default function MessageList({
   const handOverToButler = (question: string, actionLabel: string): void => {
     if (!selectedMessages.length) return;
     askButlerAboutMessages(rid, selectedMessages, question);
-    toast.success(`已交给 AI 管家：${actionLabel}`);
+    toast.success(t('chat.messageList.handedOverToButler', { action: actionLabel }));
     exitSelectMode();
   };
   const deletableSelected = selectedMessages.filter((message) => message.u._id === myId);
   const copySelected = async () => {
     await navigator.clipboard.writeText(messagesToMarkdown(selectedMessages));
-    toast.success(`已复制 ${selectedMessages.length} 条消息`);
+    toast.success(tp(selectedMessages.length, 'chat.messageList.copiedOne', 'chat.messageList.copiedOther'));
   };
   const exportSelected = async () => {
     const saved = await saveTextFile(
       messagesToMarkdown(selectedMessages),
-      `RocketX-消息导出-${new Date().toISOString().slice(0, 10)}.md`,
+      t('chat.messageList.exportFilename', { date: new Date().toISOString().slice(0, 10) }),
     );
-    if (saved) toast.success(`已导出 ${selectedMessages.length} 条消息`);
+    if (saved) toast.success(tp(selectedMessages.length, 'chat.messageList.exportedOne', 'chat.messageList.exportedOther'));
   };
 
   return (
@@ -510,17 +512,17 @@ export default function MessageList({
       {selectMode && (
         <div className="flex shrink-0 items-center justify-between border-b border-line bg-fill-1 px-4 py-2">
           <span className="text-sm text-ink-2">
-            已选 {selectedMessages.length} 条
-            <span className="ml-2 text-xs text-ink-3">Esc 取消</span>
+            {tp(selectedMessages.length, 'chat.messageList.selectedOne', 'chat.messageList.selectedOther')}
+            <span className="ml-2 text-xs text-ink-3">{t('chat.messageList.escCancel')}</span>
           </span>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => void copySelected().catch((err) => toast.error(err, '复制失败'))}
+              onClick={() => void copySelected().catch((err) => toast.error(err, t('chat.common.copyFailed')))}
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
               <Copy size={14} />
-              复制
+              {t('common.copy')}
             </button>
             <button
               onClick={() => setForwardOpen(true)}
@@ -528,53 +530,71 @@ export default function MessageList({
               className="flex h-7 items-center gap-1 rounded-md bg-primary px-3 text-xs text-white transition hover:bg-primary-hover disabled:opacity-40"
             >
               <Share2 size={14} />
-              转发
+              {t('chat.messageList.forward')}
             </button>
             <button
-              onClick={() => void exportSelected().catch((err) => toast.error(err, '导出失败'))}
+              onClick={() => void exportSelected().catch((err) => toast.error(err, t('chat.messageList.exportFailed')))}
               disabled={selectedMessages.length === 0}
               className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
             >
               <Download size={14} />
-              导出
+              {t('chat.messageList.export')}
             </button>
             {features.butler ? (
               <>
                 <button
-                  onClick={() => handOverToButler(BUTLER_EXTRACT_COMMITMENTS_PROMPT, '提取承诺')}
+                  onClick={() =>
+                    handOverToButler(
+                      getButlerExtractCommitmentsPrompt(),
+                      t('chat.messageList.extractCommitments'),
+                    )
+                  }
                   disabled={selectedMessages.length === 0}
                   className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
-                  title="让 AI 管家从这些消息里提取承诺"
+                  title={t('chat.messageList.extractCommitmentsTooltip')}
                 >
                   <Bot size={14} />
-                  提取承诺
+                  {t('chat.messageList.extractCommitments')}
                 </button>
                 <button
-                  onClick={() => handOverToButler(BUTLER_SUMMARIZE_PROMPT, '总结这段')}
+                  onClick={() =>
+                    handOverToButler(
+                      getButlerSummarizePrompt(),
+                      t('chat.messageList.summarizeSelected'),
+                    )
+                  }
                   disabled={selectedMessages.length === 0}
                   className="flex h-7 items-center gap-1 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
-                  title="让 AI 管家总结这段对话"
+                  title={t('chat.messageList.summarizeSelectedTooltip')}
                 >
                   <Bot size={14} />
-                  总结这段
+                  {t('chat.messageList.summarizeSelected')}
                 </button>
               </>
             ) : null}
             <button
               onClick={() => {
                 for (const m of selectedMessages) toggleStar(m);
-                toast.success(`已标记 ${selectedMessages.length} 条消息`);
+                toast.success(tp(selectedMessages.length, 'chat.messageList.starredOne', 'chat.messageList.starredOther'));
                 exitSelectMode();
               }}
               disabled={selectedMessages.length === 0}
               className="h-7 rounded-md border border-line px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
-              title="批量收藏"
+              title={t('chat.messageList.batchStarTooltip')}
             >
               <Star size={14} />
             </button>
             <button
               onClick={() => {
-                if (!confirm(`确定删除自己的 ${deletableSelected.length} 条消息吗？`)) return;
+                if (
+                  !confirm(
+                    tp(
+                      deletableSelected.length,
+                      'chat.messageList.confirmDeleteOne',
+                      'chat.messageList.confirmDeleteOther',
+                    ),
+                  )
+                ) return;
                 void (async () => {
                   // 逐条等待：并发删除会让各请求用同一份旧列表回写，已删消息可能重新出现。
                   for (const message of deletableSelected) await deleteMessage(message);
@@ -583,7 +603,7 @@ export default function MessageList({
               }}
               disabled={deletableSelected.length === 0}
               className="h-7 rounded-md border border-line px-2.5 text-xs text-danger transition hover:bg-danger/10 disabled:opacity-40"
-              title="批量删除自己的消息"
+              title={t('chat.messageList.batchDeleteTooltip')}
             >
               <Trash2 size={14} />
             </button>
@@ -591,7 +611,7 @@ export default function MessageList({
               onClick={exitSelectMode}
               className="h-7 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover"
             >
-              取消
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -627,11 +647,11 @@ export default function MessageList({
         <div>
           {hasMore && (
             <div className="py-2 text-center text-xs text-ink-3">
-              {loadingOlder ? '正在加载更早的消息…' : '向上滚动加载更早的消息'}
+              {loadingOlder ? t('chat.messageList.loadingOlder') : t('chat.messageList.scrollForOlder')}
             </div>
           )}
           {list.length === 0 && (
-            <div className="py-10 text-center text-sm text-ink-3">暂无消息，来说点什么吧</div>
+            <div className="py-10 text-center text-sm text-ink-3">{t('chat.messageList.empty')}</div>
           )}
           {list.map((msg, i) => {
             const prev: RcMessage | undefined = list[i - 1];
@@ -649,7 +669,7 @@ export default function MessageList({
             const unreadDivider = isUnreadStart ? (
               <div className="my-3 flex items-center gap-3">
                 <div className="h-px flex-1 bg-danger/30" />
-                <span className="text-xs text-danger">以下为新消息</span>
+                <span className="text-xs text-danger">{t('chat.messageList.unreadDivider')}</span>
                 <div className="h-px flex-1 bg-danger/30" />
               </div>
             ) : null;
@@ -733,11 +753,11 @@ export default function MessageList({
           className={`absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface-4 shadow-[0_2px_10px_rgba(0,0,0,0.15)] transition hover:border-primary ${
             context || newCount > 0 ? 'h-8 px-3 text-primary' : 'h-9 w-9 justify-center text-ink-2'
           }`}
-          title={context ? '返回最新消息' : '回到底部'}
+          title={context ? t('chat.messageList.backToLatest') : t('chat.messageList.scrollToBottom')}
         >
           <ArrowDown size={16} />
-          {context ? <span className="text-xs font-medium">返回最新消息</span> : newCount > 0 && (
-            <span className="text-xs font-medium">{newCount} 条新消息</span>
+          {context ? <span className="text-xs font-medium">{t('chat.messageList.backToLatest')}</span> : newCount > 0 && (
+            <span className="text-xs font-medium">{tp(newCount, 'chat.messageList.newMessagesOne', 'chat.messageList.newMessagesOther')}</span>
           )}
         </button>
       )}

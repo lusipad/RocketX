@@ -16,16 +16,27 @@ import {
   type ImageOcrRuntimeProbe,
 } from '../lib/imageOcr';
 import {
+  probePiEndpoint,
   probePiRuntime,
   readPiConfig,
+  scanLocalPiGateways,
   writePiConfig,
   type AcpAgentPreset,
   type AcpAgentProfile,
   type AcpDiscoveredCandidate,
+  type PiApiProtocol,
   type PiConfigView,
+  type PiEndpointProbeResult,
+  type PiLocalGatewayCandidate,
   type PiProviderPreset,
   type PiRuntimeProbe,
 } from '../platform/desktopCommands';
+import {
+  PI_API_PROTOCOL_OPTIONS,
+  inferProtocolHintFromInput,
+  mergeDiscoveredModels,
+  parseConnectionSnippet,
+} from '../lib/piProtocols';
 import { ACP_PRESET_TEMPLATES, useAcpAgents } from '../stores/acpAgents';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
@@ -33,6 +44,7 @@ import { useUI } from '../stores/ui';
 import ReverseMcpSettings from './ReverseMcpSettings';
 import AgentBotSettings from './AgentBotSettings';
 import { RadioGroup, Row } from './SettingControls';
+import { useI18n, useT, type MessageKey, type TranslateParams } from '../i18n';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -43,80 +55,81 @@ const primaryButtonCls =
 
 interface PiPresetMeta {
   id: PiProviderPreset;
-  label: string;
+  labelKey: MessageKey;
   defaultBaseUrl: string;
   defaultModel: string;
   defaultExtraModels: string;
   keyOptional?: boolean;
-  hint: string;
+  hintKey: MessageKey;
 }
 
 const PI_PRESETS: readonly PiPresetMeta[] = [
   {
     id: 'deepseek',
-    label: 'DeepSeek 官方',
+    labelKey: 'settings.ai.preset.deepseek.label',
     defaultBaseUrl: 'https://api.deepseek.com/v1',
     defaultModel: 'deepseek-v4-flash',
     defaultExtraModels: 'deepseek-v4-pro,deepseek-chat,deepseek-reasoner',
-    hint: '直连 DeepSeek 官方 API，支持 V4 Flash/Pro 与 R1/V3 兼容推理',
+    hintKey: 'settings.ai.preset.deepseek.hint',
   },
   {
     id: 'anthropic',
-    label: 'Claude (Anthropic)',
+    labelKey: 'settings.ai.preset.anthropic.label',
     defaultBaseUrl: 'https://api.anthropic.com',
     defaultModel: 'claude-sonnet-5.5',
     defaultExtraModels: 'claude-opus-5.5,claude-haiku-5.5,claude-3-7-sonnet-20250219',
-    hint: '使用 Anthropic Messages API，支持 Claude 5.5 全系与 3.7 Sonnet 混合推理',
+    hintKey: 'settings.ai.preset.anthropic.hint',
   },
   {
     id: 'openai',
-    label: 'OpenAI',
+    labelKey: 'settings.ai.preset.openai.label',
     defaultBaseUrl: 'https://api.openai.com/v1',
     defaultModel: 'gpt-6.1-sol',
     defaultExtraModels: 'gpt-6-astra,gpt-6-luna,o3-mini,gpt-4.5-preview,gpt-4o',
-    hint: '使用 OpenAI API Key，支持 GPT-6 系列并行智能体与 o3-mini 高速推理',
+    hintKey: 'settings.ai.preset.openai.hint',
   },
   {
     id: 'google',
-    label: 'Google Gemini',
+    labelKey: 'settings.ai.preset.google.label',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     defaultModel: 'gemini-4-argon',
     defaultExtraModels: 'gemini-3.8-flash,gemini-2.5-pro,gemini-2.0-flash',
-    hint: '使用 Google AI Studio Key，支持 Gemini 4 Argon 与 2M+ 超大上下文',
+    hintKey: 'settings.ai.preset.google.hint',
   },
   {
     id: 'custom-openai',
-    label: '企业 / 兼容网关',
+    labelKey: 'settings.ai.preset.customOpenai.label',
     defaultBaseUrl: 'http://127.0.0.1:8000/v1',
     defaultModel: 'deepseek-v4-flash',
     defaultExtraModels: 'claude-sonnet-5.5,gpt-6.1-sol,deepseek-r1',
     keyOptional: true,
-    hint: '对接企业内网 vLLM / OneAPI / LiteLLM 等兼容网关（免密网关可留空 Key）',
+    hintKey: 'settings.ai.preset.customOpenai.hint',
   },
   {
     id: 'ollama',
-    label: 'Ollama 本地',
+    labelKey: 'settings.ai.preset.ollama.label',
     defaultBaseUrl: 'http://127.0.0.1:11434/v1',
     defaultModel: 'qwen3-coder',
     defaultExtraModels: 'qwen3:8b,qwen3.8-27b,deepseek-r1:8b,qwen2.5-coder:7b',
     keyOptional: true,
-    hint: '本地离线免密运行，自动探测本机拉取的 Qwen 3 Coder / DeepSeek R1',
+    hintKey: 'settings.ai.preset.ollama.hint',
   },
   {
     id: 'openrouter',
-    label: 'OpenRouter',
+    labelKey: 'settings.ai.preset.openrouter.label',
     defaultBaseUrl: 'https://openrouter.ai/api/v1',
     defaultModel: 'deepseek/deepseek-v4-flash',
     defaultExtraModels: 'anthropic/claude-sonnet-5.5,openai/gpt-6.1-sol,google/gemini-4-argon',
-    hint: '通过单一 API Key 聚合切换全球各大主流旗舰大模型',
+    hintKey: 'settings.ai.preset.openrouter.hint',
   },
 ];
 
-function aiRuntimeLabel(provider: AiRuntimeProvider): string {
-  return provider === 'pi' ? 'Pi' : '无 AI';
+function aiRuntimeLabelKey(provider: AiRuntimeProvider): MessageKey {
+  return provider === 'pi' ? 'settings.ai.runtimePiName' : 'settings.ai.runtimeNoneName';
 }
 
 export default function AiSettings() {
+  const t = useT();
   const [activeAiRuntime, setActiveAiRuntime] = useState<AiRuntimeProvider>(getAiRuntimeProvider);
   const startupResolution = getAiRuntimeStartupResolution();
   const [selectedAiRuntime, setSelectedAiRuntime] = useState<AiRuntimeProvider>(
@@ -126,12 +139,18 @@ export default function AiSettings() {
   const [piProbe, setPiProbe] = useState<PiRuntimeProbe | null>(null);
   const [piConfig, setPiConfig] = useState<PiConfigView | null>(null);
   const [piProvider, setPiProvider] = useState<PiProviderPreset>('deepseek');
+  const [piApiProtocol, setPiApiProtocol] = useState<PiApiProtocol>('auto');
   const [piBaseUrl, setPiBaseUrl] = useState('https://api.deepseek.com/v1');
   const [piApiKeyInput, setPiApiKeyInput] = useState('');
   const [piDefaultModel, setPiDefaultModel] = useState('deepseek-chat');
   const [piExtraModels, setPiExtraModels] = useState('deepseek-reasoner');
   const [piSaving, setPiSaving] = useState(false);
   const [piProbing, setPiProbing] = useState(false);
+  const [endpointProbing, setEndpointProbing] = useState(false);
+  const [endpointProbeResult, setEndpointProbeResult] = useState<PiEndpointProbeResult | null>(null);
+  const [localGateways, setLocalGateways] = useState<PiLocalGatewayCandidate[]>([]);
+  const [scanningLocalGateways, setScanningLocalGateways] = useState(false);
+  const [showMoreProtocols, setShowMoreProtocols] = useState(false);
 
   const openButlerConversation = useUI((state) => state.openButlerConversation);
 
@@ -142,6 +161,19 @@ export default function AiSettings() {
     });
   }, []);
 
+  const refreshLocalGateways = async () => {
+    if (!isTauri) return;
+    setScanningLocalGateways(true);
+    try {
+      const found = await scanLocalPiGateways();
+      setLocalGateways(found);
+    } catch {
+      // Ignore transient local port scan errors.
+    } finally {
+      setScanningLocalGateways(false);
+    }
+  };
+
   const refreshPiStatus = async () => {
     if (!isTauri) return;
     setPiProbing(true);
@@ -149,6 +181,11 @@ export default function AiSettings() {
       const [cfg, probe] = await Promise.all([readPiConfig(), probePiRuntime()]);
       setPiConfig(cfg);
       setPiProvider(cfg.provider);
+      const nextProto = cfg.apiProtocol ?? 'auto';
+      setPiApiProtocol(nextProto);
+      if (nextProto === 'mistral-conversations' || nextProto === 'bedrock-converse-stream') {
+        setShowMoreProtocols(true);
+      }
       setPiBaseUrl(cfg.baseUrl);
       setPiDefaultModel(cfg.defaultModel);
       setPiExtraModels(cfg.extraModels.join(', '));
@@ -169,20 +206,97 @@ export default function AiSettings() {
   useEffect(() => {
     if (!isTauri) return;
     void refreshPiStatus();
+    void refreshLocalGateways();
   }, []);
 
   const applyPiPreset = (presetId: PiProviderPreset) => {
     const meta = PI_PRESETS.find((item) => item.id === presetId);
     setPiProvider(presetId);
+    setPiApiProtocol('auto');
+    setEndpointProbeResult(null);
     if (!meta) return;
     setPiBaseUrl(meta.defaultBaseUrl);
     setPiDefaultModel(meta.defaultModel);
     setPiExtraModels(meta.defaultExtraModels);
   };
 
+  const applyLocalGateway = (gateway: PiLocalGatewayCandidate) => {
+    const nextProvider: PiProviderPreset = gateway.id === 'ollama' ? 'ollama' : 'custom-openai';
+    setPiProvider(nextProvider);
+    setPiBaseUrl(gateway.baseUrl);
+    setPiApiProtocol(gateway.protocol);
+    setEndpointProbeResult(null);
+    if (gateway.models.length > 0) {
+      const merged = mergeDiscoveredModels(
+        piDefaultModel,
+        piExtraModels,
+        gateway.models,
+        gateway.models[0],
+      );
+      setPiDefaultModel(merged.defaultModel);
+      setPiExtraModels(merged.extraModels);
+    }
+    toast.success(t('settings.ai.localGatewayApplied', { name: gateway.label }));
+  };
+
+  const handleProbeEndpoint = async () => {
+    if (!isTauri) {
+      toast.error(t('settings.ai.piDesktopOnly'));
+      return;
+    }
+    const targetUrl = piBaseUrl.trim() || activePiPresetMeta.defaultBaseUrl;
+    setEndpointProbing(true);
+    try {
+      const result = await probePiEndpoint({
+        baseUrl: targetUrl,
+        apiKey: piApiKeyInput.trim() || undefined,
+        provider: piProvider,
+        apiProtocol: piApiProtocol,
+        preferredModel: piDefaultModel.trim() || undefined,
+      });
+      setEndpointProbeResult(result);
+      if (result.normalizedBaseUrl) {
+        setPiBaseUrl(result.normalizedBaseUrl);
+      }
+      if (result.detectedProtocol) {
+        setPiApiProtocol(result.detectedProtocol);
+        if (
+          result.detectedProtocol === 'mistral-conversations'
+          || result.detectedProtocol === 'bedrock-converse-stream'
+        ) {
+          setShowMoreProtocols(true);
+        }
+      }
+      if (result.discoveredModels.length > 0) {
+        const merged = mergeDiscoveredModels(
+          piDefaultModel,
+          piExtraModels,
+          result.discoveredModels,
+          result.suggestedModel,
+        );
+        setPiDefaultModel(merged.defaultModel);
+        setPiExtraModels(merged.extraModels);
+      }
+      if (result.ok) {
+        toast.success(
+          t('settings.ai.endpointProbeSuccess', {
+            protocol: result.detectedProtocol,
+            count: result.discoveredModels.length,
+          }),
+        );
+      } else {
+        toast.error(result.summary || t('settings.ai.endpointProbeEmpty'));
+      }
+    } catch (error) {
+      toast.error(error, t('settings.ai.endpointProbeFailed'));
+    } finally {
+      setEndpointProbing(false);
+    }
+  };
+
   const savePiConfiguration = async (activateNow: boolean) => {
     if (!isTauri) {
-      toast.error('网页版不支持本地 Pi 进程，请使用 RocketX 桌面端');
+      toast.error(t('settings.ai.piDesktopOnly'));
       return;
     }
     setPiSaving(true);
@@ -194,6 +308,7 @@ export default function AiSettings() {
         .filter(Boolean);
       const saved = await writePiConfig({
         provider: piProvider,
+        apiProtocol: piApiProtocol,
         baseUrl: piBaseUrl.trim(),
         ...(trimmedKey === '-'
           ? { apiKey: '' }
@@ -204,6 +319,8 @@ export default function AiSettings() {
         extraModels,
       });
       setPiConfig(saved);
+      setPiApiProtocol(saved.apiProtocol ?? piApiProtocol);
+      setPiBaseUrl(saved.baseUrl);
       setPiApiKeyInput('');
       try {
         localStorage.setItem(PI_CONFIGURED_STORAGE_KEY, '1');
@@ -220,12 +337,12 @@ export default function AiSettings() {
         setActiveAiRuntime('pi');
         useUI.setState({ aiRuntimeProvider: 'pi' });
         await useCodexWorkspace.getState().reconnectRuntime();
-        toast.success('Pi 配置已保存并立即启用');
+        toast.success(t('settings.ai.piSavedAndEnabled'));
       } else {
-        toast.success('Pi 模型与凭据配置已保存');
+        toast.success(t('settings.ai.piSaved'));
       }
     } catch (error) {
-      toast.error(error, '保存 Pi 配置失败');
+      toast.error(error, t('settings.ai.piSaveFailed'));
     } finally {
       setPiSaving(false);
     }
@@ -234,47 +351,63 @@ export default function AiSettings() {
   const selectAiRuntime = (provider: AiRuntimeProvider): void => {
     setSelectedAiRuntime(persistAiRuntimeProvider(provider));
   };
-  const activeAiRuntimeLabel = aiRuntimeLabel(activeAiRuntime);
+  const activeAiRuntimeLabel = t(aiRuntimeLabelKey(activeAiRuntime));
   const startupModeHint = startupResolution.source === 'automatic'
-    ? '（按本机可用性自动判断）'
+    ? t('settings.ai.startupModeAuto')
     : startupResolution.source === 'full-default'
-      ? '（默认）'
+      ? t('settings.ai.startupModeDefault')
       : '';
   const explicitRuntimeUnavailable = startupResolution.source === 'explicit-unavailable'
     && selectedAiRuntime === startupResolution.configured;
   const activePiPresetMeta = PI_PRESETS.find((item) => item.id === piProvider) ?? PI_PRESETS[0];
+  const localProtocolHint = inferProtocolHintFromInput(piBaseUrl, piApiKeyInput);
+  const activeProtocolMeta = PI_API_PROTOCOL_OPTIONS.find((item) => item.id === piApiProtocol)
+    ?? PI_API_PROTOCOL_OPTIONS[0];
+  const visibleProtocolOptions = showMoreProtocols
+    ? PI_API_PROTOCOL_OPTIONS
+    : PI_API_PROTOCOL_OPTIONS.filter((item) => item.primary || item.id === piApiProtocol);
 
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-ink">AI 运行时</h2>
+        <h2 className="mb-2 text-sm font-semibold text-ink">{t('settings.ai.runtimeHeading')}</h2>
         <div className="rounded-lg bg-surface px-4 shadow-raise">
-          <Row label="执行后端" hint="全局仅内建 Pi 通用引擎，主管家、房间侧栏和 AI 托管共用该选择；本地第三方客户端统一通过 ACP 管理。">
+          <Row label={t('settings.ai.backendLabel')} hint={t('settings.ai.backendHint')}>
             <div className="space-y-2">
               <RadioGroup
                 value={selectedAiRuntime}
                 options={[
                   {
                     key: 'pi',
-                    label: 'Pi（内建通用引擎）',
-                    hint: '原生三栏工作台与统一托管引擎，支持 DeepSeek / 内网网关 / Ollama / OpenAI / Claude',
+                    label: t('settings.ai.runtimePiOptionLabel'),
+                    hint: t('settings.ai.runtimePiOptionHint'),
                   },
-                  { key: 'none', label: '无 AI', hint: '不启动本地 AI；仍可查看已有托管记录' },
+                  {
+                    key: 'none',
+                    label: t('settings.ai.runtimeNoneName'),
+                    hint: t('settings.ai.runtimeNoneOptionHint'),
+                  },
                 ]}
                 onChange={selectAiRuntime}
               />
               <p className="text-xs leading-5 text-ink-3">
-                当前运行：{activeAiRuntimeLabel}{startupModeHint}。修改后重启 RocketX 生效（下方 Pi 配置支持保存后立即启用）。
+                {t('settings.ai.currentRuntimeStatus', {
+                  runtime: activeAiRuntimeLabel,
+                  modeHint: startupModeHint,
+                })}
               </p>
               {explicitRuntimeUnavailable ? (
                 <p className="text-xs font-medium leading-5 text-warning" role="status">
-                  {aiRuntimeLabel(selectedAiRuntime)} 选择已保留，但当前运行时不可用，本次未启用 AI。
-                  {startupResolution.reason ? ` ${startupResolution.reason}` : ''}
-                  {' '}修复后重启 RocketX 即可继续使用。
+                  {t('settings.ai.explicitUnavailable', {
+                    runtime: t(aiRuntimeLabelKey(selectedAiRuntime)),
+                    reason: startupResolution.reason ? ` ${startupResolution.reason}` : '',
+                  })}
                 </p>
               ) : selectedAiRuntime !== activeAiRuntime ? (
                 <p className="text-xs font-medium text-warning" role="status">
-                  已保存，重启后切换为 {aiRuntimeLabel(selectedAiRuntime)}。
+                  {t('settings.ai.pendingRestartSwitch', {
+                    runtime: t(aiRuntimeLabelKey(selectedAiRuntime)),
+                  })}
                 </p>
               ) : null}
             </div>
@@ -284,14 +417,19 @@ export default function AiSettings() {
 
       {selectedAiRuntime === 'pi' || activeAiRuntime === 'pi' ? (
         <section>
-          <h2 className="mb-2 text-sm font-semibold text-ink">Pi 内建通用引擎</h2>
+          <h2 className="mb-2 text-sm font-semibold text-ink">{t('settings.ai.piSectionHeading')}</h2>
           <div className="rounded-lg bg-surface px-4 shadow-raise">
-            <Row label="运行状态" hint="Pi 复用 RocketX 原生三栏工作台、统一看板、受控审批与动态工具桥。">
+            <Row label={t('settings.ai.piStatusLabel')} hint={t('settings.ai.piStatusHint')}>
               <div className="space-y-2 text-sm text-ink-2">
                 <p>
                   {piProbe?.ready
-                    ? `已就绪 · Pi v${piProbe.version ?? '1.5.0'}${piProbe.nodeVersion ? ` · Node ${piProbe.nodeVersion}` : ''}`
-                    : piProbe?.reason || '正在检测本地 Pi 运行时…'}
+                    ? t('settings.ai.piReady', {
+                        version: piProbe.version ?? '1.5.0',
+                        node: piProbe.nodeVersion
+                          ? t('settings.ai.piReadyNode', { version: piProbe.nodeVersion })
+                          : '',
+                      })
+                    : piProbe?.reason || t('settings.ai.piProbing')}
                 </p>
                 {piProbe?.packagePath ? (
                   <p className="break-all font-mono text-xs leading-5 text-ink-3">{piProbe.packagePath}</p>
@@ -303,7 +441,7 @@ export default function AiSettings() {
                     disabled={piProbing}
                     className={secondaryButtonCls}
                   >
-                    {piProbing ? '检测中…' : '重新检测'}
+                    {piProbing ? t('settings.ai.reprobing') : t('settings.ai.reprobe')}
                   </button>
                   {activeAiRuntime === 'pi' ? (
                     <button
@@ -311,50 +449,208 @@ export default function AiSettings() {
                       onClick={() => openButlerConversation()}
                       className={secondaryButtonCls}
                     >
-                      打开 AI 管家开始对话
+                      {t('settings.ai.openButler')}
                     </button>
                   ) : null}
                 </div>
               </div>
             </Row>
 
-            <Row label="服务商预设" hint={activePiPresetMeta.hint}>
-              <div className="flex flex-wrap gap-1.5">
-                {PI_PRESETS.map((preset) => (
+            <Row label={t('settings.ai.providerPresetLabel')} hint={t(activePiPresetMeta.hintKey)}>
+              <div className="space-y-2.5">
+                <div className="flex flex-wrap gap-1.5">
+                  {PI_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyPiPreset(preset.id)}
+                      className={`h-8 rounded-md border px-2.5 text-xs font-medium transition ${
+                        piProvider === preset.id
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-line bg-surface text-ink-2 hover:bg-fill-hover hover:text-ink'
+                      }`}
+                    >
+                      {t(preset.labelKey)}
+                    </button>
+                  ))}
+                </div>
+
+                {localGateways.length > 0 || scanningLocalGateways ? (
+                  <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-surface-2 px-2.5 py-2 text-xs">
+                    <span className="font-medium text-ink-2">
+                      {scanningLocalGateways
+                        ? t('settings.ai.scanningLocalGateways')
+                        : t('settings.ai.localGatewaysFound')}
+                    </span>
+                    {localGateways.map((gw) => (
+                      <button
+                        key={gw.id}
+                        type="button"
+                        onClick={() => applyLocalGateway(gw)}
+                        className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary transition hover:bg-primary/15"
+                        title={`${gw.baseUrl} · ${gw.protocol}`}
+                      >
+                        <span>{gw.label}</span>
+                        <span className="text-ink-3">({gw.protocol})</span>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => void refreshLocalGateways()}
+                      disabled={scanningLocalGateways}
+                      className="ml-auto text-xs text-ink-3 underline-offset-2 hover:text-ink hover:underline disabled:opacity-50"
+                    >
+                      {t('settings.ai.rescanLocalGateways')}
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => void refreshLocalGateways()}
+                      className="text-xs text-ink-3 underline-offset-2 hover:text-ink hover:underline"
+                    >
+                      {t('settings.ai.scanLocalGateways')}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </Row>
+
+            <Row label={t('settings.ai.baseUrlLabel')} hint={t('settings.ai.baseUrlHint')}>
+              <div className="max-w-2xl space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    aria-label={t('settings.ai.baseUrlAriaLabel')}
+                    value={piBaseUrl}
+                    onChange={(event) => {
+                      const snippet = parseConnectionSnippet(event.target.value);
+                      if (snippet) {
+                        setPiProvider('custom-openai');
+                        setPiBaseUrl(snippet.baseUrl);
+                        setPiApiKeyInput(snippet.apiKey);
+                        if (snippet.model) setPiDefaultModel(snippet.model);
+                        return;
+                      }
+                      setPiBaseUrl(event.target.value);
+                    }}
+                    placeholder={activePiPresetMeta.defaultBaseUrl}
+                    className={`${inputCls} flex-1 min-w-60`}
+                  />
                   <button
-                    key={preset.id}
                     type="button"
-                    onClick={() => applyPiPreset(preset.id)}
+                    onClick={() => void handleProbeEndpoint()}
+                    disabled={endpointProbing}
+                    className={secondaryButtonCls}
+                  >
+                    {endpointProbing
+                      ? t('settings.ai.probingEndpoint')
+                      : t('settings.ai.probeEndpoint')}
+                  </button>
+                </div>
+
+                {localProtocolHint.protocol !== 'auto' && piApiProtocol === 'auto' ? (
+                  <p className="text-xs text-ink-3">
+                    {t('settings.ai.instantProtocolHint', { protocol: localProtocolHint.protocol })}
+                  </p>
+                ) : null}
+
+                {endpointProbeResult ? (
+                  <div className="space-y-1.5 rounded-lg border border-line bg-surface-2 px-3 py-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`rounded-full px-2 py-0.5 font-medium ${
+                          endpointProbeResult.ok
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            : 'bg-warning/15 text-warning'
+                        }`}
+                      >
+                        {endpointProbeResult.detectedProtocol}
+                      </span>
+                      <span className="text-ink-3">
+                        {endpointProbeResult.latencyMs}ms
+                      </span>
+                      <span className="text-ink-2">{endpointProbeResult.summary}</span>
+                    </div>
+
+                    {endpointProbeResult.supportedProtocols.length > 1 ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-ink-3">{t('settings.ai.supportedProtocolsLabel')}</span>
+                        {endpointProbeResult.supportedProtocols.map((proto) => (
+                          <button
+                            key={proto}
+                            type="button"
+                            onClick={() => setPiApiProtocol(proto)}
+                            className={`rounded-full border px-2 py-0.5 text-xs transition ${
+                              piApiProtocol === proto
+                                ? 'border-primary bg-primary/10 text-primary'
+                                : 'border-line bg-surface text-ink-2 hover:text-ink'
+                            }`}
+                          >
+                            {proto}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {endpointProbeResult.discoveredModels.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-ink-3">{t('settings.ai.discoveredModelsLabel')}</span>
+                        {endpointProbeResult.discoveredModels.slice(0, 8).map((modelId) => (
+                          <button
+                            key={modelId}
+                            type="button"
+                            onClick={() => setPiDefaultModel(modelId)}
+                            className={`rounded-full border px-2 py-0.5 font-mono text-xs transition ${
+                              piDefaultModel === modelId
+                                ? 'border-primary bg-primary/10 text-primary'
+                                : 'border-line bg-surface text-ink-2 hover:text-ink'
+                            }`}
+                          >
+                            {modelId}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </Row>
+
+            <Row label={t('settings.ai.protocolLabel')} hint={t(activeProtocolMeta.descKey)}>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {visibleProtocolOptions.map((proto) => (
+                  <button
+                    key={proto.id}
+                    type="button"
+                    onClick={() => setPiApiProtocol(proto.id)}
                     className={`h-8 rounded-md border px-2.5 text-xs font-medium transition ${
-                      piProvider === preset.id
+                      piApiProtocol === proto.id
                         ? 'border-primary bg-primary/10 text-primary'
                         : 'border-line bg-surface text-ink-2 hover:bg-fill-hover hover:text-ink'
                     }`}
                   >
-                    {preset.label}
+                    {t(proto.labelKey)}
                   </button>
                 ))}
-              </div>
-            </Row>
-
-            <Row label="接口地址" hint="OpenAI 兼容网关通常以 /v1 结尾；Anthropic 填 https://api.anthropic.com。">
-              <div className="max-w-2xl">
-                <input
-                  aria-label="Pi Base URL"
-                  value={piBaseUrl}
-                  onChange={(event) => setPiBaseUrl(event.target.value)}
-                  placeholder={activePiPresetMeta.defaultBaseUrl}
-                  className={inputCls}
-                />
+                <button
+                  type="button"
+                  onClick={() => setShowMoreProtocols((prev) => !prev)}
+                  className="h-8 rounded-md px-2 text-xs text-ink-3 hover:text-ink"
+                >
+                  {showMoreProtocols
+                    ? t('settings.ai.hideMoreProtocols')
+                    : t('settings.ai.showMoreProtocols')}
+                </button>
               </div>
             </Row>
 
             <Row
-              label="API Key"
+              label={t('settings.ai.apiKeyLabel')}
               hint={
                 activePiPresetMeta.keyOptional
-                  ? '本地 Ollama 或免密内网网关可留空；如需鉴权请填写密钥。'
-                  : '密钥仅保存在本机应用数据目录，不会上传到聊天服务器。'
+                  ? t('settings.ai.apiKeyHintOptional')
+                  : t('settings.ai.apiKeyHintRequired')
               }
             >
               <div className="max-w-2xl space-y-1.5">
@@ -362,38 +658,50 @@ export default function AiSettings() {
                   type="password"
                   aria-label="Pi API Key"
                   value={piApiKeyInput}
-                  onChange={(event) => setPiApiKeyInput(event.target.value)}
+                  onChange={(event) => {
+                    const snippet = parseConnectionSnippet(event.target.value);
+                    if (snippet) {
+                      setPiProvider('custom-openai');
+                      setPiBaseUrl(snippet.baseUrl);
+                      setPiApiKeyInput(snippet.apiKey);
+                      if (snippet.model) setPiDefaultModel(snippet.model);
+                      return;
+                    }
+                    setPiApiKeyInput(event.target.value);
+                  }}
                   placeholder={
                     piConfig?.hasApiKey
-                      ? `已保存密钥（${piConfig.apiKeyHint ?? '••••'}），留空保持不变，输入 - 清空`
+                      ? t('settings.ai.apiKeySavedPlaceholder', { hint: piConfig.apiKeyHint ?? '••••' })
                       : activePiPresetMeta.keyOptional
-                        ? '免密可留空'
+                        ? t('settings.ai.apiKeyOptionalPlaceholder')
                         : 'sk-...'
                   }
                   className={inputCls}
                 />
                 {piConfig?.hasApiKey ? (
                   <p className="text-xs text-ink-3">
-                    当前已保存本机凭据：{piConfig.apiKeyHint ?? '已配置'}
+                    {t('settings.ai.apiKeySavedNote', {
+                      hint: piConfig.apiKeyHint ?? t('settings.ai.apiKeyConfiguredFallback'),
+                    })}
                   </p>
                 ) : null}
               </div>
             </Row>
 
-            <Row label="模型列表" hint="默认模型用于新对话；备选模型可在对话底部模型菜单中随时切换。">
+            <Row label={t('settings.ai.modelsLabel')} hint={t('settings.ai.modelsHint')}>
               <div className="max-w-2xl space-y-2">
                 <input
-                  aria-label="Pi 默认模型"
+                  aria-label={t('settings.ai.defaultModelAriaLabel')}
                   value={piDefaultModel}
                   onChange={(event) => setPiDefaultModel(event.target.value)}
-                  placeholder="默认模型 ID，例如 deepseek-chat"
+                  placeholder={t('settings.ai.defaultModelPlaceholder')}
                   className={inputCls}
                 />
                 <input
-                  aria-label="Pi 备选模型"
+                  aria-label={t('settings.ai.extraModelsAriaLabel')}
                   value={piExtraModels}
                   onChange={(event) => setPiExtraModels(event.target.value)}
-                  placeholder="备选模型 ID（逗号分隔，例如 deepseek-reasoner, qwen-max）"
+                  placeholder={t('settings.ai.extraModelsPlaceholder')}
                   className={inputCls}
                 />
                 <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -403,7 +711,7 @@ export default function AiSettings() {
                     onClick={() => void savePiConfiguration(true)}
                     className={primaryButtonCls}
                   >
-                    {piSaving ? '保存中…' : '保存配置并立即启用 Pi'}
+                    {piSaving ? t('settings.account.saving') : t('settings.ai.saveAndEnablePi')}
                   </button>
                   <button
                     type="button"
@@ -411,15 +719,19 @@ export default function AiSettings() {
                     onClick={() => void savePiConfiguration(false)}
                     className={secondaryButtonCls}
                   >
-                    仅保存配置
+                    {t('settings.ai.saveOnly')}
                   </button>
                 </div>
               </div>
             </Row>
-            <Row label="图片文字识别" hint="增强资源存在时使用 PP-OCRv5，否则使用系统识别。">
+            <Row label={t('settings.ai.ocrLabel')} hint={t('settings.ai.ocrHint')}>
               <div className="space-y-2 text-sm text-ink-2">
                 <p>
-                  {ocrRuntime?.backend ? ocrBackendLabel(ocrRuntime.backend) : '正在检测识别引擎…'}
+                  {ocrRuntime?.backend
+                    ? ocrRuntime.backend === 'pp-ocrv5'
+                      ? t('settings.ai.ocrBackendPp')
+                      : ocrBackendLabel(ocrRuntime.backend)
+                    : t('settings.ai.ocrProbing')}
                   {ocrRuntime?.resourceRoot ? ` · ${ocrRuntime.resourceRoot}` : ''}
                 </p>
                 {ocrRuntime?.reason ? <p className="text-xs leading-5 text-ink-3">{ocrRuntime.reason}</p> : null}
@@ -431,14 +743,14 @@ export default function AiSettings() {
 
       {activeAiRuntime === 'none' ? (
         <section className="rounded-lg bg-surface px-4 py-3 text-sm leading-6 text-ink-2 shadow-raise">
-          当前启动未启用 AI。聊天、工作台和普通协作能力保持可用。
+          {t('settings.ai.noneNotice')}
         </section>
       ) : null}
 
       <AcpClientsSettingsSection />
 
       {activeAiRuntime !== 'none' ? <section>
-        <h2 className="mb-2 text-sm font-semibold text-ink">外部集成</h2>
+        <h2 className="mb-2 text-sm font-semibold text-ink">{t('settings.ai.externalIntegrations')}</h2>
         <div className="space-y-6 rounded-lg bg-surface p-4 shadow-raise">
           <ReverseMcpSettings />
           <AgentBotSettings />
@@ -448,7 +760,10 @@ export default function AiSettings() {
   );
 }
 
+type AcpNotice = { key: MessageKey; params?: TranslateParams } | { raw: string };
+
 function AcpClientsSettingsSection() {
+  const { t, tp } = useI18n();
   const agents = useAcpAgents((s) => s.agents);
   const discovered = useAcpAgents((s) => s.discovered);
   const probes = useAcpAgents((s) => s.probes);
@@ -472,7 +787,7 @@ function AcpClientsSettingsSection() {
   const [autoApproveSafeReads, setAutoApproveSafeReads] = useState(true);
   const [saving, setSaving] = useState(false);
   const [adoptingAll, setAdoptingAll] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<AcpNotice | null>(null);
 
   const unadoptedCount = discovered.filter((c) => !c.alreadyRegistered).length;
 
@@ -481,10 +796,10 @@ function AcpClientsSettingsSection() {
   }, [hydrate]);
 
   const startPresetAdd = (targetPreset: AcpAgentPreset) => {
-    const tpl = ACP_PRESET_TEMPLATES.find((t) => t.preset === targetPreset);
+    const tpl = ACP_PRESET_TEMPLATES.find((item) => item.preset === targetPreset);
     setEditingId(null);
     setPreset(targetPreset);
-    setName(tpl?.name || '自定义 ACP 客户端');
+    setName(tpl?.name || t('settings.ai.acp.customNameFallback'));
     setCommand(tpl?.command || '');
     setArgsText((tpl?.args || []).join(' '));
     setCwd('');
@@ -509,7 +824,7 @@ function AcpClientsSettingsSection() {
 
   const handleSave = async () => {
     if (!name.trim() || !command.trim()) {
-      setNotice('请填写客户端名称与启动命令。');
+      setNotice({ key: 'settings.ai.acp.missingNameOrCommand' });
       return;
     }
     setSaving(true);
@@ -532,9 +847,9 @@ function AcpClientsSettingsSection() {
       });
       setEditorOpen(false);
       setEditingId(null);
-      setNotice(`已保存 ACP 客户端：${saved.name}`);
+      setNotice({ key: 'settings.ai.acp.savedNotice', params: { name: saved.name } });
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
+      setNotice({ raw: err instanceof Error ? err.message : String(err) });
     } finally {
       setSaving(false);
     }
@@ -551,12 +866,12 @@ function AcpClientsSettingsSection() {
         enabled: true,
         autoApproveSafeReads: true,
         description: cand.version
-          ? `自动探测发现 (${cand.version})`
-          : '自动探测发现的本地 ACP 客户端',
+          ? t('settings.ai.acp.discoveredWithVersion', { version: cand.version })
+          : t('settings.ai.acp.discoveredDefault'),
       });
-      setNotice(`已接入本地 ACP 客户端：${saved.name}`);
+      setNotice({ key: 'settings.ai.acp.adoptedNotice', params: { name: saved.name } });
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
+      setNotice({ raw: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -567,23 +882,32 @@ function AcpClientsSettingsSection() {
       const added = await adoptAllDiscoveredAgents();
       setNotice(
         added.length > 0
-          ? `已一键接入 ${added.length} 个本地 ACP 客户端。`
-          : '所有探测到的本地客户端均已注册。',
+          ? {
+              raw: tp(
+                added.length,
+                'settings.ai.acp.adoptedAllOne',
+                'settings.ai.acp.adoptedAllOther',
+                { count: added.length },
+              ),
+            }
+          : { key: 'settings.ai.acp.allAlreadyRegistered' },
       );
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err));
+      setNotice({ raw: err instanceof Error ? err.message : String(err) });
     } finally {
       setAdoptingAll(false);
     }
   };
 
+  const noticeText = notice ? ('raw' in notice ? notice.raw : t(notice.key, notice.params)) : null;
+
   return (
     <section>
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold text-ink">ACP 本地 Agent 客户端管理</h2>
+          <h2 className="text-sm font-semibold text-ink">{t('settings.ai.acp.heading')}</h2>
           <p className="text-xs text-ink-3">
-            自动识别或接入本地 Codex、Antigravity、Claude Code、Kimi Code、Copilot、Gemini CLI 与 DSH，并在 ACP 工作台协同执行
+            {t('settings.ai.acp.subheading')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -593,7 +917,7 @@ function AcpClientsSettingsSection() {
             onClick={() => void discoverLocalAgents()}
             className="rounded-lg border border-line bg-surface-4 px-2.5 py-1 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover disabled:opacity-50"
           >
-            {discovering ? '扫描中...' : '重新扫描本机'}
+            {discovering ? t('settings.ai.acp.scanning') : t('settings.ai.acp.rescan')}
           </button>
           {unadoptedCount > 0 ? (
             <button
@@ -602,7 +926,7 @@ function AcpClientsSettingsSection() {
               onClick={() => void handleAdoptAll()}
               className="rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
             >
-              {adoptingAll ? '接入中...' : `全部接入 (${unadoptedCount})`}
+              {adoptingAll ? t('settings.ai.acp.adopting') : t('settings.ai.acp.adoptAll', { count: unadoptedCount })}
             </button>
           ) : null}
           <button
@@ -610,22 +934,22 @@ function AcpClientsSettingsSection() {
             onClick={() => startPresetAdd('codex-acp')}
             className="rounded-lg border border-line bg-surface-4 px-2.5 py-1 text-xs font-medium text-ink shadow-raise transition hover:bg-fill-hover"
           >
-            新增客户端
+            {t('settings.ai.acp.addClient')}
           </button>
         </div>
       </div>
 
       <div className="space-y-4 rounded-2xl border border-line bg-surface-4 p-4 shadow-raise">
-        {notice ? (
+        {noticeText ? (
           <div className="rounded-xl border border-line bg-surface-2 px-3 py-2 text-xs text-ink-2">
-            {notice}
+            {noticeText}
           </div>
         ) : null}
 
         {discovered.length > 0 ? (
           <div className="space-y-2 rounded-xl border border-primary/25 bg-primary/5 p-3">
             <div className="flex items-center justify-between gap-2 text-xs font-medium text-ink">
-              <span>探测到的本地 ACP 客户端 ({discovered.length})</span>
+              <span>{t('settings.ai.acp.discoveredHeader', { count: discovered.length })}</span>
               {unadoptedCount > 0 ? (
                 <button
                   type="button"
@@ -633,7 +957,7 @@ function AcpClientsSettingsSection() {
                   onClick={() => void handleAdoptAll()}
                   className="text-primary hover:underline disabled:opacity-50"
                 >
-                  全部接入 ({unadoptedCount})
+                  {t('settings.ai.acp.adoptAll', { count: unadoptedCount })}
                 </button>
               ) : null}
             </div>
@@ -651,7 +975,7 @@ function AcpClientsSettingsSection() {
                   </div>
                   {cand.alreadyRegistered ? (
                     <span className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300">
-                      已注册
+                      {t('settings.ai.acp.alreadyRegistered')}
                     </span>
                   ) : (
                     <button
@@ -659,7 +983,7 @@ function AcpClientsSettingsSection() {
                       onClick={() => void handleAdopt(cand)}
                       className="shrink-0 rounded bg-primary px-2 py-1 text-xs font-medium text-white hover:bg-primary-hover"
                     >
-                      接入
+                      {t('settings.ai.acp.adopt')}
                     </button>
                   )}
                 </div>
@@ -672,7 +996,7 @@ function AcpClientsSettingsSection() {
           <div className="space-y-2.5 rounded-lg border border-line bg-surface-2 p-3 text-xs">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-ink">
-                {editingId ? '编辑 ACP 客户端' : '添加 ACP 客户端'}
+                {editingId ? t('settings.ai.acp.editTitle') : t('settings.ai.acp.addTitle')}
               </span>
               <button
                 type="button"
@@ -682,7 +1006,7 @@ function AcpClientsSettingsSection() {
                 }}
                 className="text-xs text-ink-3 hover:text-ink"
               >
-                取消
+                {t('common.cancel')}
               </button>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -714,32 +1038,32 @@ function AcpClientsSettingsSection() {
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="显示名称"
+                placeholder={t('settings.ai.acp.namePlaceholder')}
                 className="rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink outline-none focus:border-primary"
               />
               <input
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
-                placeholder="可执行命令或路径"
+                placeholder={t('settings.ai.acp.commandPlaceholder')}
                 className="rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-xs text-ink outline-none focus:border-primary"
               />
               <input
                 value={argsText}
                 onChange={(e) => setArgsText(e.target.value)}
-                placeholder="启动参数（空格分隔）"
+                placeholder={t('settings.ai.acp.argsPlaceholder')}
                 className="rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-xs text-ink outline-none focus:border-primary"
               />
               <input
                 value={cwd}
                 onChange={(e) => setCwd(e.target.value)}
-                placeholder="默认工作目录（可选）"
+                placeholder={t('settings.ai.acp.cwdPlaceholder')}
                 className="rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink outline-none focus:border-primary"
               />
             </div>
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="客户端描述（可选）"
+              placeholder={t('settings.ai.acp.descPlaceholder')}
               className="w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-xs text-ink outline-none focus:border-primary"
             />
             <div className="flex items-center justify-between gap-2">
@@ -749,7 +1073,7 @@ function AcpClientsSettingsSection() {
                   checked={autoApproveSafeReads}
                   onChange={(e) => setAutoApproveSafeReads(e.target.checked)}
                 />
-                自主模式下自动放行安全只读操作
+                {t('settings.ai.acp.autoApproveSafeReads')}
               </label>
               <button
                 type="button"
@@ -757,7 +1081,7 @@ function AcpClientsSettingsSection() {
                 onClick={() => void handleSave()}
                 className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-50"
               >
-                {saving ? '保存中...' : '保存配置'}
+                {saving ? t('settings.ai.acp.saving') : t('settings.ai.acp.saveConfig')}
               </button>
             </div>
           </div>
@@ -765,7 +1089,7 @@ function AcpClientsSettingsSection() {
 
         {agents.length === 0 ? (
           <div className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-ink-3">
-            尚未注册本地 ACP 客户端。可点击上方「自动探测本地客户端」或选择预设模板添加。
+            {t('settings.ai.acp.emptyState')}
           </div>
         ) : (
           <div className="space-y-2">
@@ -791,8 +1115,10 @@ function AcpClientsSettingsSection() {
                           }`}
                         >
                           {probe.ready
-                            ? `可用 ${probe.version ? `(${probe.version})` : ''}`
-                            : probe.reason || '不可用'}
+                            ? probe.version
+                              ? t('settings.ai.acp.readyWithVersion', { version: probe.version })
+                              : t('settings.ai.acp.ready')
+                            : probe.reason || t('settings.ai.acp.unavailable')}
                         </span>
                       ) : null}
                     </div>
@@ -806,28 +1132,28 @@ function AcpClientsSettingsSection() {
                       onClick={() => void probeAgent(agent.id)}
                       className="rounded border border-line bg-surface px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
                     >
-                      探测
+                      {t('settings.ai.acp.probeAction')}
                     </button>
                     <button
                       type="button"
                       onClick={() => openAcpHub(agent.id)}
                       className="rounded bg-primary/15 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/25"
                     >
-                      在工作台打开
+                      {t('settings.ai.acp.openHub')}
                     </button>
                     <button
                       type="button"
                       onClick={() => startEdit(agent)}
                       className="rounded border border-line bg-surface px-2 py-1 text-xs text-ink-2 hover:bg-fill-hover"
                     >
-                      编辑
+                      {t('common.edit')}
                     </button>
                     <button
                       type="button"
                       onClick={() => void removeAgent(agent.id)}
                       className="rounded border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-xs text-rose-700 hover:bg-rose-500/20 dark:text-rose-300"
                     >
-                      移除
+                      {t('settings.ai.acp.removeAction')}
                     </button>
                   </div>
                 </div>

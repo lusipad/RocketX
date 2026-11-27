@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 test('图片下载：title_link 为空时用 image_url 填充灯箱下载路径（issue #324）', () => {
   const messageItem = readFileSync('apps/web/src/components/MessageItem.tsx', 'utf8');
@@ -9,8 +11,12 @@ test('图片下载：title_link 为空时用 image_url 填充灯箱下载路径�
   assert.match(messageItem, /fullPath=\{att\.title_link \|\| att\.image_url\}/);
   assert.match(
     lightbox,
-    /const onDownload = async \(\) => \{\s*if \(!path\.trim\(\)\) \{\s*toast\.error\('下载链接缺失', '下载失败'\);\s*return;\s*\}/,
+    /const onDownload = async \(\) => \{\s*if \(!path\.trim\(\)\) \{\s*toast\.error\(t\('chat\.lightbox\.missingUrl'\), t\('chat\.preview\.downloadFailed'\)\);\s*return;\s*\}/,
   );
+  assert.equal(zhCN['chat.lightbox.missingUrl'], '下载链接缺失');
+  assert.equal(zhCN['chat.preview.downloadFailed'], '下载失败');
+  assert.ok(enUS['chat.lightbox.missingUrl'].length > 0);
+  assert.ok(enUS['chat.preview.downloadFailed'].length > 0);
   assert.match(lightbox, /onClick=\{\(\) => void onDownload\(\)\}/);
 });
 

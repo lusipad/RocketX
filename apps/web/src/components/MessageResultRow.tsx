@@ -4,6 +4,7 @@ import { fmtConvTime } from '../lib/format';
 import { highlightText } from '../lib/highlight';
 import Avatar from './Avatar';
 import { stripAgentSessionMarker } from '../agent/card';
+import { useT } from '../i18n';
 
 /**
  * 搜索 / 置顶 / 标记面板的消息条目：点击跳转到该消息并高亮。
@@ -19,15 +20,16 @@ export default function MessageResultRow({
   /** 命中的关键词，会被标黄 */
   highlight?: string;
 }) {
+  const t = useT();
   const jumpToMessage = useChat((s) => s.jumpToMessage);
-  const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')) || message.attachments?.[0]?.title || '[卡片消息]';
+  const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')) || message.attachments?.[0]?.title || t('chat.projection.cardMessage');
 
   return (
     <div className="group relative mb-2 rounded-lg border border-line transition hover:border-primary">
       <button
         onClick={() => void jumpToMessage(message._id, message.rid)}
         className="w-full p-3 text-left"
-        title="点击跳转到该消息"
+        title={t('chat.messageResult.jumpTooltip')}
       >
         <div className="flex items-center gap-2">
           <Avatar name={message.u.name || message.u.username} username={message.u.username} size={24} />

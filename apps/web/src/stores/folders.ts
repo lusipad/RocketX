@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t, type MessageKey } from '../i18n';
 
 /**
  * 自定义分组（会话文件夹）。
@@ -49,10 +50,20 @@ export function inFolder(folder: Folder, conv: { rid: string; name: string }): b
   return (folder.rules ?? []).some((r) => ruleMatches(r, conv.name));
 }
 
+export const RULE_LABEL_KEYS: Record<RuleMode, MessageKey> = {
+  prefix: 'nav.folderRule.prefix',
+  contains: 'nav.folderRule.contains',
+  regex: 'nav.folderRule.regex',
+};
+
+export function getFolderRuleLabel(mode: RuleMode): string {
+  return t(RULE_LABEL_KEYS[mode]);
+}
+
 export const RULE_LABELS: Record<RuleMode, string> = {
-  prefix: '名称以…开头',
-  contains: '名称包含…',
-  regex: '正则匹配',
+  get prefix() { return t(RULE_LABEL_KEYS.prefix); },
+  get contains() { return t(RULE_LABEL_KEYS.contains); },
+  get regex() { return t(RULE_LABEL_KEYS.regex); },
 };
 
 const KEY = 'rcx-folders';
@@ -116,7 +127,7 @@ export const useFolders = create<FoldersState>((set, get) => ({
 
   create: (name) => {
     const id = `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-    const folders = [...get().folders, { id, name: name.trim() || '新分组', rids: [] }];
+    const folders = [...get().folders, { id, name: name.trim() || t('nav.folder.defaultName'), rids: [] }];
     set({ folders });
     persist(folders);
     return id;

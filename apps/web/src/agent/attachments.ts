@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { RcMessage } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { getServerBase, normalizeAssetPath, rest } from '../lib/client';
 import type { CodexImageInput } from '../lib/codexImages';
 import { collectAgentAttachmentSources } from './context';
@@ -68,7 +69,7 @@ async function writeAgentAttachment(
 
 function dataUrlBytes(dataUrl: string): Uint8Array {
   const match = /^data:[^;,]+;base64,(.+)$/s.exec(dataUrl);
-  if (!match) throw new Error('图片内容不是有效的 data URL');
+  if (!match) throw new Error(t('agent.attachments.invalidImageDataUrl'));
   const binary = atob(match[1]);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
@@ -112,13 +113,13 @@ export async function materializeAgentAttachments(
   for (const [index, source] of sources.entries()) {
     const path = agentAttachmentServerPath(source.path);
     if (!path) {
-      warnings.push(`附件 ${source.name} 不属于当前 Rocket.Chat 服务器，未自动读取`);
+      warnings.push(t('agent.attachments.wrongServer', { name: source.name }));
       continue;
     }
     try {
       const blob = await rest.fetchFile(path);
       if (blob.size > MAX_ATTACHMENT_BYTES || totalBytes + blob.size > MAX_TOTAL_BYTES) {
-        warnings.push(`附件 ${source.name} 超过 Agent 上下文大小限制，未读取`);
+        warnings.push(t('agent.attachments.tooLarge', { name: source.name }));
         continue;
       }
       const relativePath = `${safeSegment(source.messageId, 'message')}/${index + 1}-${safeSegment(source.name, 'attachment')}`;
@@ -130,7 +131,7 @@ export async function materializeAgentAttachments(
       totalBytes += blob.size;
     } catch (error) {
       warnings.push(
-        `附件 ${source.name} 读取失败：${error instanceof Error ? error.message : String(error)}`,
+        t('agent.attachments.readFailed', { name: source.name, error: error instanceof Error ? error.message : String(error) }),
       );
     }
   }

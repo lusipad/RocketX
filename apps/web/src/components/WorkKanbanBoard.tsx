@@ -43,11 +43,15 @@ import WorkSessionImport from './WorkSessionImport';
 import WorkSessionHistoryPreview from './WorkSessionHistoryPreview';
 import NativeWorkCardControls, { canAnswerWorkDecision } from './NativeWorkCardControls';
 import { findWorkResultReply, pendingInvestigation, unresolvedWorkDelivery } from '../lib/nativeWorkResult';
+import { t as rawT, useI18n, type MessageKey, type ResolvedLocale } from '../i18n';
+import { compareLocaleText, formatDate, formatDateTime } from '../i18n/format';
 
 export const WORK_KANBAN_STAGES: {
   key: WorkCardStage;
-  label: string;
-  tagline: string;
+  labelKey: MessageKey;
+  taglineKey: MessageKey;
+  readonly label: string;
+  readonly tagline: string;
   accent: string;
   dotClass: string;
   borderAccent: string;
@@ -55,8 +59,10 @@ export const WORK_KANBAN_STAGES: {
 }[] = [
   {
     key: 'triage',
-    label: '待整理',
-    tagline: '捕获想法与未分拣任务',
+    labelKey: 'agent.kanban.stage.triage',
+    taglineKey: 'agent.kanban.stage.triageTagline',
+    get label() { return rawT(this.labelKey); },
+    get tagline() { return rawT(this.taglineKey); },
     accent: 'text-purple-700 dark:text-purple-300',
     dotClass: 'bg-purple-500',
     borderAccent: 'border-purple-500/30',
@@ -64,8 +70,10 @@ export const WORK_KANBAN_STAGES: {
   },
   {
     key: 'ready',
-    label: '可执行',
-    tagline: '已记录，打开查看目标与下一步',
+    labelKey: 'agent.kanban.stage.ready',
+    taglineKey: 'agent.kanban.stage.readyTagline',
+    get label() { return rawT(this.labelKey); },
+    get tagline() { return rawT(this.taglineKey); },
     accent: 'text-blue-700 dark:text-blue-300',
     dotClass: 'bg-blue-500',
     borderAccent: 'border-blue-500/30',
@@ -73,8 +81,10 @@ export const WORK_KANBAN_STAGES: {
   },
   {
     key: 'in_progress',
-    label: '执行中',
-    tagline: '查看当前执行记录与进展',
+    labelKey: 'agent.kanban.stage.in_progress',
+    taglineKey: 'agent.kanban.stage.in_progressTagline',
+    get label() { return rawT(this.labelKey); },
+    get tagline() { return rawT(this.taglineKey); },
     accent: 'text-amber-700 dark:text-amber-300',
     dotClass: 'bg-amber-500',
     borderAccent: 'border-amber-500/30',
@@ -82,8 +92,10 @@ export const WORK_KANBAN_STAGES: {
   },
   {
     key: 'verifying',
-    label: '待验证',
-    tagline: '等待测试与证据核实',
+    labelKey: 'agent.kanban.stage.verifying',
+    taglineKey: 'agent.kanban.stage.verifyingTagline',
+    get label() { return rawT(this.labelKey); },
+    get tagline() { return rawT(this.taglineKey); },
     accent: 'text-cyan-700 dark:text-cyan-300',
     dotClass: 'bg-cyan-500',
     borderAccent: 'border-cyan-500/30',
@@ -91,8 +103,10 @@ export const WORK_KANBAN_STAGES: {
   },
   {
     key: 'done',
-    label: '已完成',
-    tagline: '历史标记已完成，验证情况见工作详情',
+    labelKey: 'agent.kanban.stage.done',
+    taglineKey: 'agent.kanban.stage.doneTagline',
+    get label() { return rawT(this.labelKey); },
+    get tagline() { return rawT(this.taglineKey); },
     accent: 'text-emerald-700 dark:text-emerald-300',
     dotClass: 'bg-emerald-500',
     borderAccent: 'border-emerald-500/30',
@@ -102,94 +116,103 @@ export const WORK_KANBAN_STAGES: {
 
 export const WAIT_STATE_LABELS: Record<
   WorkCardWaitState,
-  { label: string; badgeClass: string }
+  { labelKey: MessageKey; readonly label: string; badgeClass: string }
 > = {
-  none: { label: '无待处理事项', badgeClass: 'bg-fill-2 text-ink-3' },
-  waiting_input: { label: '需输入', badgeClass: 'bg-warning/15 text-warning font-medium' },
+  none: { labelKey: 'agent.kanban.wait.none', get label() { return rawT(this.labelKey); }, badgeClass: 'bg-fill-2 text-ink-3' },
+  waiting_input: { labelKey: 'agent.kanban.wait.waiting_input', get label() { return rawT(this.labelKey); }, badgeClass: 'bg-warning/15 text-warning font-medium' },
   waiting_approval: {
-    label: '需确认',
+    labelKey: 'agent.kanban.wait.waiting_approval',
+    get label() { return rawT(this.labelKey); },
     badgeClass: 'bg-warning/15 text-warning font-medium',
   },
   waiting_external: {
-    label: '等外部',
+    labelKey: 'agent.kanban.wait.waiting_external',
+    get label() { return rawT(this.labelKey); },
     badgeClass: 'bg-primary/15 text-primary font-medium',
   },
-  blocked: { label: '阻塞', badgeClass: 'bg-danger/15 text-danger font-medium' },
-  paused: { label: '已暂停', badgeClass: 'bg-fill-3 text-ink-3 font-medium' },
-  canceled: { label: '已取消', badgeClass: 'bg-fill-3 text-ink-4 line-through' },
+  blocked: { labelKey: 'agent.kanban.wait.blocked', get label() { return rawT(this.labelKey); }, badgeClass: 'bg-danger/15 text-danger font-medium' },
+  paused: { labelKey: 'agent.kanban.wait.paused', get label() { return rawT(this.labelKey); }, badgeClass: 'bg-fill-3 text-ink-3 font-medium' },
+  canceled: { labelKey: 'agent.kanban.wait.canceled', get label() { return rawT(this.labelKey); }, badgeClass: 'bg-fill-3 text-ink-4 line-through' },
 };
 
 export const AUTONOMY_MODE_LABELS: Record<WorkCardAutonomyMode, string> = {
-  readonly: '观察',
-  confirm: '建议确认',
-  autonomous: '受控自动',
+  get readonly() { return rawT('agent.kanban.autonomy.readonly'); },
+  get confirm() { return rawT('agent.kanban.autonomy.confirm'); },
+  get autonomous() { return rawT('agent.kanban.autonomy.autonomous'); },
 };
 
 export const SESSION_CONTROL_BADGES: Record<
   WorkSessionControlMode,
-  { label: string; className: string }
+  { labelKey: MessageKey; readonly label: string; className: string }
 > = {
   controllable: {
-    label: '实时控制',
+    labelKey: 'agent.kanban.control.controllable',
+    get label() { return rawT(this.labelKey); },
     className: 'bg-success/15 text-success border border-success/30',
   },
   resumable: {
-    label: '可恢复',
+    labelKey: 'agent.kanban.control.resumable',
+    get label() { return rawT(this.labelKey); },
     className: 'bg-primary/15 text-primary border border-primary/30',
   },
   readonly: {
-    label: '只读',
+    labelKey: 'agent.kanban.control.readonly',
+    get label() { return rawT(this.labelKey); },
     className: 'bg-fill-3 text-ink-3 border border-line',
   },
 };
 
-function formatSessionRelativeTime(ts: number): string {
+function formatSessionRelativeTime(ts: number, locale: ResolvedLocale, tFn: typeof rawT = rawT): string {
   if (!ts || !Number.isFinite(ts)) return '';
   const diffMs = Math.max(0, Date.now() - ts);
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 2) return '刚刚';
-  if (mins < 60) return `${mins} 分钟前`;
+  if (mins < 2) return tFn('agent.kanban.time.justNow');
+  if (mins < 60) return tFn('agent.kanban.time.minsAgo', { count: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return tFn('agent.kanban.time.hoursAgo', { count: hours });
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Date(ts).toLocaleDateString();
+  if (days < 30) return tFn('agent.kanban.time.daysAgo', { count: days });
+  return formatDate(ts, undefined, locale);
 }
 
-function shortWorkspaceName(workspaceRoot: string): string {
+function shortWorkspaceName(workspaceRoot: string, tFn: typeof rawT = rawT): string {
   const clean = workspaceRoot.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!clean) return '未知工作区';
+  if (!clean) return tFn('agent.kanban.unknownWorkspace');
   const parts = clean.split('/');
   return parts[parts.length - 1] || clean;
 }
 
 const WORK_GROUPS = [
-  { key: 'saved', label: '待开始' },
-  { key: 'active', label: '正在推进' },
-  { key: 'attention', label: '需要你' },
-  { key: 'results', label: '结果待看' },
-  { key: 'stopped', label: '已停止' },
+  { key: 'saved', labelKey: 'agent.kanban.group.saved' },
+  { key: 'active', labelKey: 'agent.kanban.group.active' },
+  { key: 'attention', labelKey: 'agent.kanban.group.attention' },
+  { key: 'results', labelKey: 'agent.kanban.group.results' },
+  { key: 'stopped', labelKey: 'agent.kanban.group.stopped' },
 ] as const;
 
 type WorkGroup = typeof WORK_GROUPS[number]['key'] | 'history';
 
-const pendingDescriptions: Record<string, string> = {
-  rc_report: '查看待发送的工作汇报', ado_state_write: '核对工作项的状态更新', ado_comment: '核对待发布的工作项评论',
+const PENDING_DESCRIPTION_KEYS: Record<string, MessageKey> = {
+  rc_report: 'agent.kanban.pending.rc_report',
+  ado_state_write: 'agent.kanban.pending.ado_state_write',
+  ado_comment: 'agent.kanban.pending.ado_comment',
 };
-const issueDescriptions: Record<string, string> = {
-  waiting_input: '原会话正在等你补充信息', waiting_approval: '原会话有待确认的操作', error: '原会话报告执行错误',
+const ISSUE_DESCRIPTION_KEYS: Record<string, MessageKey> = {
+  waiting_input: 'agent.kanban.issue.waiting_input',
+  waiting_approval: 'agent.kanban.issue.waiting_approval',
+  error: 'agent.kanban.issue.error',
 };
 
-function decisionHeadline(decision: NativeWorkDecision): string {
+function decisionHeadline(decision: NativeWorkDecision, tFn: typeof rawT = rawT): string {
   const params = decision.params as { questions?: Array<{ question?: string }>; reason?: string; command?: string } | null;
   if (decision.method === 'item/tool/requestUserInput') {
     const first = Array.isArray(params?.questions) ? params.questions[0]?.question : null;
-    return typeof first === 'string' && first.trim() ? first : '执行者有一个问题需要你回答';
+    return typeof first === 'string' && first.trim() ? first : tFn('agent.kanban.decision.userQuestionFallback');
   }
   if (typeof params?.reason === 'string' && params.reason.trim()) return params.reason;
-  if (typeof params?.command === 'string' && params.command.trim()) return `请求运行 ${params.command}`;
-  if (decision.method === 'item/fileChange/requestApproval') return '执行者请求修改项目文件';
-  return '执行者有一项请求需要核对';
+  if (typeof params?.command === 'string' && params.command.trim()) return tFn('agent.kanban.decision.runCommand', { command: params.command });
+  if (decision.method === 'item/fileChange/requestApproval') return tFn('agent.kanban.decision.fileChange');
+  return tFn('agent.kanban.decision.fallback');
 }
 
 function nativeObservationKey(card: NativeWorkCard, session: NativeWorkSessionRecord, eventVersion: number): string {
@@ -201,6 +224,7 @@ function nativeObservationKey(card: NativeWorkCard, session: NativeWorkSessionRe
 type WorkEntry = { id: string; target?: 'evidence' | 'reply'; turnId?: string; sessionId?: string };
 
 export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEntry | null } = {}) {
+  const { t, locale } = useI18n();
   const { cards, sessions, links, evidences, actions, loading, hydrated, lastError, hydrate } = useWorkLedger();
   const butlerSidebarCollapsed = useUI((state) => state.butlerSidebarCollapsed);
   const toggleButlerSidebarCollapsed = useUI((state) => state.toggleButlerSidebarCollapsed);
@@ -313,7 +337,7 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
       && accountScope === resolveButlerAccountScope() && runtimeScope === useCodexWorkspace.getState().scope;
     setChoosingDirectory(true);
     try {
-      const directory = await openDesktopDialog({ directory: true, multiple: false, title: '选择工作目录' });
+      const directory = await openDesktopDialog({ directory: true, multiple: false, title: t('agent.kanban.pickWorkspaceTitle') });
       if (!isCurrent()) return;
       assertAccount();
       if (typeof directory === 'string' && directory.trim()) { setNewWorkspace(directory); setCreateError(null); }
@@ -420,7 +444,7 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
       if (current) unlisten = stop;
       else void Promise.resolve(stop()).catch(() => {});
     }).catch((error) => {
-      if (current) setSessionSyncError(`后台工作状态监听失败：${error instanceof Error ? error.message : String(error)}`);
+      if (current) setSessionSyncError(t('agent.kanban.backgroundListenerFailed', { error: error instanceof Error ? error.message : String(error) }));
     });
     return () => {
       current = false; epoch += 1; deferred = null;
@@ -489,7 +513,7 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
     const startTrial = cardSessions.length === 0 ? startTrials[startKey] : undefined;
     const opening = Boolean(startTrial && isWorkStartPending(startKey));
     const startIssue = startTrial && !opening
-      ? startTrial.notStarted ? '调查尚未开始，请核对项目或执行配置' : '开工回执待核对' : null;
+      ? startTrial.notStarted ? t('agent.kanban.startNotStarted') : t('agent.kanban.startPendingReceipt') : null;
     let nativeProfile: string | null = null;
     try {
       const config = JSON.parse(session?.configSnapshotJson ?? '{}');
@@ -532,23 +556,27 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
     }
     const boundRoot = links.find((link) => link.todoId === card.id && link.kind === 'kanban_card' && link.stateSnapshot === 'workspace')?.repo;
     const roots = [...new Set([...cardSessions.map((item) => item.workspaceRoot), boundRoot].filter((value): value is string => Boolean(value)))];
-    const project = card.state.projectKey || card.adoProject || (roots.length === 1 ? shortWorkspaceName(roots[0]) : roots.length > 1 ? '多个项目' : '个人工作');
-    const source = [...new Set(cardSessions.map((session) => parseWorkSessionProviderMeta(session).label))].join(' / ')
-      || (card.adoWorkItemId ? 'ADO' : card.source === 'message' ? '讨论消息' : '手动记录');
+    const project = card.state.projectKey || card.adoProject || (roots.length === 1 ? shortWorkspaceName(roots[0], t) : roots.length > 1 ? t('agent.kanban.projectMultiple') : t('agent.kanban.projectPersonal'));
+    const sessionSourceLabels = [...new Set(cardSessions.map((session) => parseWorkSessionProviderMeta(session).label))].join(' / ');
+    const hasDisplaySource = Boolean(sessionSourceLabels || card.adoWorkItemId || card.source === 'message');
+    const source = sessionSourceLabels
+      || (card.adoWorkItemId ? 'ADO' : card.source === 'message' ? t('agent.kanban.sourceMessage') : t('agent.kanban.sourceManual'));
     const summary = snapshot?.messages.filter((message) => message.role === 'assistant').at(-1)?.text
       || cardSessions.map((session) => parseWorkSessionProviderMeta(session).preview)
       .find((preview) => preview?.trim() && preview.trim() !== card.title.trim() && preview.trim() !== card.state.goal?.trim());
     const updatedAt = Math.max(card.updatedAt || card.createdAt, ...cardSessions.map((session) => session.updatedAt));
     const decision = snapshot?.decisions.find(item => canAnswerWorkDecision(snapshot, card, item));
-    const reason = startIssue || (uncertain ? '上次操作的送达结果待核对' : null) || snapshot?.error
-      || (snapshot?.decisions.some(item => item.state === 'unknown') ? '上次答复是否送达仍待核对' : null)
-      || (decision ? decisionHeadline(decision) : null)
-      || (snapshot?.decisions.some(item => item.state === 'pending') ? '有一条旧请求需要核对' : null)
+    const pendingKey = pending.length ? PENDING_DESCRIPTION_KEYS[pending[0].actionKind] : undefined;
+    const issueKey = observedIssue ? ISSUE_DESCRIPTION_KEYS[observedIssue.runtimeStatus] : undefined;
+    const reason = startIssue || (uncertain ? t('agent.kanban.reasonUnverifiedDelivery') : null) || snapshot?.error
+      || (snapshot?.decisions.some(item => item.state === 'unknown') ? t('agent.kanban.reasonUnknownDecision') : null)
+      || (decision ? decisionHeadline(decision, t) : null)
+      || (snapshot?.decisions.some(item => item.state === 'pending') ? t('agent.kanban.reasonPendingDecision') : null)
       || (card.state.waitState !== 'none' ? card.state.waitReason : null)
-      || (pending.length ? pendingDescriptions[pending[0].actionKind] ?? '查看待决定的操作' : null)
-      || (observedIssue ? issueDescriptions[observedIssue.runtimeStatus] : null);
-    return { card, cardSessions, nativeProfile, observationKey, snapshot, latestEvidence, verifiedRecord, observedIssue, pending, group, project, source, summary, updatedAt, roots, decision, reason, resultReply, uncertain, opening };
-  }).sort((a, b) => b.updatedAt - a.updatedAt || a.card.id.localeCompare(b.card.id)), [cards, sessions, links, evidences, actions, nativeSnapshots, nativeEventVersions, startTrials, selectedAccountScope]);
+      || (pending.length ? (pendingKey ? t(pendingKey) : t('agent.kanban.reasonPendingActionFallback')) : null)
+      || (issueKey ? t(issueKey) : null);
+    return { card, cardSessions, nativeProfile, observationKey, snapshot, latestEvidence, verifiedRecord, observedIssue, pending, group, project, source, hasDisplaySource, summary, updatedAt, roots, decision, reason, resultReply, uncertain, opening };
+  }).sort((a, b) => b.updatedAt - a.updatedAt || compareLocaleText(a.card.id, b.card.id, locale)), [cards, sessions, links, evidences, actions, nativeSnapshots, nativeEventVersions, startTrials, selectedAccountScope, locale, t]);
 
   const counts = {
     all: rows.length,
@@ -558,7 +586,7 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
   };
   const filteredRows = rows.filter((row) => waitFilter === 'all'
     || (waitFilter === 'attention' ? row.group === 'attention' : row.card.state.waitState === waitFilter));
-  const visibleGroups = WORK_GROUPS.map((group) => ({ ...group, rows: filteredRows.filter((row) => row.group === group.key) }))
+  const visibleGroups = WORK_GROUPS.map((group) => ({ ...group, label: t(group.labelKey), rows: filteredRows.filter((row) => row.group === group.key) }))
     .filter((group) => group.rows.length > 0 || !compactLayout && group.key !== 'stopped');
   if (compactLayout) {
     const priority = ['attention', 'results', 'active', 'saved', 'stopped'];
@@ -574,8 +602,8 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
   const featureText = featured && (featured.reason || featured.latestEvidence?.summary || featured.latestEvidence?.title
     || featured.resultReply?.text || featured.card.state.nextStep || featured.card.title);
   const viewResult = (row: typeof rows[number]) => selectWork(row.card.id, row.latestEvidence ? 'evidence' : 'reply', row.resultReply?.turnId ?? undefined, row.snapshot?.sessionId);
-  const featureAction = featured?.uncertain ? '核对送达' : featured?.decision?.method === 'item/tool/requestUserInput' ? '回答问题'
-    : featured?.decision || featured?.pending.length ? '查看请求' : featured?.group === 'results' ? '查看结果' : '查看阻碍';
+  const featureAction = featured?.uncertain ? t('agent.kanban.featureAction.verifyDelivery') : featured?.decision?.method === 'item/tool/requestUserInput' ? t('agent.kanban.featureAction.answerQuestion')
+    : featured?.decision || featured?.pending.length ? t('agent.kanban.featureAction.viewRequest') : featured?.group === 'results' ? t('agent.kanban.featureAction.viewResult') : t('agent.kanban.featureAction.viewBlocker');
   const openFeatured = () => {
     if (!featured) return;
     // Focus the existing card control so a shortcut never submits an answer or creates a second responder.
@@ -606,28 +634,28 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
   const createWork = async (start: boolean) => {
     if (draftKey !== newWorkDraftKey() || creating || !newGoal.trim() || !newWorkspace.trim()) return;
     if (!absoluteWorkspace(newWorkspace)) {
-      setCreateError('请填写完整的本地项目目录，例如 D:\\Repos\\RocketX。'); return;
+      setCreateError(t('agent.kanban.errorRequireAbsoluteDir')); return;
     }
     const accountScope = resolveButlerAccountScope();
     const runtimeScope = useCodexWorkspace.getState().scope;
     const assertAccount = captureButlerAccountGeneration();
     const profileId = start ? startProfile?.id : undefined;
-    if (start && !profileId) { setCreateError('请选择可用的 Codex 执行配置。'); return; }
+    if (start && !profileId) { setCreateError(t('agent.kanban.errorSelectCodexProfile')); return; }
     const request = useNewWorkDrafts.getState().begin(draftKey);
     if (!request) return;
     const target = newWorkTarget.current;
     const assertCurrentAccount = () => {
       assertAccount();
       if (resolveButlerAccountScope() !== accountScope || useCodexWorkspace.getState().scope !== runtimeScope) {
-        throw new Error('账号或运行范围已切换，原工作保留，未继续保存目录。');
+        throw new Error(t('agent.kanban.errorAccountOrScopeSwitched'));
       }
     };
     try {
       const { goal, workspace } = request;
-      const card = await useWorkLedger.getState().createCard({ requestId: request.id, title: goal.split('\n')[0].slice(0, 100), goal, stage: 'ready', priority: 3, projectKey: shortWorkspaceName(workspace) });
+      const card = await useWorkLedger.getState().createCard({ requestId: request.id, title: goal.split('\n')[0].slice(0, 100), goal, stage: 'ready', priority: 3, projectKey: shortWorkspaceName(workspace, t) });
       assertCurrentAccount();
       await useWorkLedger.getState().upsertLink({ todoId: card.id, kind: 'kanban_card', externalId: card.id, project: card.state.projectKey,
-        repo: workspace, rid: card.rid, headSha: null, title: '工作目录', webUrl: null, stateSnapshot: 'workspace' });
+        repo: workspace, rid: card.rid, headSha: null, title: t('agent.kanban.linkTitleWorkspace'), webUrl: null, stateSnapshot: 'workspace' });
       assertCurrentAccount();
       // The saved work owns the native start request even if the form is later closed.
       if (profileId) void beginWorkInvestigation(card, workspace, profileId).catch(error => {
@@ -638,33 +666,47 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
       useNewWorkDrafts.getState().finish(draftKey, request.id);
       if (!newWorkMounted.current || target !== newWorkTarget.current || !unchanged) return;
       selectWork(card.id);
-      if (!profileId) toast.success('工作和目录已记录，尚未开始执行。');
+      if (!profileId) toast.success(t('agent.kanban.toastWorkSaved'));
     } catch (error) { useNewWorkDrafts.getState().finish(draftKey, request.id, error instanceof Error ? error.message : String(error)); }
   };
 
   const renderRow = (row: typeof rows[number]) => {
-    const { card, cardSessions, nativeProfile, observationKey, snapshot, latestEvidence, verifiedRecord, observedIssue, pending, group, project, source, summary, updatedAt, roots, reason } = row;
+    const { card, cardSessions, nativeProfile, observationKey, snapshot, latestEvidence, verifiedRecord, observedIssue, pending, group, project, source, hasDisplaySource, summary, updatedAt, roots, reason } = row;
     const waiting = card.state.waitState !== 'none';
-    const waitingLabel = WAIT_STATE_LABELS[card.state.waitState].label;
+    const waitingLabel = t(WAIT_STATE_LABELS[card.state.waitState].labelKey);
     const session = cardSessions[0];
-    const status = snapshot?.admissionWait ? '等待执行条件'
-      : group === 'active' ? snapshot?.runtimeStatus === 'running' ? '执行中' : '最近记录为执行中'
-      : group === 'history' ? '历史标记已完成'
+    const isUnverifiedStatus = Boolean(
+      !snapshot?.admissionWait
+      && group !== 'active'
+      && group !== 'history'
+      && !waiting
+      && !observedIssue
+      && !pending.length
+      && (snapshot?.runtimeStatus === 'unknown'
+        || snapshot?.connectionStatus === 'unknown'
+        || (!snapshot && (session?.runtimeStatus === 'unknown' || card.state.stage === 'in_progress'))),
+    );
+    const isRecentRunningStatus = Boolean(!snapshot?.admissionWait && group === 'active' && snapshot?.runtimeStatus !== 'running');
+    const showStatusBadge = isUnverifiedStatus || isRecentRunningStatus || group === 'history';
+    const status = snapshot?.admissionWait ? t('agent.kanban.status.admissionWait')
+      : group === 'active' ? snapshot?.runtimeStatus === 'running' ? t('agent.kanban.status.running') : t('agent.kanban.status.recentRunning')
+      : group === 'history' ? t('agent.kanban.status.historyDone')
       : waiting ? waitingLabel
-      : observedIssue ? observedIssue.runtimeStatus === 'error' ? '会话报告错误' : observedIssue.runtimeStatus === 'waiting_approval' ? '会话等待确认' : '会话等待输入'
-      : pending.length ? '有待确认动作'
-      : snapshot?.runtimeStatus === 'unknown' || snapshot?.connectionStatus === 'unknown' || !snapshot && (session?.runtimeStatus === 'unknown' || card.state.stage === 'in_progress') ? '执行状态未核实'
-      : group === 'results' ? '有结果可查看' : '已收录';
-    const actionLabel = group === 'attention' ? '查看并处理' : group === 'results' ? '查看结果' : '打开工作';
-    const evidenceLabel = latestEvidence && (verifiedRecord ? `最近验证 · ${latestEvidence.passed ? '通过' : '未通过'}`
-      : latestEvidence.kind === 'agent_report' ? '执行者说明 · 未核验' : '最近记录');
+      : observedIssue ? observedIssue.runtimeStatus === 'error' ? t('agent.kanban.status.sessionError') : observedIssue.runtimeStatus === 'waiting_approval' ? t('agent.kanban.status.sessionWaitingApproval') : t('agent.kanban.status.sessionWaitingInput')
+      : pending.length ? t('agent.kanban.status.pendingAction')
+      : isUnverifiedStatus ? t('agent.kanban.status.unverifiedExecution')
+      : group === 'results' ? t('agent.kanban.status.hasResults') : t('agent.kanban.status.recorded');
+    const actionLabel = group === 'attention' ? t('agent.kanban.action.reviewAndHandle') : group === 'results' ? t('agent.kanban.action.viewResult') : t('agent.kanban.action.openWork');
+    const evidenceLabel = latestEvidence && (verifiedRecord
+      ? t(latestEvidence.passed ? 'agent.kanban.evidence.verifiedPassed' : 'agent.kanban.evidence.verifiedFailed')
+      : latestEvidence.kind === 'agent_report' ? t('agent.kanban.evidence.agentNote') : t('agent.kanban.evidence.recentRecord'));
     const pendingStart = pendingInvestigation(snapshot);
-    const situation = reason || snapshot?.admissionWait?.message || pendingStart || (row.opening ? '正在为这个项目准备调查' : null)
-      || (group === 'stopped' ? '本轮已停止' : null) || (waiting ? waitingLabel : null)
+    const situation = reason || snapshot?.admissionWait?.message || pendingStart || (row.opening ? t('agent.kanban.situation.preparing') : null)
+      || (group === 'stopped' ? t('agent.kanban.situation.stopped') : null) || (waiting ? waitingLabel : null)
       || latestEvidence?.summary || latestEvidence?.title || (group === 'results' && row.resultReply?.text) || summary || card.state.nextStep
       || (card.state.goal?.trim() !== card.title.trim() ? card.state.goal : null)
-      || (group === 'history' ? '尚无当前验证记录' : !session && roots.length ? '目录已绑定，等待连接执行者' : '');
-    const provenance = group !== 'stopped' && !reason && !pendingStart && !snapshot?.admissionWait && !waiting && (evidenceLabel || (summary && (snapshot ? '执行者回复 · 未核验' : '原会话摘要')));
+      || (group === 'history' ? t('agent.kanban.situation.noCurrentEvidence') : !session && roots.length ? t('agent.kanban.situation.boundWaitingExecutor') : '');
+    const provenance = group !== 'stopped' && !reason && !pendingStart && !snapshot?.admissionWait && !waiting && (evidenceLabel || (summary && (snapshot ? t('agent.kanban.provenance.executorReply') : t('agent.kanban.provenance.originalSummary'))));
     return <article key={card.id} data-card-id={card.id} className="work-first-row" data-selected={selectedCardId === card.id} data-tone={group === 'attention' ? 'attention' : group === 'active' ? 'active' : group === 'results' ? 'results' : 'default'}>
       <button type="button" data-work-id={card.id} aria-label={card.title} aria-pressed={selectedCardId === card.id}
         onClick={() => group === 'results' ? viewResult(row) : selectWork(card.id)} className="work-first-row-main text-left">
@@ -672,11 +714,11 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
         {situation && <span className="work-first-row-summary">{situation}</span>}
         <span className="work-first-row-meta">
           <span title={roots.join('\n')}>{project}{card.adoWorkItemId ? ` · #${card.adoWorkItemId}` : ''}</span>
-          {source !== '手动记录' && <span>{source}</span>}
+          {hasDisplaySource && <span>{source}</span>}
           {provenance && <span>{provenance}</span>}
-          {(status === '执行状态未核实' || status === '最近记录为执行中' || group === 'history') && <span>{status}</span>}
-          <time title={`记录更新于${new Date(updatedAt).toLocaleString()}`}>{formatSessionRelativeTime(updatedAt)}</time>
-          {card.priority <= 2 && <span className={card.priority === 1 ? 'text-danger' : 'text-warning'}>{card.priority === 1 ? '紧急' : '高优先级'}</span>}
+          {showStatusBadge && <span>{status}</span>}
+          <time title={t('agent.kanban.meta.updatedAtTitle', { time: formatDateTime(updatedAt, undefined, locale) })}>{formatSessionRelativeTime(updatedAt, locale, t)}</time>
+          {card.priority <= 2 && <span className={card.priority === 1 ? 'text-danger' : 'text-warning'}>{card.priority === 1 ? t('agent.kanban.priority.urgent') : t('agent.kanban.priority.high')}</span>}
         </span>
         {!(session && nativeProfile && parseWorkSessionProviderMeta(session).provider === 'codex') && <span className="work-first-row-action">{actionLabel}<ArrowRight size={14} aria-hidden="true" /></span>}
       </button>
@@ -686,7 +728,10 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
       {session && !(nativeProfile && parseWorkSessionProviderMeta(session).provider === 'codex') && <button type="button" disabled={actingSessionId === session.id} className="work-first-row-source"
         onClick={() => void handleOpenSession(session)} title={session.workspaceRoot}>
         <History size={13} aria-hidden="true" />
-        {session.controlMode === 'readonly' ? '查看' : '打开'} {parseWorkSessionProviderMeta(session).label} 对话
+        {t('agent.kanban.sessionSourceBtn', {
+          action: session.controlMode === 'readonly' ? t('agent.kanban.sessionActionView') : t('agent.kanban.sessionActionOpen'),
+          label: parseWorkSessionProviderMeta(session).label,
+        })}
       </button>}
     </article>;
   };
@@ -694,84 +739,84 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
   return <div ref={boardRoot} className="work-first-board relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-3">
     <header className="rcx-glass-header flex h-[52px] min-h-[52px] shrink-0 items-center justify-between gap-3 border-b border-line px-5">
       <div className="flex min-w-0 items-center gap-2">
-        {butlerSidebarCollapsed ? <button type="button" onClick={toggleButlerSidebarCollapsed} title="展开会话列表 (Ctrl+B)" aria-label="展开会话列表" className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover"><PanelLeft size={16} /></button> : null}
-        <h1 className="text-base font-semibold text-ink">我的工作</h1>
+        {butlerSidebarCollapsed ? <button type="button" onClick={toggleButlerSidebarCollapsed} title={t('agent.kanban.expandSidebarTitle')} aria-label={t('agent.kanban.expandSidebarAria')} className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover"><PanelLeft size={16} /></button> : null}
+        <h1 className="text-base font-semibold text-ink">{t('agent.kanban.headerTitle')}</h1>
         <span className="text-xs text-ink-3">{cards.length}</span>
       </div>
       {!poolOpen && !selectedCard && <div className="work-board-entry-actions">
-        <button type="button" className="work-first-secondary-button" onClick={() => setPoolOpen(true)}><History size={15} />添加已有会话</button>
-        <button type="button" className="work-first-primary-button" onClick={() => showNewWork(true)}><Plus size={15} />新建工作</button>
+        <button type="button" className="work-first-secondary-button" onClick={() => setPoolOpen(true)}><History size={15} />{t('agent.kanban.addExistingSession')}</button>
+        <button type="button" className="work-first-primary-button" onClick={() => showNewWork(true)}><Plus size={15} />{t('agent.kanban.newWorkBtn')}</button>
       </div>}
     </header>
     <div ref={setToastViewport} className="max-h-[12%] shrink-0 overflow-y-auto" />
-    {loading && !hydrated && <p role="status" className="shrink-0 px-5 py-2 text-sm text-ink-2">正在读取工作记录</p>}
+    {loading && !hydrated && <p role="status" className="shrink-0 px-5 py-2 text-sm text-ink-2">{t('agent.kanban.readingRecords')}</p>}
     {lastError || sessionSyncError ? <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b border-warning/30 bg-warning/10 px-5 py-2 text-xs text-ink">
-      <span>{lastError || sessionSyncError}。当前显示缓存记录，最新状态与会话覆盖尚未确认。</span>
-      <button type="button" aria-label="重试读取工作记录" className="shrink-0 text-primary hover:underline" onClick={() => { void hydrate(); if (sessionSyncError) void refreshSessions().catch(() => {}); }}>重试</button>
-    </div> : !hydrated && !loading ? <div role="status" className="px-5 py-2 text-xs text-ink-2">尚未读取工作记录。<button type="button" onClick={() => void hydrate()} className="ml-2 text-primary">读取工作记录</button></div> : null}
+      <span>{t('agent.kanban.cacheLoadNotice', { error: lastError || sessionSyncError || '' })}</span>
+      <button type="button" aria-label={t('agent.kanban.retryReadAria')} className="shrink-0 text-primary hover:underline" onClick={() => { void hydrate(); if (sessionSyncError) void refreshSessions().catch(() => {}); }}>{t('common.retry')}</button>
+    </div> : !hydrated && !loading ? <div role="status" className="px-5 py-2 text-xs text-ink-2">{t('agent.kanban.notReadYet')}<button type="button" onClick={() => void hydrate()} className="ml-2 text-primary">{t('agent.kanban.readRecordsBtn')}</button></div> : null}
 
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={boardContent} className="work-first-board-content flex min-h-0 flex-1 flex-col">
         {poolOpen ? <div className="min-h-0 flex-1 overflow-auto p-5"><WorkSessionImport scanning={scanningSessions} scanError={sessionSyncError} onRefresh={refreshSessions}
           onSelectWork={(id) => { selectWork(id); setPoolOpen(false); }} onClose={() => setPoolOpen(false)} /></div> : <>
-          {!newWorkOpen && rows.length > 0 && <section aria-label="管家简报" className="work-control-brief" data-tone={featured?.group}>
+          {!newWorkOpen && rows.length > 0 && <section aria-label={t('agent.kanban.briefingAria')} className="work-control-brief" data-tone={featured?.group}>
             <Bot size={19} aria-hidden="true" className="text-primary" />
             <div>
-              {featured && <><div className="work-brief-source">{featured.group === 'attention' ? '需要你' : featured.verifiedRecord ? '验证通过' : '待核验'} · {featured.card.title}</div>
+              {featured && <><div className="work-brief-source">{featured.group === 'attention' ? t('agent.kanban.group.attention') : featured.verifiedRecord ? t('agent.kanban.briefVerified') : t('agent.kanban.briefUnverified')} · {featured.card.title}</div>
                 <p>{featureText}</p></>}
-              <div className="work-brief-counts">{activeCount > 0 ? `${activeCount} 项最近记录在推进` : '暂无已知执行中的工作'}{queuedCount > 0 && ` · ${queuedCount} 项排队中`}{counts.attention > 1 && ` · 另有 ${counts.attention - 1} 项需要你`}{resultsCount > 0 && ` · ${resultsCount} 项结果可看`}{counts.waiting_external > 0 && ` · ${counts.waiting_external} 项等待外部`}</div>
+              <div className="work-brief-counts">{activeCount > 0 ? t('agent.kanban.briefActiveCount', { count: activeCount }) : t('agent.kanban.briefNoActive')}{queuedCount > 0 && t('agent.kanban.briefQueuedSuffix', { count: queuedCount })}{counts.attention > 1 && t('agent.kanban.briefMoreAttentionSuffix', { count: counts.attention - 1 })}{resultsCount > 0 && t('agent.kanban.briefResultsSuffix', { count: resultsCount })}{counts.waiting_external > 0 && t('agent.kanban.briefExternalSuffix', { count: counts.waiting_external })}</div>
             </div>
             {featured && <button type="button" onClick={openFeatured}>{featureAction}<ArrowRight size={14} aria-hidden="true" /></button>}
           </section>}
-          {newWorkOpen && <form aria-label="交代新工作" className="work-control-new" onKeyDown={event => {
+          {newWorkOpen && <form aria-label={t('agent.kanban.newFormAria')} className="work-control-new" onKeyDown={event => {
             if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
           }} onSubmit={(event) => {
             event.preventDefault();
             void createWork(hasInvestigator);
           }}>
-            <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-medium text-ink">新建工作</h2><button type="button" aria-label="收起，保留新工作草稿" onClick={() => showNewWork(false)} className="text-ink-3"><X size={17} /></button></div>
-            <label className="work-control-field">要完成什么<textarea required value={newGoal} onChange={(event) => { newWorkTarget.current += 1; setNewGoal(event.target.value); }} placeholder="例如：调查登录失败，尝试修复并验证结果。" /></label>
-            <div className="flex items-end gap-2"><label className="work-control-field min-w-0 flex-1">工作目录<input required value={newWorkspace} onChange={(event) => { newWorkTarget.current += 1; setNewWorkspace(event.target.value); }} placeholder="选择或填写项目目录" /></label><button type="button" disabled={choosingDirectory} onClick={() => void chooseWorkDirectory()} className="work-first-secondary-button shrink-0 disabled:opacity-50">{choosingDirectory ? '正在选择…' : '选择文件夹'}</button></div>
-            {workspaceChoices.length > 0 && <select aria-label="选择已有项目目录" value="" onChange={(event) => { if (event.target.value) { newWorkTarget.current += 1; setNewWorkspace(event.target.value); } }} className="w-full rounded-lg border border-line bg-surface-3 px-3 py-2 text-xs text-ink-2"><option value="">选择已有项目目录…</option>{workspaceChoices.map((workspace) => <option key={workspace} value={workspace}>{shortWorkspaceName(workspace)} · {workspace}</option>)}</select>}
+            <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-medium text-ink">{t('agent.kanban.newWorkBtn')}</h2><button type="button" aria-label={t('agent.kanban.closeNewFormAria')} onClick={() => showNewWork(false)} className="text-ink-3"><X size={17} /></button></div>
+            <label className="work-control-field">{t('agent.kanban.goalFieldLabel')}<textarea required value={newGoal} onChange={(event) => { newWorkTarget.current += 1; setNewGoal(event.target.value); }} placeholder={t('agent.kanban.goalFieldPlaceholder')} /></label>
+            <div className="flex items-end gap-2"><label className="work-control-field min-w-0 flex-1">{t('agent.kanban.workspaceFieldLabel')}<input required value={newWorkspace} onChange={(event) => { newWorkTarget.current += 1; setNewWorkspace(event.target.value); }} placeholder={t('agent.kanban.workspaceFieldPlaceholder')} /></label><button type="button" disabled={choosingDirectory} onClick={() => void chooseWorkDirectory()} className="work-first-secondary-button shrink-0 disabled:opacity-50">{choosingDirectory ? t('agent.kanban.choosingDir') : t('agent.kanban.chooseFolder')}</button></div>
+            {workspaceChoices.length > 0 && <select aria-label={t('agent.kanban.existingDirAria')} value="" onChange={(event) => { if (event.target.value) { newWorkTarget.current += 1; setNewWorkspace(event.target.value); } }} className="w-full rounded-lg border border-line bg-surface-3 px-3 py-2 text-xs text-ink-2"><option value="">{t('agent.kanban.existingDirPlaceholder')}</option>{workspaceChoices.map((workspace) => <option key={workspace} value={workspace}>{shortWorkspaceName(workspace, t)} · {workspace}</option>)}</select>}
             {isTauriRuntime() && (startProfiles.length ? <WorkStartProfile profiles={startProfiles} value={startProfile?.id}
               onChange={profileId => useNewWorkDrafts.getState().edit(draftKey, { profileId })} />
-              : <p className="text-xs text-ink-2">接入本机 Codex 后可以直接开始调查。 <button type="button" className="text-primary" onClick={() => openAcpHub(null)}>设置执行器</button></p>)}
+              : <p className="text-xs text-ink-2">{t('agent.kanban.connectCodexHint')} <button type="button" className="text-primary" onClick={() => openAcpHub(null)}>{t('agent.kanban.configureExecutorBtn')}</button></p>)}
             {createError && <p role="alert" className="text-xs text-danger">{createError}</p>}
             <div className="flex flex-wrap justify-end gap-2">
-              <button type={hasInvestigator ? 'button' : 'submit'} onClick={hasInvestigator ? () => void createWork(false) : undefined} className={hasInvestigator ? 'work-first-secondary-button' : 'work-first-primary-button'} disabled={creating || !newGoal.trim() || !newWorkspace.trim()}>{creating ? '正在保存…' : '加入待开始'}</button>
-              {hasInvestigator && <button type="submit" className="work-first-primary-button" disabled={creating || !startProfile || !newGoal.trim() || !newWorkspace.trim()}>开始调查</button>}
+              <button type={hasInvestigator ? 'button' : 'submit'} onClick={hasInvestigator ? () => void createWork(false) : undefined} className={hasInvestigator ? 'work-first-secondary-button' : 'work-first-primary-button'} disabled={creating || !newGoal.trim() || !newWorkspace.trim()}>{creating ? t('agent.kanban.savingBtn') : t('agent.kanban.saveToReadyBtn')}</button>
+              {hasInvestigator && <button type="submit" className="work-first-primary-button" disabled={creating || !startProfile || !newGoal.trim() || !newWorkspace.trim()}>{t('agent.kanban.startInvestigationBtn')}</button>}
             </div>
           </form>}
           <div className="work-first-toolbar">
-            <nav aria-label="工作状态筛选" className="flex flex-wrap items-center gap-1">
+            <nav aria-label={t('agent.kanban.filterAria')} className="flex flex-wrap items-center gap-1">
               {[
-                { key: 'all' as const, label: '全部', count: counts.all },
-                { key: 'attention' as const, label: '需我处理', count: counts.attention },
-                { key: 'waiting_external' as const, label: '等待外部', count: counts.waiting_external },
-                { key: 'paused' as const, label: '已暂停', count: counts.paused },
-              ].map((item) => <button key={item.key} type="button" aria-pressed={waitFilter === item.key} onClick={() => setWaitFilter(item.key)} className="work-first-filter">{item.label}{item.count > 0 ? ` ${item.count}` : ''}</button>)}
+                { key: 'all' as const, labelKey: 'agent.kanban.filter.all' as const, count: counts.all },
+                { key: 'attention' as const, labelKey: 'agent.kanban.filter.attention' as const, count: counts.attention },
+                { key: 'waiting_external' as const, labelKey: 'agent.kanban.filter.waitingExternal' as const, count: counts.waiting_external },
+                { key: 'paused' as const, labelKey: 'agent.kanban.filter.paused' as const, count: counts.paused },
+              ].map((item) => <button key={item.key} type="button" aria-pressed={waitFilter === item.key} onClick={() => setWaitFilter(item.key)} className="work-first-filter">{t(item.labelKey)}{item.count > 0 ? ` ${item.count}` : ''}</button>)}
             </nav>
             <div className="flex items-center gap-1">
-              <button type="button" onClick={() => setSearchOpen((value) => !value)} aria-expanded={searchOpen} aria-controls="work-first-search" className="work-first-view-button"><Search size={14} />查找</button>
+              <button type="button" onClick={() => setSearchOpen((value) => !value)} aria-expanded={searchOpen} aria-controls="work-first-search" className="work-first-view-button"><Search size={14} />{t('agent.kanban.searchBtn')}</button>
             </div>
           </div>
           <div ref={searchContainer} id="work-first-search" hidden={!searchOpen} className="px-5 pb-3"><WorkContextSearch compact onSelectWork={selectWork} /></div>
-          {orphanActions.length > 0 && <div role="status" className="px-5 pb-3 text-xs text-warning">有 {orphanActions.length} 项待决定动作尚未找到关联工作，请重新读取记录后查看。<button type="button" className="ml-2 text-primary" onClick={() => void hydrate()}>重新读取</button></div>}
+          {orphanActions.length > 0 && <div role="status" className="px-5 pb-3 text-xs text-warning">{t('agent.kanban.orphanActionsNotice', { count: orphanActions.length })}<button type="button" className="ml-2 text-primary" onClick={() => void hydrate()}>{t('agent.kanban.rereadBtn')}</button></div>}
           <div className="work-first-groups min-h-0 flex-1 overflow-y-auto">
-            <div role="region" aria-label="工作看板" className="work-control-columns" data-layout={compactLayout ? 'list' : 'kanban'}>{visibleGroups.map((group) => {
+            <div role="region" aria-label={t('agent.kanban.boardAria')} className="work-control-columns" data-layout={compactLayout ? 'list' : 'kanban'}>{visibleGroups.map((group) => {
               const groupRows = group.rows;
               return <section key={group.key} aria-label={group.label} className="work-first-group" data-empty={!groupRows.length} data-stage={group.key}>
                 <div className="work-first-group-heading"><h2>{group.label}</h2><span>{groupRows.length}</span></div>
                 {groupRows.map(renderRow)}
-                {!groupRows.length && <p className="work-control-column-empty">{group.key === 'attention' ? '暂时没有需要你处理的事' : '暂无工作'}</p>}
+                {!groupRows.length && <p className="work-control-column-empty">{group.key === 'attention' ? t('agent.kanban.emptyAttention') : t('agent.kanban.emptyColumn')}</p>}
               </section>;
             })}</div>
-            {filteredRows.some((row) => row.group === 'history') && <details className="work-control-history"><summary>历史完成记录 {filteredRows.filter((row) => row.group === 'history').length}</summary><section aria-label="历史完成记录">{filteredRows.filter((row) => row.group === 'history').map(renderRow)}</section></details>}
+            {filteredRows.some((row) => row.group === 'history') && <details className="work-control-history"><summary>{t('agent.kanban.historySummary', { count: filteredRows.filter((row) => row.group === 'history').length })}</summary><section aria-label={t('agent.kanban.historyAria')}>{filteredRows.filter((row) => row.group === 'history').map(renderRow)}</section></details>}
             {filteredRows.length === 0 && hydrated && !loading && !lastError && !sessionSyncError && <div className="work-first-empty">
               <Inbox size={28} className="text-ink-3" />
-              <h2 className="text-base font-medium text-ink">{cards.length ? '这个范围内没有工作' : '还没有工作记录'}</h2>
-              <p className="text-sm text-ink-3">{cards.length ? '换一个筛选，继续查看其他工作。' : '交代一件新事情，或添加 Codex、Claude 等已有会话。'}</p>
-              {cards.length > 0 && <button type="button" onClick={() => setWaitFilter('all')} className="text-sm text-primary">查看全部工作</button>}
+              <h2 className="text-base font-medium text-ink">{cards.length ? t('agent.kanban.emptyFilteredTitle') : t('agent.kanban.emptyAllTitle')}</h2>
+              <p className="text-sm text-ink-3">{cards.length ? t('agent.kanban.emptyFilteredDesc') : t('agent.kanban.emptyAllDesc')}</p>
+              {cards.length > 0 && <button type="button" onClick={() => setWaitFilter('all')} className="text-sm text-primary">{t('agent.kanban.viewAllWork')}</button>}
             </div>}
           </div>
         </>}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useT } from '../i18n';
 import { captureButlerAccountGeneration, captureButlerRuntimeAccountContext, subscribeButlerAccountSelection, waitForButlerAccountReady } from '../platform/butlerAccountReady';
 import { answerNativeWork, readNativeWorkSnapshot, submitNativeWork } from '../platform/desktopCommands';
 import type { NativeWorkCard, NativeWorkSessionRecord } from '../platform/desktopCommands';
@@ -26,6 +27,7 @@ export function canAnswerWorkDecision(snapshot: NativeWorkSnapshot, card: Native
 }
 
 export default function NativeWorkCardControls({ card, session, onOpen, allowStart = true, onViewResult, observationKey, onSnapshot }: NativeWorkCardControlsProps) {
+  const t = useT();
   const [snapshot, setSnapshot] = useState<NativeWorkSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -55,12 +57,12 @@ export default function NativeWorkCardControls({ card, session, onOpen, allowSta
       const assertAccount = await waitForButlerAccountReady();
       assertAccount();
       const account = captureButlerRuntimeAccountContext();
-      if (session.accountScope && session.accountScope !== account.accountScope) throw new Error('请切回这项工作所属的账号');
+      if (session.accountScope && session.accountScope !== account.accountScope) throw new Error(t('agent.nativeCard.switchAccount'));
       const next = await readNativeWorkSnapshot({ account, sessionId: session.id });
       assertAccount();
       if (generation !== epoch.current || sequence !== readSequence.current || observed !== observation.current) return;
       if (next.protocolVersion !== 1 || next.todoId !== card.id || next.sessionId !== session.id || next.nativeThreadId !== session.nativeSessionId
-        || next.sourceScope !== session.sourceScope || !executionProfileId || next.executionProfileId !== executionProfileId) throw new Error('工作连接身份已变化，请打开工作核对');
+        || next.sourceScope !== session.sourceScope || !executionProfileId || next.executionProfileId !== executionProfileId) throw new Error(t('agent.nativeCard.identityChanged'));
       setSnapshot(next);
       setError(null);
       snapshotCallback.current?.(next, observed);
@@ -118,16 +120,16 @@ export default function NativeWorkCardControls({ card, session, onOpen, allowSta
     operating.current = true; setBusy(true); setNotice(null);
     const generation = epoch.current;
     const assertAccount = captureButlerAccountGeneration();
-    const assertCurrent = () => { assertAccount(); if (generation !== epoch.current) throw new Error('工作或账号已切换'); };
+    const assertCurrent = () => { assertAccount(); if (generation !== epoch.current) throw new Error(t('agent.nativeCard.switchedAccount')); };
     try {
       const account = captureButlerRuntimeAccountContext();
-      if (session.accountScope && session.accountScope !== account.accountScope) throw new Error('请切回这项工作所属的账号');
+      if (session.accountScope && session.accountScope !== account.accountScope) throw new Error(t('agent.nativeCard.switchAccount'));
       await action(account, assertCurrent);
       assertCurrent();
       await useWorkLedger.getState().hydrate();
       assertCurrent();
     } catch (cause) {
-      if (generation === epoch.current) setNotice(`操作结果待核对：${cause instanceof Error ? cause.message : String(cause)}`);
+      if (generation === epoch.current) setNotice(t('agent.nativeCard.resultPending', { message: cause instanceof Error ? cause.message : String(cause) }));
     } finally {
       if (generation === epoch.current) { operating.current = false; setBusy(false); void refresh(); }
     }
@@ -162,8 +164,8 @@ export default function NativeWorkCardControls({ card, session, onOpen, allowSta
       await submitNativeWork({ account, command: { requestId, todoId: card.id, sessionId: session.id,
         expectedRequirementsVersion: card.state.requirementsVersion ?? 0, expectedContentVersion: card.state.contentVersion ?? 0,
         expectedBindingVersion: frozen.bindingVersion, ...(kind === 'interrupt' ? { nativeTurnId: frozen.activeTurnId } : {}),
-        intent: kind === 'interrupt' ? { kind: 'interrupt' } : { kind: 'prompt', text: canContinue ? '从本轮停止的位置继续完成这项工作。' : card.state.goal!.trim() }, submittedBy: 'user' } });
-      assertCurrent(); setNotice(kind === 'interrupt' ? '正在停止本轮…' : canContinue ? '正在继续工作…' : '正在开始处理…');
+        intent: kind === 'interrupt' ? { kind: 'interrupt' } : { kind: 'prompt', text: canContinue ? t('agent.nativeCard.continuePrompt') : card.state.goal!.trim() }, submittedBy: 'user' } });
+      assertCurrent(); setNotice(kind === 'interrupt' ? t('agent.nativeCard.stopping') : canContinue ? t('agent.nativeCard.continuing') : t('agent.nativeCard.starting'));
     });
   };
   const answer = (decision: NativeWorkDecision, value: unknown) => {
@@ -177,18 +179,18 @@ export default function NativeWorkCardControls({ card, session, onOpen, allowSta
       assertCurrent(); readSequence.current += 1;
       setSnapshot(next);
       if (observed === observation.current) snapshotCallback.current?.(next, observed);
-      setUncertainAnswer(null); setNotice('答复已提交，正在确认后续进展。');
+      setUncertainAnswer(null); setNotice(t('agent.nativeCard.replySubmitted'));
     });
   };
 
-  return <div className="work-control-card-actions" aria-label={`${card.title}的控制`}>
+  return <div className="work-control-card-actions" aria-label={t('agent.nativeCard.controlsAria', { title: card.title })}>
     {currentDecisions.map(decision => <NativeDecision key={decision.id} decision={decision} current busy={busy || uncertainAnswer === decision.id} onAnswer={value => answer(decision, value)} />)}
-    {snapshot?.decisions.some(decision => decision.state === 'unknown') && <p className="text-xs text-ink-2">上次答复尚未确认，打开工作核对；不会重复回答。</p>}
+    {snapshot?.decisions.some(decision => decision.state === 'unknown') && <p className="text-xs text-ink-2">{t('agent.nativeCard.unknownDecisionHint')}</p>}
     <div className="flex flex-wrap items-center gap-3 text-xs">
-      {connected && snapshot?.activeTurnId && snapshot.capabilities.interrupt && <button type="button" disabled={busy || stopping || uncertainStop} onClick={() => submit('interrupt')} className="text-ink-2 disabled:opacity-50">停止本轮</button>}
-      {(canStart || canContinue) && <button type="button" disabled={busy || pending || preparedPrompt} onClick={() => submit('prompt')} className="rounded-lg bg-primary px-3 py-1.5 text-white disabled:opacity-50">{canContinue ? '继续工作' : '开始处理'}</button>}
-      {onViewResult ? <button type="button" onClick={onViewResult} className="rounded-lg bg-primary px-3 py-1.5 text-white">查看结果</button>
-        : <button type="button" onClick={onOpen} className="text-primary">{uncertainDelivery ? '核对送达' : error ? '核对工作连接' : connected ? '补充要求' : '打开工作'}</button>}
+      {connected && snapshot?.activeTurnId && snapshot.capabilities.interrupt && <button type="button" disabled={busy || stopping || uncertainStop} onClick={() => submit('interrupt')} className="text-ink-2 disabled:opacity-50">{t('agent.nativeCard.stopTurn')}</button>}
+      {(canStart || canContinue) && <button type="button" disabled={busy || pending || preparedPrompt} onClick={() => submit('prompt')} className="rounded-lg bg-primary px-3 py-1.5 text-white disabled:opacity-50">{canContinue ? t('agent.nativeCard.continueWork') : t('agent.nativeCard.startWork')}</button>}
+      {onViewResult ? <button type="button" onClick={onViewResult} className="rounded-lg bg-primary px-3 py-1.5 text-white">{t('agent.nativeCard.viewResult')}</button>
+        : <button type="button" onClick={onOpen} className="text-primary">{uncertainDelivery ? t('agent.nativeCard.verifyDelivery') : error ? t('agent.nativeCard.verifyConnection') : connected ? t('agent.nativeCard.addRequirement') : t('agent.nativeCard.openWork')}</button>}
     </div>
     {(notice || error) && <p role="status" className="text-xs text-ink-2">{notice || error}</p>}
   </div>;

@@ -1,4 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 /** 消息里第一张图片附件的服务器路径（原图 title_link 优先，回退缩略图） */
 export function messageImagePath(message: RcMessage): string | null {
@@ -16,10 +17,10 @@ export async function toPngBlob(blob: Blob): Promise<Blob> {
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
     const context = canvas.getContext('2d');
-    if (!context) throw new Error('无法创建图片转码画布');
+    if (!context) throw new Error(t('chat.clipboard.canvasError'));
     context.drawImage(bitmap, 0, 0);
     return await new Promise<Blob>((resolve, reject) =>
-      canvas.toBlob((out) => (out ? resolve(out) : reject(new Error('图片转码失败'))), 'image/png'),
+      canvas.toBlob((out) => (out ? resolve(out) : reject(new Error(t('chat.clipboard.encodeError')))), 'image/png'),
     );
   } finally {
     bitmap.close();

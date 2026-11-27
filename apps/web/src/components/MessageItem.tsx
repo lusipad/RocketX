@@ -13,14 +13,18 @@ import { cardTitleFromMessage } from '../lib/kanban';
 import PollCard from './PollCard';
 import {
   AlertCircle,
+  Blocks,
+  BookmarkPlus,
   Bot,
   Check,
   ClipboardList,
+  Compass,
   Copy,
   Link2,
   Download,
   ExternalLink,
   File as FileIcon,
+  GitPullRequest,
   Image as ImageIcon,
   ListChecks,
   ListTodo,
@@ -40,6 +44,7 @@ import {
   CalendarPlus,
   FolderOpen,
   X,
+  Zap,
 } from 'lucide-react';
 import AuthImage from './AuthImage';
 import FilePreview, { filePreviewKind } from './FilePreview';
@@ -82,6 +87,11 @@ import CreateDiscussionDialog from './CreateDiscussionDialog';
 import { findQuoteImage, quoteAttachmentText } from '../lib/messageQuote';
 import { codexSkillGateway } from '../agent/codexSkillGateway';
 import { askButlerAboutMessages } from '../kernel/butler';
+import {
+  parseSharedSkillFromMessage,
+  writeChatToButlerDrag,
+} from '../lib/butlerChatBridge';
+import { useButlerSkills } from '../stores/butlerSkills';
 import { useKernelContributions } from '../kernel/registry';
 import {
   extractMessageAction,
@@ -98,6 +108,7 @@ import {
 } from '../lib/stickerLibrary';
 import { parseRocketXStickerShortcodeMessage } from '../lib/stickerServerCompat';
 import { extractUncPaths, uncHostOf } from '../lib/uncPath';
+import { useI18n, useT } from '../i18n';
 
 /** 悬浮栏直达的快捷表情（飞书习惯） */
 const QUICK_EMOJIS: EmojiEntry[] = [
@@ -124,6 +135,7 @@ function ImageAttachment({
   dims?: { width?: number; height?: number };
   source: DownloadSourceV1;
 }) {
+  const t = useT();
   const autoLoad = usePrefs((s) => s.prefs.autoImageLoad);
   const [lightbox, setLightbox] = useState(false);
   const [manualLoad, setManualLoad] = useState(false);
@@ -145,7 +157,7 @@ function ImageAttachment({
       >
         <ImageIcon size={16} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate text-xs text-ink-2">{name}</span>
-        <span className="shrink-0 text-xs text-primary">点击加载</span>
+        <span className="shrink-0 text-xs text-primary">{t('chat.message.clickToLoad')}</span>
       </button>
     );
   }
@@ -158,7 +170,7 @@ function ImageAttachment({
           alt={name}
           style={box}
           className="max-h-72 max-w-[360px] rounded-lg bg-fill-1 object-contain"
-          fallback={<span className="text-xs text-ink-3">[图片加载失败：{name}]</span>}
+          fallback={<span className="text-xs text-ink-3">{t('chat.message.imageLoadFailed', { name })}</span>}
         />
       </button>
       {lightbox && (
@@ -199,6 +211,7 @@ function FileAttachment({
   localPath?: string;
   source: DownloadSourceV1;
 }) {
+  const t = useT();
   // 进行中的动作：null 空闲；打开本地文件与下载在状态行上要说清是哪一个
   const [busy, setBusy] = useState<'open' | 'download' | null>(null);
   const [preview, setPreview] = useState(false);
@@ -228,8 +241,8 @@ function FileAttachment({
     try {
       await action();
     } catch (err) {
-      if (isAbortError(err)) toast.info('已取消下载');
-      else toast.error(err, '下载失败');
+      if (isAbortError(err)) toast.info(t('chat.message.downloadCanceled'));
+      else toast.error(err, t('chat.preview.downloadFailed'));
     } finally {
       downloadAbortRef.current = null;
       setProgress(null);
@@ -251,10 +264,10 @@ function FileAttachment({
         } catch (err) {
           // 文件还在、只是打不开（比如没有关联程序），重新下载也解决不了
           if (!isDownloadMissingError(err)) {
-            toast.error(err, '无法打开文件');
+            toast.error(err, t('chat.message.openFileFailed'));
             return;
           }
-          toast.info('本地文件已不在，重新下载');
+          toast.info(t('chat.message.localMissingRedownload'));
         }
       }
       await saveRemote();
@@ -266,8 +279,18 @@ function FileAttachment({
 
   const iconButton =
     'flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary disabled:opacity-50';
-  const idleHint = previewable ? '点击预览' : opensLocal ? '打开本地文件' : '点击下载';
-  const idleTag = localPath ? '局域网文件' : downloaded ? '已下载' : previewable ? '点击预览' : '';
+  const idleHint = previewable
+    ? t('chat.message.clickToPreview')
+    : opensLocal
+      ? t('chat.message.openLocalFile')
+      : t('chat.message.clickToDownload');
+  const idleTag = localPath
+    ? t('chat.message.lanFileTag')
+    : downloaded
+      ? t('chat.message.downloadedTag')
+      : previewable
+        ? t('chat.message.clickToPreview')
+        : '';
 
   return (
     <>
@@ -285,12 +308,14 @@ function FileAttachment({
             <span className="block text-xs text-ink-3">
               {busy && progress
                 ? progress.total !== null
-                  ? `下载中 ${Math.floor((progress.loaded / progress.total) * 100)}%`
+                  ? t('chat.message.downloadingPercent', {
+                      percent: Math.floor((progress.loaded / progress.total) * 100),
+                    })
                   : fmtSize(progress.loaded)
                 : busy === 'open'
-                ? '正在打开…'
+                ? t('chat.message.openingFile')
                 : busy === 'download'
-                ? '下载中…'
+                ? t('chat.message.downloading')
                 : [fmtSize(size), idleTag].filter(Boolean).join(' · ') || idleHint}
             </span>
           </span>
@@ -298,7 +323,7 @@ function FileAttachment({
         {progress ? (
           <button
             onClick={cancelDownload}
-            title="取消下载"
+            title={t('chat.message.cancelDownload')}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-danger"
           >
             <X size={14} />
@@ -309,8 +334,8 @@ function FileAttachment({
               onClick={() => void openOrDownload()}
               disabled={!!busy}
               className={iconButton}
-              title="打开本地文件"
-              aria-label="打开本地文件"
+              title={t('chat.message.openLocalFile')}
+              aria-label={t('chat.message.openLocalFile')}
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <ExternalLink size={14} />}
             </button>
@@ -318,8 +343,8 @@ function FileAttachment({
               onClick={() => void redownload()}
               disabled={!!busy}
               className={iconButton}
-              title="重新下载"
-              aria-label="重新下载"
+              title={t('chat.message.redownload')}
+              aria-label={t('chat.message.redownload')}
             >
               <Download size={14} />
             </button>
@@ -329,7 +354,7 @@ function FileAttachment({
             onClick={() => void openOrDownload()}
             disabled={!!busy}
             className={iconButton}
-            title={localPath ? '打开本地文件' : '下载'}
+            title={localPath ? t('chat.message.openLocalFile') : t('chat.preview.download')}
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
           </button>
@@ -354,6 +379,7 @@ function FileAttachment({
 
 /** 引用回复的原消息：点击跳转并高亮原消息（飞书交互） */
 function QuoteCard({ att }: { att: RcMessageAttachment }) {
+  const t = useT();
   const jumpToMessage = useChat((s) => s.jumpToMessage);
   const image = findQuoteImage(att);
   const text = quoteAttachmentText(att);
@@ -369,7 +395,7 @@ function QuoteCard({ att }: { att: RcMessageAttachment }) {
       }}
       disabled={!mid}
       className="mt-1 mb-0.5 block max-w-md rounded-r-md border-l-2 border-primary/40 bg-fill-1 px-2.5 py-1.5 text-left transition enabled:hover:bg-fill-hover"
-      title={mid ? '点击跳转到原消息' : undefined}
+      title={mid ? t('chat.message.jumpToOriginal') : undefined}
     >
       <div className="text-xs font-medium text-ink-2">{att.author_name}</div>
       {text && (
@@ -380,9 +406,9 @@ function QuoteCard({ att }: { att: RcMessageAttachment }) {
       {image?.image_url && (
         <AuthImage
           path={image.image_url}
-          alt={image.title || '引用图片'}
+          alt={image.title || t('chat.message.quotedImageAlt')}
           className="mt-1.5 max-h-28 max-w-48 rounded-md object-contain"
-          fallback={<span className="mt-1 block text-xs text-ink-3">[引用图片加载失败]</span>}
+          fallback={<span className="mt-1 block text-xs text-ink-3">{t('chat.message.quotedImageFailed')}</span>}
         />
       )}
     </button>
@@ -456,6 +482,7 @@ export function AttachmentCard({
   message: RcMessage;
   source: DownloadSourceV1;
 }) {
+  const t = useT();
   const renderers = useKernelContributions('message.renderer');
   // 引用回复
   if (att.message_link) {
@@ -481,7 +508,7 @@ export function AttachmentCard({
         <ImageAttachment
           thumbPath={att.image_url}
           fullPath={att.title_link || att.image_url}
-          name={name || '图片'}
+          name={name || t('chat.message.imageFallback')}
           dims={att.image_dimensions}
           source={source}
         />
@@ -495,7 +522,14 @@ export function AttachmentCard({
       <>
         <FileAttachment
           path={filePath}
-          name={name || (att.video_url ? '视频' : att.audio_url ? '音频' : '文件')}
+          name={
+            name ||
+            (att.video_url
+              ? t('chat.message.videoFallback')
+              : att.audio_url
+                ? t('chat.message.audioFallback')
+                : t('chat.common.file'))
+          }
           contentType={contentType}
           kind={kind}
           size={file?.size}
@@ -553,6 +587,7 @@ export function AttachmentCard({
 }
 
 function Reactions({ message }: { message: RcMessage }) {
+  const t = useT();
   const toggleReaction = useChat((s) => s.toggleReaction);
   const myUsername = useAuth((s) => s.user?.username);
   if (!message.reactions) return null;
@@ -566,7 +601,7 @@ function Reactions({ message }: { message: RcMessage }) {
           <button
             key={code}
             onClick={() => void toggleReaction(message._id, code)}
-            title={usernames.join('、')}
+            title={usernames.join(t('chat.common.listSep'))}
             className={`flex h-6 items-center gap-1 rounded-full border px-2 text-xs transition ${
               reacted
                 ? 'border-primary bg-primary-light text-primary'
@@ -589,6 +624,7 @@ function ConfirmDeleteDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const dialogRef = useDialogBehavior(onCancel);
   return (
     <div
@@ -601,24 +637,24 @@ function ConfirmDeleteDialog({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="删除消息"
+        aria-label={t('chat.message.deleteTitle')}
         tabIndex={-1}
         className="w-80 rounded-xl bg-surface-4 p-5 shadow-2xl"
       >
-        <div className="text-base font-semibold text-ink">删除消息</div>
-        <div className="mt-2 text-sm text-ink-2">确定删除这条消息吗？删除后不可恢复。</div>
+        <div className="text-base font-semibold text-ink">{t('chat.message.deleteTitle')}</div>
+        <div className="mt-2 text-sm text-ink-2">{t('chat.message.deleteConfirm')}</div>
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={onConfirm}
             className="h-8 rounded-md bg-danger px-4 text-sm text-white transition hover:opacity-90"
           >
-            删除
+            {t('common.delete')}
           </button>
         </div>
       </div>
@@ -636,6 +672,7 @@ function UncOpenDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const dialogRef = useDialogBehavior(onCancel);
   return (
     <div
@@ -648,27 +685,27 @@ function UncOpenDialog({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="打开局域网共享路径"
+        aria-label={t('chat.message.openUncTitle')}
         tabIndex={-1}
         className="w-96 rounded-xl bg-surface-4 p-5 shadow-2xl"
       >
-        <div className="text-base font-semibold text-ink">打开局域网共享路径</div>
+        <div className="text-base font-semibold text-ink">{t('chat.message.openUncTitle')}</div>
         <div className="mt-2 break-all text-sm text-ink-2">{path}</div>
         <div className="mt-2 text-xs text-ink-3">
-          将用系统默认程序打开，并连接局域网主机「{uncHostOf(path)}」。请只对可信主机执行此操作。
+          {t('chat.message.openUncDesc', { host: uncHostOf(path) })}
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button
             onClick={onCancel}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={onConfirm}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:opacity-90"
           >
-            打开
+            {t('common.open')}
           </button>
         </div>
       </div>
@@ -677,6 +714,7 @@ function UncOpenDialog({
 }
 
 function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }) {
+  const t = useT();
   const editMessage = useChat((s) => s.editMessage);
   // 只编辑可见文本；引用链接前缀保存时原样带回
   const prefix = (message.msg ?? '').slice(
@@ -706,7 +744,296 @@ function EditBox({ message, onDone }: { message: RcMessage; onDone: () => void }
         rows={Math.min(6, Math.max(2, value.split('\n').length))}
         className="w-full resize-none rounded-md border border-primary bg-surface-4 px-2.5 py-1.5 text-sm outline-none"
       />
-      <div className="mt-0.5 text-xs text-ink-3">Enter 保存 · Esc 取消</div>
+      <div className="mt-0.5 text-xs text-ink-3">{t('chat.message.editHint')}</div>
+    </div>
+  );
+}
+
+import {
+  inferHostedAgentRole,
+  parseDecisionBlockFromBody,
+  parseHostedAgentAnswer,
+  type HostedAgentAnswer,
+  type RoundtableDecisionPayload,
+} from '../lib/hostedAgentAnswer';
+import { dispatchRoundtableDecisionToWork } from '../agent/roomAiParticipantRuntime';
+import {
+  canUseGitHubIssueRuntime,
+  deliverGitHubIssuePullRequest,
+} from '../agent/githubIssueDelivery';
+import {
+  resolvePreferredProjectWorkspace,
+  useRoomAiParticipants,
+} from '../stores/roomAiParticipants';
+import { useWorkLedger } from '../stores/workLedger';
+
+export { parseHostedAgentAnswer, type HostedAgentAnswer };
+
+function RoundtableDecisionCard({
+  rid,
+  mid,
+  decision,
+}: {
+  rid: string;
+  mid: string;
+  decision: RoundtableDecisionPayload;
+}) {
+  const t = useT();
+  const participant = useRoomAiParticipants((s) => s.participants[rid]);
+  const linkedIssue = participant?.linkedGithubIssue;
+  const defaultOptionId =
+    decision.options.find((opt) => opt.recommended)?.id ?? decision.options[0]?.id ?? '';
+  const [chosenId, setChosenId] = useState(defaultOptionId);
+  const [forceIsolate, setForceIsolate] = useState(false);
+  const [dispatching, setDispatching] = useState(false);
+  const [dispatchedCardId, setDispatchedCardId] = useState<string | null>(null);
+  const [commentIssueOnPr, setCommentIssueOnPr] = useState(true);
+  const [deliveringPr, setDeliveringPr] = useState(false);
+  const [deliveredPrUrl, setDeliveredPrUrl] = useState<string | null>(null);
+
+  const effectiveCardId = dispatchedCardId ?? participant?.linkedCardId ?? null;
+  const cardStage = useWorkLedger((s) =>
+    effectiveCardId ? s.cards.find((c) => c.id === effectiveCardId)?.state.stage : undefined,
+  );
+  const executionInFlight = cardStage === 'in_progress' || cardStage === 'verifying';
+
+  const handleDispatch = async () => {
+    if (dispatching || dispatchedCardId) return;
+    setDispatching(true);
+    try {
+      const result = await dispatchRoundtableDecisionToWork({
+        rid,
+        mid,
+        decision,
+        chosenOptionId: chosenId,
+        forceIsolateWorktree: forceIsolate,
+      });
+      setDispatchedCardId(result.cardId);
+      toast.success(t('chat.aiParticipant.dispatchedCardBtn'));
+    } catch (error) {
+      toast.error(error, t('chat.aiParticipant.dispatchFailed'));
+    } finally {
+      setDispatching(false);
+    }
+  };
+
+  const handleDeliverPr = async () => {
+    if (!linkedIssue || deliveringPr || executionInFlight) return;
+    setDeliveringPr(true);
+    try {
+      const workspaceRoot = participant?.workspaceRoot || resolvePreferredProjectWorkspace();
+      const result = await deliverGitHubIssuePullRequest({
+        workspaceRoot,
+        issue: linkedIssue,
+        decisionTitle: decision.title,
+        decisionSummary: participant?.latestDecisionSummary,
+        commentOnIssue: commentIssueOnPr,
+      });
+      if (result.prUrl) {
+        setDeliveredPrUrl(result.prUrl);
+      }
+      const statusText = [
+        `🤖 **GitHub ${linkedIssue.owner}/${linkedIssue.repo}#${linkedIssue.number}**`,
+        t('chat.aiParticipant.githubPrDeliveredMsg', {
+          branch: result.branch,
+          url: result.prUrl || result.message,
+          commentStatus: result.commented
+            ? t('chat.aiParticipant.githubCommentSynced')
+            : t('chat.aiParticipant.githubCommentSkipped'),
+        }),
+      ].join('\n');
+      await rest.sendMessage(rid, statusText).catch(() => undefined);
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(error, t('chat.aiParticipant.githubDeliverFailed'));
+    } finally {
+      setDeliveringPr(false);
+    }
+  };
+
+  return (
+    <div className="mt-2.5 rounded-xl border border-primary/30 bg-surface-4 p-3 text-xs shadow-raise">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-semibold text-ink">{decision.title}</span>
+        <div className="flex items-center gap-1.5">
+          {linkedIssue ? (
+            <a
+              href={linkedIssue.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-5 items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2 font-mono text-2xs font-medium text-primary hover:bg-primary/20"
+            >
+              <GitPullRequest size={10} />
+              <span>GitHub #{linkedIssue.number}</span>
+            </a>
+          ) : null}
+          {dispatchedCardId ? (
+            <span className="inline-flex h-5 items-center gap-1 rounded-full bg-primary-light px-2 text-2xs font-medium text-primary">
+              <Check size={11} />
+              {t('chat.aiParticipant.dispatchedCardBtn')}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      {decision.consensus.length > 0 ? (
+        <div className="mt-2 space-y-1">
+          <div className="font-medium text-ink-3">{t('chat.aiParticipant.decisionConsensusLabel')}</div>
+          {decision.consensus.map((item, idx) => (
+            <div key={idx} className="flex items-start gap-1.5 text-ink-2">
+              <Check size={12} className="mt-0.5 shrink-0 text-primary" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {decision.contention ? (
+        <div className="mt-2 rounded-lg border border-line-soft bg-surface-3 px-2.5 py-1.5 text-ink-2">
+          <span className="font-medium text-ink">{t('chat.aiParticipant.decisionContentionLabel')}：</span>
+          <span>{decision.contention}</span>
+        </div>
+      ) : null}
+
+      {decision.targetFiles && decision.targetFiles.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <span className="text-ink-3">{t('chat.aiParticipant.decisionFilesLabel')}:</span>
+          {decision.targetFiles.slice(0, 5).map((file) => (
+            <span key={file} className="rounded bg-surface-3 px-1.5 py-0.5 font-mono text-ink-2">
+              {file}
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-2.5">
+        <div className="mb-1.5 font-medium text-ink-3">{t('chat.aiParticipant.decisionOptionsLabel')}</div>
+        <div className="space-y-1.5">
+          {decision.options.map((opt) => {
+            const selected = opt.id === chosenId;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                disabled={Boolean(dispatchedCardId)}
+                onClick={() => setChosenId(opt.id)}
+                className={`flex w-full items-start justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left transition ${
+                  selected
+                    ? 'border-primary bg-primary-light/70 text-ink'
+                    : 'border-line bg-surface-3 text-ink-2 hover:border-primary/40'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <span>{opt.label}</span>
+                    {opt.recommended ? (
+                      <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-2xs font-medium text-primary">
+                        {t('chat.aiParticipant.decisionRecommendedTag')}
+                      </span>
+                    ) : null}
+                  </div>
+                  {opt.summary ? <div className="mt-0.5 text-ink-3">{opt.summary}</div> : null}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-2.5">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={Boolean(dispatchedCardId)}
+            onClick={() => setForceIsolate((v) => !v)}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition ${
+              forceIsolate
+                ? 'border-primary/40 bg-primary-light text-primary'
+                : 'border-line bg-surface-3 text-ink-2 hover:border-primary/30'
+            }`}
+          >
+            <span>
+              {forceIsolate
+                ? t('chat.aiParticipant.execModeWorktree')
+                : t('chat.aiParticipant.execModeInPlace')}
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled={dispatching}
+            onClick={() => {
+              void useChat.getState().send(t('chat.aiParticipant.decisionReDebatePrompt'), { rid });
+            }}
+            className="inline-flex items-center gap-1 rounded-md border border-line bg-surface-3 px-2 py-1 text-xs text-ink-2 transition hover:border-primary/40 hover:text-primary"
+          >
+            <span>{t('chat.aiParticipant.decisionReDebateBtn')}</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          disabled={dispatching || Boolean(dispatchedCardId)}
+          onClick={() => void handleDispatch()}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-white transition hover:bg-primary-hover disabled:opacity-60"
+        >
+          {dispatching ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : dispatchedCardId ? (
+            <Check size={12} />
+          ) : (
+            <Sparkles size={12} />
+          )}
+          <span>
+            {dispatchedCardId
+              ? t('chat.aiParticipant.dispatchedCardBtn')
+              : t('chat.aiParticipant.dispatchToWorkBtn')}
+          </span>
+        </button>
+      </div>
+
+      {linkedIssue && effectiveCardId && canUseGitHubIssueRuntime() ? (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-2">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-ink-2">
+            <input
+              type="checkbox"
+              checked={commentIssueOnPr}
+              onChange={(event) => setCommentIssueOnPr(event.target.checked)}
+              className="h-3.5 w-3.5 rounded border-line text-primary"
+            />
+            <span>{t('chat.aiParticipant.githubCommentOnPrToggle')}</span>
+          </label>
+          <div className="flex items-center gap-2">
+            {deliveredPrUrl ? (
+              <a
+                href={deliveredPrUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded-md border border-success/30 bg-success/10 px-2.5 py-1 text-xs font-medium text-success hover:bg-success/20"
+              >
+                <GitPullRequest size={11} />
+                <span>{t('chat.aiParticipant.githubViewPrBtn')}</span>
+              </a>
+            ) : (
+              <button
+                type="button"
+                disabled={deliveringPr || executionInFlight}
+                onClick={() => void handleDeliverPr()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition hover:bg-primary/20 disabled:opacity-50"
+              >
+                {deliveringPr || executionInFlight ? (
+                  <Loader2 size={11} className="animate-spin" />
+                ) : (
+                  <GitPullRequest size={11} />
+                )}
+                <span>
+                  {executionInFlight
+                    ? t('chat.aiParticipant.githubWaitingVerifyBtn')
+                    : t('chat.aiParticipant.githubDeliverPrBtn', { number: linkedIssue.number })}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -718,24 +1045,8 @@ type MessageItemProps = {
   inThread?: boolean;
 };
 
-type HostedAgentAnswer = {
-  provider: 'Codex' | 'DeepSeek';
-  note?: string;
-  body: string;
-};
-
-function parseHostedAgentAnswer(text: string): HostedAgentAnswer | null {
-  const match = /^🤖\s*(Codex|DeepSeek)(?:（([^）\n]+)）)?[ \t]*\r?\n([\s\S]*)$/u.exec(text);
-  const body = match?.[3]?.trim();
-  if (!match || !body) return null;
-  return {
-    provider: match[1] as HostedAgentAnswer['provider'],
-    note: match[2],
-    body,
-  };
-}
-
 function MessageItem({ message, mine, grouped, inThread = false }: MessageItemProps) {
+  const { t, tp } = useI18n();
   const features = runtimeFeatures();
   const myUsername = useAuth((s) => s.user?.username);
   const myId = useAuth((s) => s.user?._id);
@@ -810,14 +1121,14 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const extensionRenderers = useKernelContributions('message.renderer');
   const messageRenderer = extensionRenderers.find((renderer) => renderer.match({ message }));
   const roomName = useChat(
-    (s) => s.subscriptions[message.rid]?.fname || s.subscriptions[message.rid]?.name || '会话',
-  );
+    (s) => s.subscriptions[message.rid]?.fname || s.subscriptions[message.rid]?.name || '',
+  ) || t('chat.common.conversation');
   // 服务端关掉讨论后不再摆入口（issue：#369 现场的「创建讨论」路径一并收口）
   const discussionsEnabled = useChat((s) => s.discussionsEnabled);
 
   const displayName = message.u.name || message.u.username;
   const handOverToButler = (): void => {
-    askButlerAboutMessages(message.rid, [message], '这条消息说了什么、需要我做什么？');
+    askButlerAboutMessages(message.rid, [message], t('chat.message.butlerPrompt'));
   };
 
   const loadExtractionContext = async (text: string) => {
@@ -875,7 +1186,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     if (aiExtracting) return;
     const text = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim();
     if (!text) {
-      toast.error('这条消息没有可提取的文字');
+      toast.error(t('chat.message.noExtractableText'));
       return;
     }
     setAiExtracting(true);
@@ -884,7 +1195,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
      * React 批处理让它在转圈渲染前就卸载了。而实测走 Codex 要十几秒——
      * 没有这条提示，用户点完看到的是一动不动的界面，只会以为没点上、再点几次。
      */
-    const toastId = toast.loading('正在读这条消息…');
+    const toastId = toast.loading(t('chat.message.readingMessage'));
     try {
       const context = await loadExtractionContext(text);
       const draft = await extractMessageAction(
@@ -897,18 +1208,21 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
           context,
           sentAt: new Date(message.rocketxOriginalTs ?? tsMs(message.ts)).toISOString(),
         },
-        codexSkillGateway('message-action-extraction', '从消息提取动作'),
+        codexSkillGateway('message-action-extraction', t('chat.message.extractActionTaskTitle')),
       );
       if (target === 'todo') setAiTodo(toTodoPrefill(draft, text));
       else setAiWorkItem(toWorkItemPrefill(draft));
       toast.update(toastId, {
         kind: 'success',
-        message: target === 'todo' ? '待办草稿好了，你过一眼' : '工作项草稿好了，你过一眼',
+        message: target === 'todo' ? t('chat.message.todoDraftReady') : t('chat.message.workItemDraftReady'),
       });
     } catch (error) {
       toast.update(toastId, {
         kind: 'error',
-        message: humanError(error, target === 'todo' ? '没能从这条消息读出待办' : '没能从这条消息读出工作项'),
+        message: humanError(
+          error,
+          target === 'todo' ? t('chat.message.extractTodoFailed') : t('chat.message.extractWorkItemFailed'),
+        ),
       });
     } finally {
       setAiExtracting(false);
@@ -917,9 +1231,21 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const time = fmtTime(message.rocketxOriginalTs ?? tsMs(message.ts));
   // 纯媒体消息（只有图片/文件，没有文字与其他卡片）→ 不套气泡
   const visibleText = stripQuotePrefix(stripAgentSessionMarker(message.msg ?? ''));
+  const sharedSkill = useMemo(
+    () => (messageRenderer ? null : parseSharedSkillFromMessage(visibleText)),
+    [messageRenderer, visibleText],
+  );
+  const [importingSharedSkill, setImportingSharedSkill] = useState(false);
+  const [importedSharedSkill, setImportedSharedSkill] = useState(false);
   // 投票消息：卡片接管正文与附件展示（官方客户端看到的是正文里的题目文本）
   const pollInfo = pollFromMessage(message);
   const hostedAgentAnswer = messageRenderer ? null : parseHostedAgentAnswer(visibleText);
+  const hostedAgentRole = hostedAgentAnswer
+    ? inferHostedAgentRole(hostedAgentAnswer.provider, hostedAgentAnswer.note)
+    : null;
+  const parsedDecision = hostedAgentAnswer
+    ? parseDecisionBlockFromBody(hostedAgentAnswer.body)
+    : null;
   const rocketXSticker = messageRenderer || hostedAgentAnswer
     ? null
     : parseRocketXStickerShortcodeMessage(visibleText);
@@ -955,7 +1281,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       // 图片消息复制真实位图（issue #92）；失败时退回文本，至少不空手
       const copiedImage = await copyMessageImage(message, (path) => rest.fetchFile(path)).catch(
         (error) => {
-          toast.error(error, '图片复制失败，已改为复制文本');
+          toast.error(error, t('chat.message.copyImageFallback'));
           return false;
         },
       );
@@ -963,13 +1289,13 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
     } catch (err) {
-      toast.error(err, '复制失败');
+      toast.error(err, t('chat.common.copyFailed'));
     }
   };
 
   const copyLink = () => {
     void navigator.clipboard?.writeText(permalinkOf(message.rid, message._id));
-    toast.success('消息链接已复制');
+    toast.success(t('chat.message.linkCopied'));
   };
 
   const collectSticker = async () => {
@@ -977,7 +1303,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       const report = await collectStickerFromMessage(message);
       if (report.total > 0) toast.success(describeStickerImport(report));
     } catch (error) {
-      toast.error(error, '收藏贴纸失败');
+      toast.error(error, t('chat.message.collectStickerFailed'));
     }
   };
 
@@ -992,31 +1318,32 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
   const uncPaths = useMemo(() => extractUncPaths(message.msg ?? ''), [message.msg]);
   const openMessageUncPath = async (path: string): Promise<void> => {
     if (!isTauri) {
-      toast.info('局域网共享路径仅桌面端可打开');
+      toast.info(t('chat.message.uncDesktopOnly'));
       return;
     }
     try {
       await openUncPath(path);
     } catch (error) {
-      toast.error(error, '打开共享路径失败');
+      toast.error(error, t('chat.message.openUncFailed'));
     }
   };
 
-  const menuItems: MenuItem[] = [
-    { label: '回复', icon: Reply, onClick: () => setReplyTo(message) },
+  const rawMenuItems: Array<MenuItem & { serverOnly?: boolean }> = [
+    { label: t('chat.message.reply'), icon: Reply, serverOnly: true, onClick: () => setReplyTo(message) },
     ...(!inThread
       ? [
           {
-            label: '在话题中回复',
+            label: t('chat.message.replyInThread'),
             icon: MessageSquareText,
+            serverOnly: true,
             onClick: () => void openThread(message.tmid ?? message._id),
           },
         ]
       : []),
-    { label: '转发', icon: Share2, onClick: () => setForwarding(true) },
-    { label: '多选', icon: ListChecks, onClick: () => enterSelectMode(message._id) },
+    { label: t('chat.messageList.forward'), icon: Share2, serverOnly: true, onClick: () => setForwarding(true) },
+    { label: t('chat.message.multiSelect'), icon: ListChecks, serverOnly: true, onClick: () => enterSelectMode(message._id) },
     {
-      label: '加入看板',
+      label: t('chat.message.addToBoard'),
       icon: SquareKanban,
       onClick: () => {
         void useChat
@@ -1027,19 +1354,20 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
     ...(!inThread && discussionsEnabled
       ? [
           {
-            label: '创建讨论',
+            label: t('chat.discussion.createTitle'),
             icon: MessagesSquare,
+            serverOnly: true,
             onClick: () => setCreateDiscussionOpen(true),
           },
         ]
       : []),
-    { label: copied ? '已复制' : '复制', icon: Copy, onClick: () => void copy() },
-    { label: '复制消息链接', icon: Link2, onClick: copyLink },
+    { label: copied ? t('common.copied') : t('common.copy'), icon: Copy, onClick: () => void copy() },
+    { label: t('chat.message.copyLink'), icon: Link2, serverOnly: true, onClick: copyLink },
     ...(collectibleSticker
-      ? [{ label: '收藏到贴纸库', icon: SmilePlus, onClick: () => void collectSticker() }]
+      ? [{ label: t('chat.message.saveSticker'), icon: SmilePlus, onClick: () => void collectSticker() }]
       : []),
     {
-      label: inTodo ? '已在待办中' : '标记为待办',
+      label: inTodo ? t('chat.message.alreadyInTodos') : t('chat.message.markAsTodo'),
       icon: ListTodo,
       onClick: () => {
         if (inTodo) setModule('todos');
@@ -1047,48 +1375,52 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       },
     },
     {
-      label: '加到日历',
+      label: t('chat.message.addToCalendar'),
       icon: CalendarPlus,
       onClick: () => setCalendarOpen(true),
     },
     {
-      label: message.pinned ? '取消置顶' : '置顶',
+      label: message.pinned ? t('chat.message.unpin') : t('chat.message.pin'),
       icon: Pin,
+      serverOnly: true,
       onClick: () => void togglePin(message),
     },
     {
-      label: message.starred?.some((s) => s._id === myId) ? '取消标记' : '标记',
+      label: message.starred?.some((s) => s._id === myId) ? t('chat.message.unstar') : t('chat.message.star'),
       icon: Star,
       onClick: () => void toggleStar(message),
     },
-    { label: '创建工作项', icon: ClipboardList, onClick: () => setCreateWi(true) },
+    { label: t('chat.message.createWorkItem'), icon: ClipboardList, onClick: () => setCreateWi(true) },
     ...(features.ai && getAiRuntimeProvider() === 'pi'
       ? [
           {
-            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为待办',
+            label: aiExtracting ? t('chat.message.aiExtracting') : t('chat.message.aiExtractTodo'),
             icon: aiExtracting ? Loader2 : Sparkles,
             onClick: () => void extractWithAi('todo'),
           },
           {
-            label: aiExtracting ? 'AI 提取中…' : 'AI 提取为工作项',
+            label: aiExtracting ? t('chat.message.aiExtracting') : t('chat.message.aiExtractWorkItem'),
             icon: aiExtracting ? Loader2 : Sparkles,
             onClick: () => void extractWithAi('workitem'),
           },
         ]
       : []),
-    ...(features.butler ? [{ label: '交给 AI 管家', icon: Bot, onClick: () => handOverToButler() }] : []),
+    ...(features.butler ? [{ label: t('chat.message.handOverToButler'), icon: Bot, onClick: () => handOverToButler() }] : []),
     ...extensionActions.map((action) => ({
       label: action.label,
       icon: action.icon,
       onClick: () => void action.run({ message }),
     })),
     ...(mine && message.msg && !agentSessionCard
-      ? [{ label: '编辑', icon: Pencil, onClick: () => setEditing(true) }]
+      ? [{ label: t('common.edit'), icon: Pencil, onClick: () => setEditing(true) }]
       : []),
     ...(mine
-      ? [{ label: '删除', icon: Trash2, danger: true, onClick: () => setConfirmDelete(true) }]
+      ? [{ label: t('common.delete'), icon: Trash2, danger: true, onClick: () => setConfirmDelete(true) }]
       : []),
   ];
+  const menuItems: MenuItem[] = (
+    isLanFile ? rawMenuItems.filter((item) => !item.serverOnly) : rawMenuItems
+  ).map(({ serverOnly: _, ...item }) => item);
 
   const onContextMenu = (e: ReactMouseEvent) => {
     if (selectMode) {
@@ -1123,7 +1455,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       {selectMode && !isLanFile && (
         <button
           type="button"
-          aria-label={selected ? '取消选择消息' : '选择消息'}
+          aria-label={selected ? t('chat.message.deselectAria') : t('chat.message.selectAria')}
           onClick={(event) => {
             event.stopPropagation();
             toggleSelectMid(message._id);
@@ -1144,8 +1476,22 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         <div className={`w-9 shrink-0 ${selectMode ? 'pointer-events-none' : ''}`}>
           {!visuallyGrouped && (
             hostedAgentAnswer ? (
-              <span className="rocketx-agent-answer-avatar" aria-hidden="true">
-                <Bot size={17} />
+              <span
+                className="rocketx-agent-answer-avatar"
+                data-role={hostedAgentRole ?? undefined}
+                aria-hidden="true"
+              >
+                {hostedAgentRole === 'product' ? (
+                  <Compass size={17} />
+                ) : hostedAgentRole === 'architect' ? (
+                  <Blocks size={17} />
+                ) : hostedAgentRole === 'contrarian' ? (
+                  <Zap size={17} />
+                ) : hostedAgentRole === 'captain' ? (
+                  <Sparkles size={17} />
+                ) : (
+                  <Bot size={17} />
+                )}
               </span>
             ) : (
               <button onClick={() => setShowCard(true)} className="block cursor-pointer">
@@ -1215,7 +1561,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   </button>
                 ))}
                 <button
-                  title="更多表情"
+                  title={t('chat.message.moreEmojis')}
                   className={hoverBtn}
                   onClick={(e) => {
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -1226,7 +1572,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                 </button>
                 <div className="mx-0.5 h-4 w-px bg-line" />
                 <button
-                  title="回复"
+                  title={t('chat.message.reply')}
                   className={isLanFile ? 'hidden' : hoverBtn}
                   onClick={() => setReplyTo(message)}
                 >
@@ -1234,7 +1580,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                 </button>
                 {!inThread && !isLanFile && (
                   <button
-                    title="在话题中回复"
+                    title={t('chat.message.replyInThread')}
                     className={hoverBtn}
                     onClick={() => void openThread(message.tmid ?? message._id)}
                   >
@@ -1242,14 +1588,46 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   </button>
                 )}
                 <button
-                  title="转发"
+                  title={t('chat.messageList.forward')}
                   className={isLanFile ? 'hidden' : hoverBtn}
                   onClick={() => setForwarding(true)}
                 >
                   <Share2 size={14} />
                 </button>
+                {features.butler && !isLanFile ? (
+                  <button
+                    type="button"
+                    draggable
+                    title={t('chat.butlerBridge.dragMessageToButlerTooltip')}
+                    aria-label={t('chat.butlerBridge.dragMessageToButlerAria')}
+                    className={`${hoverBtn} cursor-grab active:cursor-grabbing`}
+                    onDragStart={(e) => {
+                      const state = useChat.getState();
+                      const selectedIds = state.selectMode ? state.selectedMids : new Set<string>();
+                      const picked = selectedIds.size > 0
+                        ? (state.messages[message.rid] ?? []).filter((m) => selectedIds.has(m._id))
+                        : [message];
+                      const bundle = picked.length > 0 ? picked : [message];
+                      writeChatToButlerDrag(e.dataTransfer, {
+                        rid: message.rid,
+                        roomName,
+                        messages: bundle.map((m) => ({
+                          mid: m._id,
+                          sender: m.u.name || m.u.username,
+                          username: m.u.username,
+                          ts: tsMs(m.ts),
+                          text: stripQuotePrefix(stripAgentSessionMarker(m.msg ?? '')),
+                          ...(m.tmid ? { tmid: m.tmid } : {}),
+                        })),
+                      });
+                    }}
+                    onClick={() => handOverToButler()}
+                  >
+                    <Bot size={14} />
+                  </button>
+                ) : null}
                 <button
-                  title="更多"
+                  title={t('chat.area.more')}
                   className={hoverBtn}
                   onClick={(e) => {
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -1286,12 +1664,12 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   <>
                 <div className={collapsed ? 'max-h-60 overflow-hidden' : undefined}>
                 {message.pinned && (
-                  <span className="mr-1 inline-flex items-center text-primary" title="已置顶">
+                  <span className="mr-1 inline-flex items-center text-primary" title={t('chat.message.pinnedBadge')}>
                     <Pin size={12} />
                   </span>
                 )}
                 {message.starred?.some((s) => s._id === myId) && (
-                  <span className="mr-1 inline-flex items-center text-[#ff8800]" title="已标记">
+                  <span className="mr-1 inline-flex items-center text-[#ff8800]" title={t('chat.message.starredBadge')}>
                     <Star size={12} fill="currentColor" />
                   </span>
                 )}
@@ -1299,14 +1677,23 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   <button
                     onClick={() => setModule('todos')}
                     className="mr-1 inline-flex items-center text-primary"
-                    title="已加入待办，点击查看"
+                    title={t('chat.message.inTodoBadge')}
                   >
                     <ListTodo size={12} />
                   </button>
                 )}
-                {hostedAgentAnswer
-                  ? renderMarkdownDoc(hostedAgentAnswer.body, myUsername)
-                  : pollInfo
+                {hostedAgentAnswer ? (
+                  <>
+                    {renderMarkdownDoc(parsedDecision?.cleanBody || hostedAgentAnswer.body, myUsername)}
+                    {parsedDecision?.decision ? (
+                      <RoundtableDecisionCard
+                        rid={message.rid}
+                        mid={message._id}
+                        decision={parsedDecision.decision}
+                      />
+                    ) : null}
+                  </>
+                ) : pollInfo
                     ? <PollCard message={message} poll={pollInfo.poll} />
                     : rocketXSticker
                     ? (
@@ -1314,14 +1701,59 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                         path={`/emoji-custom/${encodeURIComponent(rocketXSticker.name)}.${rocketXSticker.format}`}
                         alt={rocketXSticker.name}
                         className="block h-[72px] w-[72px] object-contain"
-                        fallback={<span className="text-xs text-ink-3">[贴纸加载失败]</span>}
+                        fallback={<span className="text-xs text-ink-3">{t('chat.message.stickerLoadFailed')}</span>}
                       />
                     )
                   : visibleText
                     ? renderMarkdown(visibleText, myUsername)
                     : null}
+                {sharedSkill ? (
+                  <div className="mt-2 rounded-xl border border-primary/30 bg-surface-4 p-2.5 text-xs shadow-raise">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <Sparkles size={13} className="shrink-0 text-primary" aria-hidden="true" />
+                        <span className="truncate font-semibold text-ink">{sharedSkill.name}</span>
+                        <span className="rounded bg-fill-1 px-1.5 py-0.5 font-mono text-ink-3">/{sharedSkill.slug}</span>
+                        <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-2xs font-medium text-primary">
+                          {sharedSkill.category}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={importingSharedSkill || importedSharedSkill}
+                        onClick={() => {
+                          setImportingSharedSkill(true);
+                          void useButlerSkills
+                            .getState()
+                            .importMarkdown(sharedSkill.rawMarkdown)
+                            .then(() => {
+                              setImportedSharedSkill(true);
+                              toast.success(t('chat.butlerBridge.importedSkillToast', { name: sharedSkill.name }));
+                            })
+                            .catch((err) => toast.error(err, t('chat.butlerBridge.importSkillFailed')))
+                            .finally(() => setImportingSharedSkill(false));
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white transition hover:bg-primary-hover disabled:opacity-60"
+                      >
+                        {importingSharedSkill ? (
+                          <Loader2 size={11} className="animate-spin" aria-hidden="true" />
+                        ) : importedSharedSkill ? (
+                          <Check size={11} aria-hidden="true" />
+                        ) : (
+                          <BookmarkPlus size={11} aria-hidden="true" />
+                        )}
+                        <span>
+                          {t(importedSharedSkill ? 'chat.butlerBridge.importedSkillBtn' : 'chat.butlerBridge.importSkillBtn')}
+                        </span>
+                      </button>
+                    </div>
+                    {sharedSkill.description ? (
+                      <p className="mt-1 text-ink-2">{sharedSkill.description}</p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {!message.msg && !attachments.length ? (
-                  <span className="text-ink-3">[暂不支持的消息类型]</span>
+                  <span className="text-ink-3">{t('chat.message.unsupportedType')}</span>
                 ) : null}
                 {attachments.map((att, i) =>
                   pollInfo && i === pollInfo.attIndex ? null : (
@@ -1341,7 +1773,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                   <button
                     key={uncPath}
                     type="button"
-                    title={isTauri ? '打开局域网共享路径' : '局域网共享路径仅桌面端可打开'}
+                    title={isTauri ? t('chat.message.openUncTitle') : t('chat.message.uncDesktopOnly')}
                     onClick={() => setUncOpen(uncPath)}
                     className="mt-1 flex max-w-full min-w-0 items-center gap-1.5 rounded-md border border-line px-2 py-1 text-left text-xs text-ink-2 transition hover:bg-fill-hover"
                   >
@@ -1352,14 +1784,16 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
                     <span className="min-w-0 break-all line-clamp-2">{uncPath}</span>
                   </button>
                 ))}
-                {message.editedAt && <span className="ml-1 text-xs text-ink-3">(已编辑)</span>}
+                {message.editedAt && <span className="ml-1 text-xs text-ink-3">{t('chat.message.editedTag')}</span>}
                 </div>
                 {longMessage && !editing && (
                   <button
                     onClick={() => setExpanded((v) => !v)}
                     className="mt-1 text-xs text-primary hover:underline"
                   >
-                    {expanded ? '收起' : `展开全部（共 ${visibleText.length} 字）`}
+                    {expanded
+                      ? t('chat.message.collapse')
+                      : t('chat.message.expandAll', { count: visibleText.length })}
                   </button>
                 )}
                   </>
@@ -1381,28 +1815,28 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
               className="mb-0.5 shrink-0 text-xs text-ink-3"
               title={
                 message.rocketxLanHash
-                  ? '文件经局域网直传，只保留在双方本机；引用、转发、置顶等依赖服务器的操作不可用'
-                  : '已在局域网里送到对方；等网络恢复会自动补发到服务器，你不用再发一次'
+                  ? t('chat.message.lanFileTooltip')
+                  : t('chat.message.lanMsgTooltip')
               }
             >
               {message.rocketxLanBytesPerSecond
-                ? `局域网直传 · ${fmtSize(message.rocketxLanBytesPerSecond)}/s`
+                ? t('chat.message.lanSpeed', { speed: fmtSize(message.rocketxLanBytesPerSecond) })
                 : message.rocketxLanHash
-                  ? '局域网直传 · 仅本机'
-                  : '局域网已送达 · 待补发'}
+                  ? t('chat.message.lanLocalOnly')
+                  : t('chat.message.lanPendingSync')}
             </span>
           )}
           {message.failed && (
             <span className="mb-0.5 flex shrink-0 items-center gap-1">
               <button
-                title="发送失败，点击重试"
+                title={t('chat.message.failedRetryTooltip')}
                 onClick={() => void resendMessage(message._id)}
                 className="text-danger"
               >
                 <AlertCircle size={14} />
               </button>
               <button
-                title="放弃发送"
+                title={t('chat.message.discardTooltip')}
                 onClick={() => discardMessage(message._id)}
                 className="text-ink-3 hover:text-danger"
               >
@@ -1416,15 +1850,15 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         {mine && !message.pending && !message.failed && receipt?.mid === message._id && (
           <span
             className="mt-0.5 text-xs text-ink-3"
-            title={receipt.users.map((u) => u.name || u.username).join('、')}
+            title={receipt.users.map((u) => u.name || u.username).join(t('chat.common.listSep'))}
           >
             {roomType === 'd'
               ? receipt.users.length > 0
-                ? '已读'
-                : '未读'
+                ? t('chat.message.receiptRead')
+                : t('chat.message.receiptUnread')
               : receipt.users.length > 0
-                ? `${receipt.users.length} 人已读`
-                : '暂无人已读'}
+                ? tp(receipt.users.length, 'chat.message.receiptReadByOne', 'chat.message.receiptReadByOther')
+                : t('chat.message.receiptNone')}
           </span>
         )}
 
@@ -1434,7 +1868,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
           >
             <MessageSquareText size={14} />
-            {message.tcount} 条回复
+            {tp(message.tcount, 'chat.message.threadRepliesOne', 'chat.message.threadRepliesOther')}
           </button>
         ) : null}
 
@@ -1444,7 +1878,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             className="mt-1 flex items-center gap-1 text-xs text-primary hover:underline"
           >
             <MessageSquareText size={14} />
-            查看话题
+            {t('chat.message.viewThread')}
           </button>
         ) : null}
 
@@ -1468,16 +1902,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          items={
-            isLanFile
-              ? menuItems.filter(
-                  (item) =>
-                    !['回复', '在话题中回复', '转发', '多选', '创建讨论', '复制消息链接', '置顶'].includes(
-                      item.label,
-                    ),
-                )
-              : menuItems
-          }
+          items={menuItems}
           onClose={() => setMenu(null)}
         />
       )}
@@ -1492,7 +1917,7 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
       {calendarOpen && (
         <CalendarEventDialog
           defaultDate={todayKey()}
-          defaultTitle={visibleText.slice(0, 60) || (message.file?.name ? `[文件] ${message.file.name}` : '')}
+          defaultTitle={visibleText.slice(0, 60) || (message.file?.name ? t('chat.projection.filePrefix', { name: message.file.name }) : '')}
           origin={{
             kind: 'message',
             id: message._id,
@@ -1511,7 +1936,9 @@ function MessageItem({ message, mine, grouped, inThread = false }: MessageItemPr
             roomName,
             // 待办里存快照：原消息被删了也还看得懂当时是什么事
             excerpt: visibleText.slice(0, 200) ||
-              (message.file?.name ? `[文件] ${message.file.name}` : '[图片/附件]'),
+              (message.file?.name
+                ? t('chat.projection.filePrefix', { name: message.file.name })
+                : t('chat.projection.mediaAttachment')),
             author: displayName,
           }}
           onClose={() => setTodoOpen(false)}

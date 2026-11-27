@@ -1,4 +1,5 @@
 import type { RcSlashCommand } from '@rcx/rc-client';
+import { t } from '../i18n';
 import type { CommandDialog } from '../stores/commandUi';
 
 /**
@@ -40,41 +41,154 @@ export interface ClientCommandInfo {
  */
 export const COMMAND_INFO: Record<string, ClientCommandInfo> = {
   // ---- 纯文本类（客户端直发） ----
-  me: { desc: '以第三人称动作形式发送一条消息', params: '动作内容', kind: 'forward' },
-  shrug: { desc: '在消息后附上摊手颜文字', params: '附带的消息（可选）', kind: 'text' },
-  tableflip: { desc: '在消息后附上掀桌颜文字', params: '附带的消息（可选）', kind: 'text' },
-  unflip: { desc: '在消息后附上扶回桌子的颜文字', params: '附带的消息（可选）', kind: 'text' },
-  lennyface: { desc: '在消息后附上滑稽颜文字', params: '附带的消息（可选）', kind: 'text' },
-  gimme: { desc: '在消息前附上拥抱颜文字', params: '附带的消息（可选）', kind: 'text' },
+  me: {
+    get desc() { return t('chat.command.me.desc'); },
+    get params() { return t('chat.command.me.params'); },
+    kind: 'forward',
+  },
+  shrug: {
+    get desc() { return t('chat.command.shrug.desc'); },
+    get params() { return t('chat.command.optionalMessageParams'); },
+    kind: 'text',
+  },
+  tableflip: {
+    get desc() { return t('chat.command.tableflip.desc'); },
+    get params() { return t('chat.command.optionalMessageParams'); },
+    kind: 'text',
+  },
+  unflip: {
+    get desc() { return t('chat.command.unflip.desc'); },
+    get params() { return t('chat.command.optionalMessageParams'); },
+    kind: 'text',
+  },
+  lennyface: {
+    get desc() { return t('chat.command.lennyface.desc'); },
+    get params() { return t('chat.command.optionalMessageParams'); },
+    kind: 'text',
+  },
+  gimme: {
+    get desc() { return t('chat.command.gimme.desc'); },
+    get params() { return t('chat.command.optionalMessageParams'); },
+    kind: 'text',
+  },
 
   // ---- 参数化动作类（打开 GUI） ----
-  msg: { desc: '给成员发私信，可直接跳转到会话', params: '@用户名 [首条消息]', kind: 'gui' },
-  invite: { desc: '邀请成员加入当前频道', params: '@用户名（可多个）', kind: 'gui' },
-  'invite-all-to': { desc: '把当前频道的成员全部邀请到指定频道', params: '#目标频道', kind: 'gui' },
-  'invite-all-from': { desc: '把指定频道的成员全部邀请到当前频道', params: '#来源频道', kind: 'gui' },
-  kick: { desc: '把成员移出当前频道', params: '@用户名', kind: 'gui' },
-  mute: { desc: '禁止成员在当前频道发言', params: '@用户名', kind: 'gui' },
-  unmute: { desc: '恢复成员在当前频道的发言权限', params: '@用户名', kind: 'gui' },
-  ban: { desc: '封禁用户账号（服务器级）', params: '@用户名', kind: 'gui' },
-  unban: { desc: '解除用户账号封禁', params: '@用户名', kind: 'gui' },
-  create: { desc: '创建一个新的公开或私有频道', params: '频道名 [--private]', kind: 'gui' },
-  join: { desc: '搜索并加入公开频道', params: '#频道名', kind: 'gui' },
-  leave: { desc: '退出当前频道', kind: 'gui' },
-  part: { desc: '退出当前频道（同 /leave）', kind: 'gui' },
-  hide: { desc: '把当前会话从列表隐藏（收到新消息会重新出现）', kind: 'text' },
-  archive: { desc: '归档频道，归档后不再接收新消息', params: '#频道名（默认当前频道）', kind: 'gui' },
-  unarchive: { desc: '取消频道归档', params: '#频道名（默认当前频道）', kind: 'gui' },
-  topic: { desc: '设置当前频道的话题', params: '话题内容', kind: 'gui' },
-  status: { desc: '设置个人在线状态与状态文案', params: '状态文案（可选）', kind: 'gui' },
-  poll: { desc: '发起一场投票，成员点数字表情计票', params: '问题（可选）', kind: 'gui' },
-  kanban: { desc: '打开频道消息看板，可把消息收纳成卡片', kind: 'gui' },
-  oncall: { desc: '打开频道团队值班表，可发布排班快照', kind: 'gui' },
-  help: { desc: '查看全部斜杠命令', kind: 'gui' },
+  msg: {
+    get desc() { return t('chat.command.msg.desc'); },
+    get params() { return t('chat.command.msg.params'); },
+    kind: 'gui',
+  },
+  invite: {
+    get desc() { return t('chat.command.invite.desc'); },
+    get params() { return t('chat.command.invite.params'); },
+    kind: 'gui',
+  },
+  'invite-all-to': {
+    get desc() { return t('chat.command.inviteAllTo.desc'); },
+    get params() { return t('chat.command.inviteAllTo.params'); },
+    kind: 'gui',
+  },
+  'invite-all-from': {
+    get desc() { return t('chat.command.inviteAllFrom.desc'); },
+    get params() { return t('chat.command.inviteAllFrom.params'); },
+    kind: 'gui',
+  },
+  kick: {
+    get desc() { return t('chat.command.kick.desc'); },
+    get params() { return t('chat.command.usernameParams'); },
+    kind: 'gui',
+  },
+  mute: {
+    get desc() { return t('chat.command.mute.desc'); },
+    get params() { return t('chat.command.usernameParams'); },
+    kind: 'gui',
+  },
+  unmute: {
+    get desc() { return t('chat.command.unmute.desc'); },
+    get params() { return t('chat.command.usernameParams'); },
+    kind: 'gui',
+  },
+  ban: {
+    get desc() { return t('chat.command.ban.desc'); },
+    get params() { return t('chat.command.usernameParams'); },
+    kind: 'gui',
+  },
+  unban: {
+    get desc() { return t('chat.command.unban.desc'); },
+    get params() { return t('chat.command.usernameParams'); },
+    kind: 'gui',
+  },
+  create: {
+    get desc() { return t('chat.command.create.desc'); },
+    get params() { return t('chat.command.create.params'); },
+    kind: 'gui',
+  },
+  join: {
+    get desc() { return t('chat.command.join.desc'); },
+    get params() { return t('chat.command.join.params'); },
+    kind: 'gui',
+  },
+  leave: {
+    get desc() { return t('chat.command.leave.desc'); },
+    kind: 'gui',
+  },
+  part: {
+    get desc() { return t('chat.command.part.desc'); },
+    kind: 'gui',
+  },
+  hide: {
+    get desc() { return t('chat.command.hide.desc'); },
+    kind: 'text',
+  },
+  archive: {
+    get desc() { return t('chat.command.archive.desc'); },
+    get params() { return t('chat.command.optionalChannelParams'); },
+    kind: 'gui',
+  },
+  unarchive: {
+    get desc() { return t('chat.command.unarchive.desc'); },
+    get params() { return t('chat.command.optionalChannelParams'); },
+    kind: 'gui',
+  },
+  topic: {
+    get desc() { return t('chat.command.topic.desc'); },
+    get params() { return t('chat.command.topic.params'); },
+    kind: 'gui',
+  },
+  status: {
+    get desc() { return t('chat.command.status.desc'); },
+    get params() { return t('chat.command.status.params'); },
+    kind: 'gui',
+  },
+  poll: {
+    get desc() { return t('chat.command.poll.desc'); },
+    get params() { return t('chat.command.poll.params'); },
+    kind: 'gui',
+  },
+  kanban: {
+    get desc() { return t('chat.command.kanban.desc'); },
+    kind: 'gui',
+  },
+  oncall: {
+    get desc() { return t('chat.command.oncall.desc'); },
+    kind: 'gui',
+  },
+  help: {
+    get desc() { return t('chat.command.help.desc'); },
+    kind: 'gui',
+  },
 
   // ---- 服务端提供，保持转发 ----
   // 注意：这里的键一律小写（clientCommandInfo 查找时会把命令名转小写）
-  sendemailattachment: { desc: '把消息附件通过邮件发送（服务器应用提供）', params: '消息 ID', kind: 'forward' },
-  'slackbridge-import': { desc: '从 Slack 导入历史消息（服务器应用提供）', kind: 'forward' },
+  sendemailattachment: {
+    get desc() { return t('chat.command.sendemailattachment.desc'); },
+    get params() { return t('chat.command.sendemailattachment.params'); },
+    kind: 'forward',
+  },
+  'slackbridge-import': {
+    get desc() { return t('chat.command.slackbridgeImport.desc'); },
+    kind: 'forward',
+  },
 };
 
 /** 颜文字命令的改写素材：与 RC 服务端 slashcommands 的输出保持一致 */

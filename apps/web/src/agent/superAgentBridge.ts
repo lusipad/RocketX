@@ -1,4 +1,5 @@
 import { tsMs, type RcMessage, type RoomType } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { agentDeviceId } from './device';
 import { renderDispatchSpec } from './dispatchSpec';
 import { agentMessageBridgeChanges } from './messageBridge';
@@ -13,8 +14,7 @@ import { actionStopReason, createMessageWatermarks, createWorkSupervisor, runWor
 import { getServerBase, rest } from '../lib/client';
 import { desktopNotify } from '../lib/notify';
 import { workContextPathKey } from '../lib/workContext';
-import { isNativeHostAction, isNativeHostSession, isNativeHostWork, NATIVE_HOST_CONTROL_REASON } from '../lib/nativeWorkOwnership';
-import { tr } from '../lib/uiLocale';
+import { isNativeHostAction, isNativeHostSession, isNativeHostWork, nativeHostControlReason } from '../lib/nativeWorkOwnership';
 import { isTauri } from '../lib/http';
 import { captureButlerRuntimeAccountContext } from '../platform/butlerAccountReady';
 import {
@@ -102,7 +102,7 @@ const defaultDrivers: SuperAgentRuntimeDrivers = {
   }) => {
     if (useWorkLedger.getState().sessions.some((session) => isNativeHostSession(session)
       && session.runtime === 'pi' && session.nativeSessionId === threadId
-      && workContextPathKey(session.workspaceRoot) === workContextPathKey(workspaceRoot))) throw new Error(NATIVE_HOST_CONTROL_REASON);
+      && workContextPathKey(session.workspaceRoot) === workContextPathKey(workspaceRoot))) throw new Error(nativeHostControlReason());
     const ws = useCodexWorkspace.getState();
     if (requiresColdResume || !ws.threadStates[threadId]) {
       await ws.resumeThread(threadId, { workspaceRoot, background: true });
@@ -117,7 +117,7 @@ const defaultDrivers: SuperAgentRuntimeDrivers = {
     };
   },
   startAcpWorkerTask: async ({ agentId, workspaceRoot, specText, title, todoId }) => {
-    if (todoId && isNativeHostWork(todoId, useWorkLedger.getState().sessions)) throw new Error(NATIVE_HOST_CONTROL_REASON);
+    if (todoId && isNativeHostWork(todoId, useWorkLedger.getState().sessions)) throw new Error(nativeHostControlReason());
     const acp = useAcpAgents.getState();
     const session = await acp.startSession({
       agentId,
@@ -129,7 +129,7 @@ const defaultDrivers: SuperAgentRuntimeDrivers = {
       injectMemory: useWorkLedger.getState().cards.find((card) => card.id === todoId)?.state.visibility === 'private',
     });
     const latest = useAcpAgents.getState().sessions[session.sessionKey];
-    if (latest?.nativeIdentityPending) throw new Error('Codex 尚未返回可持久化的原生会话身份，未创建可恢复工作记录');
+    if (latest?.nativeIdentityPending) throw new Error(t('agent.superAgent.nativeIdentityPending'));
     return {
       sessionId: latest?.nativeSessionId ?? session.acpSessionId,
       sessionKey: session.sessionKey,
@@ -151,7 +151,7 @@ const defaultDrivers: SuperAgentRuntimeDrivers = {
     if ((todoId && isNativeHostWork(todoId, sessions)) || sessions.some((session) => isNativeHostSession(session)
       && session.nativeSessionId === sessionId && workContextPathKey(session.workspaceRoot) === workContextPathKey(workspaceRoot)
       && (session.sourceScope?.trim() || 'default') === (sourceScope?.trim() || 'default')
-      && (!session.accountScope || session.accountScope === (accountScope ?? resolveButlerAccountScope())))) throw new Error(NATIVE_HOST_CONTROL_REASON);
+      && (!session.accountScope || session.accountScope === (accountScope ?? resolveButlerAccountScope())))) throw new Error(nativeHostControlReason());
     const acp = useAcpAgents.getState();
     let existing = Object.values(acp.sessions).find(
       (s) => matchesAcpWorkSession({ nativeSessionId: sessionId, sourceScope, accountScope: accountScope ?? null,
@@ -601,10 +601,10 @@ export function promoteWorkSessionToCard(
     : records.find((session) => session.id === sessionOrId.id
       && workSessionImportIdentity(session, accountScope) === workSessionImportIdentity(sessionOrId, accountScope));
   if (!initialSession) {
-    return Promise.reject(new Error('未找到当前账号下对应的本机会话记录，请刷新后重试'));
+    return Promise.reject(new Error(t('agent.superAgent.sessionRecordNotFound')));
   }
   if (initialSession.accountScope && initialSession.accountScope !== accountScope) {
-    return Promise.reject(new Error('账号已切换，请在当前账号重新选择会话'));
+    return Promise.reject(new Error(t('agent.superAgent.accountSwitchedSelect')));
   }
   const identity = workSessionImportIdentity(initialSession, accountScope);
   const pending = sessionImportsInFlight.get(identity);
@@ -616,7 +616,7 @@ export function promoteWorkSessionToCard(
   });
   const assertAccount = () => {
     if (accountChanged || resolveButlerAccountScope() !== accountScope || globalThis.localStorage?.getItem('rcx-owner') !== owner) {
-      throw new Error('账号已切换，已停止旧账号的会话导入');
+      throw new Error(t('agent.superAgent.accountSwitchedImport'));
     }
   };
   const operation = (async () => {
@@ -624,7 +624,7 @@ export function promoteWorkSessionToCard(
     if (initialSession.todoId) {
       const existing = useWorkLedger.getState().cards.find((card) => card.id === initialSession.todoId);
       if (existing) return existing;
-      throw new Error('会话已关联的工作暂不可用，请刷新工作台后重试');
+      throw new Error(t('agent.superAgent.linkedWorkUnavailable'));
     }
 
   const meta = parseWorkSessionProviderMeta(initialSession);
@@ -638,7 +638,7 @@ export function promoteWorkSessionToCard(
   const card = await useWorkLedger.getState().createCard({
     requestId: `session-import:${identity}`,
     title,
-    note: initialSession.workspaceRoot ? `工作区：${initialSession.workspaceRoot}` : undefined,
+    note: initialSession.workspaceRoot ? t('agent.superAgent.workspaceNote', { workspaceRoot: initialSession.workspaceRoot }) : undefined,
     priority: 3,
     stage,
     goal: title,
@@ -649,7 +649,7 @@ export function promoteWorkSessionToCard(
   assertAccount();
   const latestSession = useWorkLedger.getState().sessions.find((session) => session.id === initialSession.id
     && workSessionImportIdentity(session, accountScope) === identity);
-  if (!latestSession) throw new Error('会话来源已变化，请刷新后重新选择');
+  if (!latestSession) throw new Error(t('agent.superAgent.sessionSourceChanged'));
   await useWorkLedger
     .getState()
     .upsertSession(
@@ -705,19 +705,19 @@ export async function openOrResumeWorkSession(
   session: NativeWorkSessionRecord,
   options: { handoffConfirmed?: boolean } = {},
 ): Promise<void> {
-  if (isNativeHostSession(session)) throw new Error(NATIVE_HOST_CONTROL_REASON);
+  if (isNativeHostSession(session)) throw new Error(nativeHostControlReason());
   const meta = parseWorkSessionProviderMeta(session);
   const accountScope = resolveButlerAccountScope();
   const codexHandoff = meta.provider === 'codex' && session.origin !== 'rocketx_managed' && options.handoffConfirmed === true;
   if (session.controlMode === 'readonly' && !codexHandoff) {
-    throw new Error('该原生会话当前只读。请在工作台查看历史，并在原端停止后使用明确交接入口');
+    throw new Error(t('agent.superAgent.readonlyHandoffRequired'));
   }
   if (session.runtime === 'codex' && session.origin !== 'rocketx_managed' && !codexHandoff) {
-    throw new Error('外部 Codex 会话必须通过来源匹配的 ACP 原生交接继续，禁止交给 Pi 恢复');
+    throw new Error(t('agent.superAgent.externalCodexNoPi'));
   }
   if (session.runtime === 'acp' || codexHandoff) {
-    if (session.accountScope && session.accountScope !== resolveButlerAccountScope()) throw new Error('会话属于其他账号，请切回原账号后继续');
-    if (session.hostDeviceId && session.hostDeviceId !== agentDeviceId()) throw new Error('请在原会话所在设备继续');
+    if (session.accountScope && session.accountScope !== resolveButlerAccountScope()) throw new Error(t('agent.superAgent.sessionOtherAccount'));
+    if (session.hostDeviceId && session.hostDeviceId !== agentDeviceId()) throw new Error(t('agent.superAgent.sessionOtherDevice'));
     const live = Object.values(useAcpAgents.getState().sessions).find(
       (s) =>
         matchesAcpWorkSession(session, s, resolveButlerAccountScope()) &&
@@ -753,7 +753,7 @@ export async function openOrResumeWorkSession(
         handoffConfirmed: options.handoffConfirmed,
         linkedTodoId: session.todoId,
       });
-      if (resolveButlerAccountScope() !== accountScope) throw new Error('账号已切换，已停止原会话交接');
+      if (resolveButlerAccountScope() !== accountScope) throw new Error(t('agent.superAgent.accountSwitchedHandoff'));
       useUI.getState().openAcpHub(resumed.agentId);
       return;
     } catch (error) {
@@ -763,7 +763,7 @@ export async function openOrResumeWorkSession(
   }
 
   if (session.runtime !== 'pi') {
-    throw new Error('该会话没有可用的原生恢复通道，禁止用其他执行器新建代替恢复');
+    throw new Error(t('agent.superAgent.noResumeChannel'));
   }
   useUI.getState().openButlerConversation();
   const ws = useCodexWorkspace.getState();
@@ -786,7 +786,7 @@ export async function syncLiveSessionsIntoLedger(
   const unsubscribe = useAuth.subscribe(() => { if (resolveButlerAccountScope() !== accountScope) accountChanged = true; });
   const assertAccount = () => {
     if (accountChanged || resolveButlerAccountScope() !== accountScope || globalThis.localStorage?.getItem('rcx-owner') !== owner) {
-      throw new Error('账号已切换，已停止旧账号的会话扫描');
+      throw new Error(t('agent.superAgent.accountSwitchedScan'));
     }
   };
   const syncSession = async (input: UpsertWorkSessionInput) => {
@@ -960,7 +960,7 @@ export async function syncLiveSessionsIntoLedger(
       origin: 'rocketx_managed',
       nativeSessionId,
       sourceScope: acpSession.sourceScope,
-      title: acpSession.title || `${acpSession.agentName} 会话`,
+      title: acpSession.title || t('agent.superAgent.acpSessionTitle', { agentName: acpSession.agentName }),
       workspaceRoot: acpSession.workspaceRoot,
       environmentId: existing?.environmentId ?? null,
       accountScope: acpSession.accountScope ?? existing?.accountScope ?? resolveButlerAccountScope(),
@@ -1190,11 +1190,11 @@ export async function executeSuperAgentDispatch(
 ): Promise<ExecuteSuperAgentDispatchResult> {
   const ledger = useWorkLedger.getState();
   const card = ledger.cards.find((c) => c.id === options.action.todoId);
-  if (!card) return { ok: false, action: options.action, error: '目标工作卡片不存在' };
+  if (!card) return { ok: false, action: options.action, error: t('agent.superAgent.targetCardMissing') };
   let action = ledger.actions.find((item) => item.id === options.action.id) ?? options.action;
   if (isNativeHostAction(action) || isNativeHostWork(card.id, ledger.sessions)
     || ledger.sessions.some((session) => session.id === action.sessionId && isNativeHostSession(session))) {
-    return { ok: false, action, error: NATIVE_HOST_CONTROL_REASON };
+    return { ok: false, action, error: nativeHostControlReason() };
   }
   if (action.state === 'awaiting_approval' && options.approved) {
     action = await ledger.transitionDispatchAction({ id: action.id, state: 'prepared', expectedState: 'awaiting_approval' });
@@ -1224,14 +1224,14 @@ export async function executeSuperAgentDispatch(
       || useCodexWorkspace.getState().scope !== originScope) return null;
     const busy = state.sessions.find((session) => workContextPathKey(session.workspaceRoot) === workContextPathKey(lockRoot)
       && session.runtimeStatus === 'running' && !(action.actionKind === 'session_steer' && session.id === target?.id));
-    if (busy) return `同一工作区的「${busy.title || busy.nativeSessionId}」仍在执行，正在排队`;
+    if (busy) return t('agent.superAgent.workspaceBusyQueue', { name: busy.title || busy.nativeSessionId });
     const running = state.sessions.filter((session) => session.controlMode === 'controllable' && session.runtimeStatus === 'running'
       && !(action.actionKind === 'session_steer' && session.id === target?.id));
-    return running.length >= 2 ? '已有 2 个受管执行任务运行，正在排队' : null;
+    return running.length >= 2 ? t('agent.superAgent.concurrencyLimitQueue') : null;
   } }, async () => {
-    if (options.shouldContinue?.() === false) return { ok: false, action, error: '后台服务已停止，动作保留待恢复' };
+    if (options.shouldContinue?.() === false) return { ok: false, action, error: t('agent.superAgent.serviceStopped') };
     if (useCodexWorkspace.getState().scope !== originScope) {
-      return { ok: false, action, error: '账号已切换，原工作没有继续派发' };
+      return { ok: false, action, error: t('agent.superAgent.accountSwitchedNoDispatch') };
     }
     return executeSuperAgentDispatchNow({ ...options, action,
       repoRootOverride: workspaceRoot, isolateWorktree });
@@ -1250,7 +1250,7 @@ async function executeSuperAgentDispatchNow(
   const runtimeScope = useCodexWorkspace.getState().scope;
   const sameAccount = () => currentSupervisorScope() === accountScope && useCodexWorkspace.getState().scope === runtimeScope;
   const assertAccount = () => {
-    if (!sameAccount()) throw new Error('账号已切换，请回到原账号核对原动作送达结果');
+    if (!sameAccount()) throw new Error(t('agent.superAgent.accountSwitchedCheckDelivery'));
   };
   const ledger = useWorkLedger.getState();
   const card = ledger.cards.find((c) => c.id === options.action.todoId);
@@ -1258,7 +1258,7 @@ async function executeSuperAgentDispatchNow(
     return {
       ok: false,
       action: options.action,
-      error: '目标工作卡片不存在',
+      error: t('agent.superAgent.targetCardMissing'),
     };
   }
 
@@ -1280,7 +1280,7 @@ async function executeSuperAgentDispatchNow(
   const latestAction = ledger.actions.find((item) => item.id === options.action.id) ?? options.action;
   if (isNativeHostAction(latestAction) || isNativeHostWork(card.id, ledger.sessions)
     || (targetSession && isNativeHostSession(targetSession))) {
-    return { ok: false, action: latestAction, error: NATIVE_HOST_CONTROL_REASON };
+    return { ok: false, action: latestAction, error: nativeHostControlReason() };
   }
   const stopReason = actionStopReason(card, latestAction, Date.now());
   if (stopReason) {
@@ -1290,10 +1290,10 @@ async function executeSuperAgentDispatchNow(
     return { ok: false, action: latestAction, error: stopReason };
   }
   if (options.action.actionKind !== 'session_create' && (!targetSession || targetSession.controlMode !== 'controllable')) {
-    return { ok: false, action: latestAction, error: '原会话只读或已不可用，请先明确交接；需要新会话时请显式创建并导入上下文' };
+    return { ok: false, action: latestAction, error: t('agent.superAgent.sessionReadonlyOrUnavailable') };
   }
   if (targetSession && targetSession.runtime !== 'pi' && !targetSession.controlEndpoint?.startsWith('acp://')) {
-    return { ok: false, action: latestAction, error: '原生会话尚未交接给受管 ACP 客户端，不能将原生 ID 发送到管家运行时' };
+    return { ok: false, action: latestAction, error: t('agent.superAgent.nativeNotHandedOff') };
   }
   let deliveryAttempted = false;
   const verifyBeforeDelivery = () => {
@@ -1301,12 +1301,12 @@ async function executeSuperAgentDispatchNow(
     const state = useWorkLedger.getState();
     const current = state.cards.find((item) => item.id === card.id);
     const action = state.actions.find((item) => item.id === options.action.id);
-    if (!current || !action || action.state !== 'verifying_delivery') throw new Error('原工作或派发状态已改变，动作未继续发送');
+    if (!current || !action || action.state !== 'verifying_delivery') throw new Error(t('agent.superAgent.stateChangedBeforeSend'));
     if (isNativeHostAction(action) || isNativeHostWork(card.id, state.sessions)
-      || state.sessions.some((session) => session.id === action.sessionId && isNativeHostSession(session))) throw new Error(NATIVE_HOST_CONTROL_REASON);
+      || state.sessions.some((session) => session.id === action.sessionId && isNativeHostSession(session))) throw new Error(nativeHostControlReason());
     const reason = actionStopReason(current, { ...action, state: 'prepared' }, Date.now());
     if (reason) throw new Error(reason);
-    if (options.shouldContinue?.() === false) throw new Error('后台服务已停止，动作未继续发送');
+    if (options.shouldContinue?.() === false) throw new Error(t('agent.superAgent.serviceStoppedBeforeSend'));
   };
 
   try {
@@ -1329,7 +1329,7 @@ async function executeSuperAgentDispatchNow(
       parsedMeta.runtime ??
       (options.acpAgentId || parsedMeta.acpAgentId ? 'acp' : undefined);
     const nativeRuntime = requestedRuntime ?? 'pi';
-    if (shouldSpawnNewSession && nativeRuntime === 'codex') throw new Error('请显式选择 Codex ACP 客户端创建执行会话');
+    if (shouldSpawnNewSession && nativeRuntime === 'codex') throw new Error(t('agent.superAgent.selectCodexAcpClient'));
 
     if (shouldSpawnNewSession) {
       const baseRepo = resolveBaseRepoRoot(
@@ -1339,7 +1339,7 @@ async function executeSuperAgentDispatchNow(
         options.repoRootOverride,
       );
       if (!baseRepo) {
-        throw new Error('这项工作尚未绑定工作目录，请先为它选择项目目录；本次要求未发送');
+        throw new Error(t('agent.superAgent.noWorkspaceBound'));
       }
 
       let workerWorkspaceRoot = baseRepo;
@@ -1373,7 +1373,7 @@ async function executeSuperAgentDispatchNow(
           options.acpAgentId ?? parsedMeta.acpAgentId,
         );
         if (!acpAgentId) {
-          throw new Error('尚未配置或启用本地 ACP 客户端，请先在 ACP 工作区中添加并启用客户端');
+          throw new Error(t('agent.superAgent.noAcpClientConfigured'));
         }
         verifyBeforeDelivery();
         deliveryAttempted = true;
@@ -1452,16 +1452,16 @@ async function executeSuperAgentDispatchNow(
         receiptRef = `${nativeRuntime}:thread:${spawned.threadId}`;
       }
     } else if (!targetSession) {
-      throw new Error('原执行会话已不可用，动作没有重新创建会话');
+      throw new Error(t('agent.superAgent.sessionUnavailableNoCreate'));
     } else if (!targetSession.workspaceRoot.trim()) {
-      throw new Error('原会话尚未记录工作目录，请先核对原会话目录；本次要求未发送');
+      throw new Error(t('agent.superAgent.sessionNoWorkspace'));
     } else if (targetSession.runtime === 'acp' || targetSession.controlEndpoint?.startsWith('acp://')) {
       const acpAgentId = resolveAcpAgentIdFromSession(
         targetSession,
         options.acpAgentId ?? parsedMeta.acpAgentId,
       );
       if (!acpAgentId) {
-        throw new Error('目标 ACP 会话未关联可用的 ACP 客户端配置');
+        throw new Error(t('agent.superAgent.noLinkedAcpProfile'));
       }
       verifyBeforeDelivery();
       deliveryAttempted = true;
@@ -1488,7 +1488,7 @@ async function executeSuperAgentDispatchNow(
       receiptRef = `acp:${targetSession.nativeSessionId}:${delivery.turnMarker}`;
     } else {
       if (targetSession.runtime !== 'pi') {
-        throw new Error('当前后台自动投递仅支持受管 Codex / Pi / ACP Worker，DSH 会话请在侧栏确认后执行');
+        throw new Error(t('agent.superAgent.dshSidebarOnly'));
       }
       verifyBeforeDelivery();
       deliveryAttempted = true;
@@ -1551,8 +1551,8 @@ async function executeSuperAgentDispatchNow(
       consecutiveFailures: failures,
       waitState: deliveryAttempted ? 'waiting_input' : failures >= 2 ? 'blocked' : currentCard.state.waitState,
       waitReason:
-        deliveryAttempted ? `派发结果待核对，不会自动重发：${message}` : failures >= 2
-          ? `连续自动派发失败达到上限：${message}`
+        deliveryAttempted ? t('agent.superAgent.deliveryUnconfirmed', { message }) : failures >= 2
+          ? t('agent.superAgent.consecutiveFailuresLimit', { message })
           : currentCard.state.waitReason,
     });
     return {
@@ -1582,11 +1582,11 @@ export async function spawnCardWorkerInWorktree(
   const ledger = useWorkLedger.getState();
   const card = ledger.cards.find((c) => c.id === options.todoId);
   if (!card) {
-    throw new Error('目标工作卡片不存在');
+    throw new Error(t('agent.superAgent.targetCardMissing'));
   }
-  if (isNativeHostWork(card.id, ledger.sessions)) throw new Error(NATIVE_HOST_CONTROL_REASON);
+  if (isNativeHostWork(card.id, ledger.sessions)) throw new Error(nativeHostControlReason());
   const workspaceRoot = resolveBaseRepoRoot(card, ledger.sessions, ledger.links, options.repoRootOverride);
-  if (!workspaceRoot) throw new Error('这项工作尚未绑定工作目录，请先为它选择项目目录；本次要求未发送');
+  if (!workspaceRoot) throw new Error(t('agent.superAgent.noWorkspaceBound'));
 
   const sourceSession = options.importFromSessionId
     ? ledger.sessions.find((s) => s.id === options.importFromSessionId)
@@ -1595,7 +1595,7 @@ export async function spawnCardWorkerInWorktree(
   const instruction =
     options.instruction?.trim() ||
     card.state.nextStep?.trim() ||
-    '请先核查仓库当前分支与状态，按照卡片目标与验收标准推进实现，并运行相关测试产出证据。';
+    t('agent.superAgent.defaultSpawnInstruction');
 
   const specText = sourceSession
     ? buildSessionContextImportSpec({
@@ -1603,22 +1603,22 @@ export async function spawnCardWorkerInWorktree(
         cardGoal: card.state.goal || card.title,
         acceptance: card.state.acceptance,
         boundaries: card.state.boundaries,
-        recentTranscriptExcerpt: `从会话 ${sourceSession.runtime}:${sourceSession.nativeSessionId} 接续上下文`,
+        recentTranscriptExcerpt: t('agent.superAgent.importExcerpt', { runtime: sourceSession.runtime, sessionId: sourceSession.nativeSessionId }),
         nextInstruction: instruction,
       })
     : renderDispatchSpec({
         title: card.title,
-        goal: `${card.state.goal || card.title}\n本次推进要求：${instruction}`,
+        goal: t('agent.superAgent.spawnGoal', { goal: card.state.goal || card.title, instruction }),
         acceptance:
           card.state.acceptance.length > 0
             ? card.state.acceptance
-            : ['完成代码或任务目标并提供可验证的测试/构建证据'],
+            : [t('agent.superAgent.defaultAcceptance')],
         boundaries: [
           ...card.state.boundaries,
-          '未经用户确认不得修改 ADO 工作项指派人（System.AssignedTo）或关闭工作项',
+          t('agent.superAgent.adoBoundary'),
         ],
         evidence: card.note
-          ? [{ label: '卡片补充说明', text: card.note }]
+          ? [{ label: t('agent.superAgent.cardNoteLabel'), text: card.note }]
           : [],
       });
 
@@ -1648,7 +1648,7 @@ export async function spawnCardWorkerInWorktree(
 
 export async function pauseCardAcpWorkflow(
   todoId: string,
-  reason = '用户手动暂停自动跟进',
+  reason = t('agent.superAgent.manualPauseReason'),
 ): Promise<NativeWorkCard> {
   const accountScope = currentSupervisorScope();
   const ledger = useWorkLedger.getState();
@@ -1657,11 +1657,11 @@ export async function pauseCardAcpWorkflow(
   const assertWorkAccount = captureWorkLedgerAccount();
   const assertAccount = () => {
     assertWorkAccount();
-    if (currentSupervisorScope() !== accountScope) throw new Error('账号已切换，请回到原账号核对本轮停止状态');
+    if (currentSupervisorScope() !== accountScope) throw new Error(t('agent.superAgent.accountSwitchedStopStatus'));
     if (nativeAccount) {
       const current = captureButlerRuntimeAccountContext();
       if (current.accountScope !== nativeAccount.accountScope || current.generation !== nativeAccount.generation) {
-        throw new Error('账号已切换，请回到原账号核对本轮停止状态');
+        throw new Error(t('agent.superAgent.accountSwitchedStopStatus'));
       }
     }
   };
@@ -1672,17 +1672,17 @@ export async function pauseCardAcpWorkflow(
     && (isNativeHostSession(session) || ['running', 'waiting_input', 'waiting_approval'].includes(session.runtimeStatus)));
   const outcomes = await Promise.allSettled(running.map(async (session) => {
     if (isNativeHostSession(session)) {
-      if (!nativeAccount) throw new Error('原生工作控制权已变化，请刷新后核对停止状态');
+      if (!nativeAccount) throw new Error(t('agent.superAgent.nativeOwnershipChanged'));
       const account = nativeAccount;
       assertAccount();
       const snapshot = await readNativeWorkSnapshot({ account, sessionId: session.id });
       assertAccount();
       if (!snapshot.activeTurnId) {
         if (snapshot.runtimeStatus === 'idle' || snapshot.runtimeStatus === 'interrupted') return;
-        throw new Error(`「${session.title || session.nativeSessionId}」当前轮次尚未核实，无法确认停止`);
+        throw new Error(t('agent.superAgent.turnUnverifiedStop', { name: session.title || session.nativeSessionId }));
       }
       const card = useWorkLedger.getState().cards.find((item) => item.id === todoId);
-      if (!card || snapshot.todoId !== todoId || snapshot.sessionId !== session.id) throw new Error('原生工作绑定已变化，停止请求未发送');
+      if (!card || snapshot.todoId !== todoId || snapshot.sessionId !== session.id) throw new Error(t('agent.superAgent.nativeBindingChanged'));
       const command = await submitNativeWork({ account, command: {
         requestId: crypto.randomUUID(), todoId, sessionId: session.id,
         expectedRequirementsVersion: card.state.requirementsVersion ?? 0,
@@ -1698,12 +1698,12 @@ export async function pauseCardAcpWorkflow(
         const receipt = latest.commands.find((item) => item.id === command.id);
         if (receipt?.state === 'completed') return;
         if (receipt && ['failed', 'canceled', 'verifying_delivery'].includes(receipt.state)) {
-          throw new Error(receipt.errorMessage || '原生停止结果待核对，请查看当前执行状态');
+          throw new Error(receipt.errorMessage || t('agent.superAgent.nativeStopPending'));
         }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
       assertAccount();
-      await useWorkLedger.getState().updateCard(todoId, { waitReason: `${reason}；正在等待当前执行的停止回执` });
+      await useWorkLedger.getState().updateCard(todoId, { waitReason: t('agent.superAgent.waitingStopReceipt', { reason }) });
       return;
     }
     if (session.runtime === 'pi') {
@@ -1712,7 +1712,7 @@ export async function pauseCardAcpWorkflow(
       const agentId = session.controlEndpoint?.startsWith('acp://') ? resolveAcpAgentIdFromSession(session) : null;
       const managed = Object.values(acp.sessions).find((item) => item.agentId === agentId
         && matchesAcpWorkSession(session, item, resolveButlerAccountScope()));
-      if (!managed) throw new Error(`「${session.title || session.nativeSessionId}」未连接原运行服务，无法确认停止`);
+      if (!managed) throw new Error(t('agent.superAgent.notConnectedStop', { name: session.title || session.nativeSessionId }));
       await acp.cancelTurn(managed.sessionKey);
     }
     assertAccount();
@@ -1721,7 +1721,7 @@ export async function pauseCardAcpWorkflow(
   const failures = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
   assertAccount();
   if (failures.length) {
-    const message = `自动跟进已暂停；${failures.map((outcome) => String(outcome.reason instanceof Error ? outcome.reason.message : outcome.reason)).join('；')}`;
+    const message = t('agent.superAgent.pausedWithErrors', { details: failures.map((outcome) => String(outcome.reason instanceof Error ? outcome.reason.message : outcome.reason)).join(t('agent.common.semicolonSep')) });
     await useWorkLedger.getState().updateCard(todoId, { waitReason: message });
     throw new Error(message);
   }
@@ -1738,7 +1738,7 @@ export async function steerAcpSessionForCard(
   acpAgentId?: string,
 ): Promise<ExecuteSuperAgentDispatchResult> {
   const ledger = useWorkLedger.getState();
-  if (isNativeHostWork(todoId, ledger.sessions)) throw new Error(NATIVE_HOST_CONTROL_REASON);
+  if (isNativeHostWork(todoId, ledger.sessions)) throw new Error(nativeHostControlReason());
   const acpSession = ledger.sessions.find(
     (s) => s.todoId === todoId && s.runtime === 'acp',
   );
@@ -1821,7 +1821,7 @@ async function startWorkSupervision(): Promise<() => void> {
   const current = () => active && currentSupervisorScope() === scope;
   const reportError = (error: unknown) => {
     if (!current()) return;
-    const reason = `${tr('后台跟进需要检查：', 'Background check notice: ')}${error instanceof Error ? error.message : String(error)}`;
+    const reason = t('agent.superAgent.supervisorCheck', { error: error instanceof Error ? error.message : String(error) });
     useWorkLedger.setState({ lastError: reason });
     if (!reportedErrors.has(reason)) {
       reportedErrors.add(reason);
@@ -1858,7 +1858,7 @@ async function startWorkSupervision(): Promise<() => void> {
     read: () => persisted.watermarks,
     write: (watermarks) => save({ watermarks }), now: Date.now,
     ingest: async ({ message }) => {
-      if (!current()) throw new Error('账号或后台服务已切换，收件水位未推进');
+      if (!current()) throw new Error(t('agent.superAgent.watermarkBlocked'));
       const input = parseChatMessageAsExternalEvent(message);
       if (input) await useWorkLedger.getState().ingestExternalEvent(input);
     },
@@ -1886,7 +1886,7 @@ async function startWorkSupervision(): Promise<() => void> {
         const subscription = useChat.getState().subscriptions[rid];
         if (!subscription || !['c', 'p', 'd', 'l'].includes(subscription.t)) {
           incomplete = true;
-          reportError(`关联房间 ${rid} 尚未订阅或缺少访问权限，历史补偿覆盖未完成`);
+          reportError(t('agent.superAgent.backfillRoomAccess', { rid }));
           continue;
         }
         const cursor = persisted.watermarks[rid];
@@ -1897,7 +1897,7 @@ async function startWorkSupervision(): Promise<() => void> {
           collected.push(...page);
           if (!cursor || page.length < 100 || (page[0] && tsMs(page[0].ts) <= cursor.at)) break;
           const next = new Date(tsMs(page[0].ts)).toISOString();
-          if (next === latest) throw new Error(`「${subscription.fname || subscription.name}」历史分页未前进，补偿覆盖尚未完成`);
+          if (next === latest) throw new Error(t('agent.superAgent.backfillPaginationStalled', { room: subscription.fname || subscription.name }));
           latest = next;
         }
         if (current()) await observe(rid, collected, true);
@@ -1974,7 +1974,7 @@ async function startWorkSupervision(): Promise<() => void> {
         if (activeDrivers.isDesktop() && (card.state.requirementsVersion ?? 0) > 0
           && useWorkLedger.getState().sessions.some((session) => session.todoId === card.id && session.workspaceRoot)) {
           await observeWorkArtifacts(card.id, { inspect }).catch((error) => {
-            reportError(`「${card.title}」成果观察失败：${error instanceof Error ? error.message : String(error)}`);
+            reportError(t('agent.superAgent.artifactObserveFailed', { title: card.title, error: error instanceof Error ? error.message : String(error) }));
           });
         }
       }

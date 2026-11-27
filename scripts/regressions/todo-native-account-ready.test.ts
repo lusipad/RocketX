@@ -58,7 +58,6 @@ async function nativeScenario(mode:string) {
     calls.push({command,scope,id:args.id});
     if(command==='butler_db_select_account') {
       const next=String(args.accountScope);
-      records.set('rcx-owner',next);
       const nextGeneration=++nativeGeneration;
       return (next==='A' && !mode.startsWith('write') ? selectingA.promise : Promise.resolve()).then(()=>{scope=next;return {accountScope:next,generation:nextGeneration};});
     }

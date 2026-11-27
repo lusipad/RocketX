@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawn } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -34,6 +35,22 @@ function parseArgs(argv) {
 }
 
 const cliOptions = parseArgs(process.argv.slice(2));
+let runtimeEnvApiKey = typeof process.env.ROCKETX_PI_API_KEY === 'string'
+  ? process.env.ROCKETX_PI_API_KEY.trim()
+  : '';
+delete process.env.ROCKETX_PI_API_KEY;
+let runtimeMcpSecrets = {};
+if (typeof process.env.ROCKETX_PI_MCP_SECRETS === 'string' && process.env.ROCKETX_PI_MCP_SECRETS.trim()) {
+  try {
+    const parsed = JSON.parse(process.env.ROCKETX_PI_MCP_SECRETS);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      runtimeMcpSecrets = parsed;
+    }
+  } catch {
+    runtimeMcpSecrets = {};
+  }
+}
+delete process.env.ROCKETX_PI_MCP_SECRETS;
 
 async function loadPiModules(piPackageDir) {
   const root = piPackageDir
@@ -245,16 +262,103 @@ const PROVIDER_PRESETS = {
   },
 };
 
+const SUPPORTED_API_PROTOCOLS = new Set([
+  'openai-responses',
+  'openai-completions',
+  'anthropic-messages',
+  'google-generative-ai',
+  'azure-openai-responses',
+  'mistral-conversations',
+  'bedrock-converse-stream',
+]);
+
+function stripSuffixCaseInsensitive(value, suffix) {
+  const trimmed = String(value || '').trim().replace(/\/+$/, '');
+  if (trimmed.toLowerCase().endsWith(suffix)) {
+    return trimmed.slice(0, trimmed.length - suffix.length).replace(/\/+$/, '');
+  }
+  return null;
+}
+
+function resolveEffectiveApiProtocol(provider, rawApiProtocol, baseUrl) {
+  const cleanRaw = typeof rawApiProtocol === 'string' ? rawApiProtocol.trim() : '';
+  if (SUPPORTED_API_PROTOCOLS.has(cleanRaw)) {
+    return cleanRaw;
+  }
+  const lower = String(baseUrl || '').trim().toLowerCase();
+  if (
+    lower.includes('.openai.azure.com')
+    || lower.includes('.cognitiveservices.azure.com')
+    || lower.includes('.ai.azure.com')
+  ) {
+    return 'azure-openai-responses';
+  }
+  if (lower.includes('generativelanguage.googleapis.com') && !lower.includes('/openai')) {
+    return 'google-generative-ai';
+  }
+  if (lower.includes('api.anthropic.com') || /\/v1\/messages\/?$/i.test(lower) || /\/messages\/?$/i.test(lower)) {
+    return 'anthropic-messages';
+  }
+  if (/\/responses\/?$/i.test(lower)) {
+    return 'openai-responses';
+  }
+  if (/\/chat\/completions\/?$/i.test(lower)) {
+    return 'openai-completions';
+  }
+  return PROVIDER_PRESETS[provider]?.api || 'openai-completions';
+}
+
+function normalizeBaseUrlForApi(baseUrl, apiProtocol) {
+  let clean = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!clean) return clean;
+  if (apiProtocol === 'openai-responses' || apiProtocol === 'openai-completions') {
+    clean = stripSuffixCaseInsensitive(clean, '/responses')
+      ?? stripSuffixCaseInsensitive(clean, '/chat/completions')
+      ?? clean;
+    try {
+      const parsed = new URL(clean);
+      if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && (!parsed.pathname || parsed.pathname === '/')) {
+        clean = `${clean}/v1`;
+      }
+    } catch {
+      // Ignore unparseable custom URLs.
+    }
+  } else if (apiProtocol === 'anthropic-messages') {
+    clean = stripSuffixCaseInsensitive(clean, '/v1/messages')
+      ?? stripSuffixCaseInsensitive(clean, '/messages')
+      ?? stripSuffixCaseInsensitive(clean, '/v1')
+      ?? clean;
+  } else if (apiProtocol === 'google-generative-ai') {
+    const withoutOpenai = stripSuffixCaseInsensitive(clean, '/openai');
+    if (withoutOpenai) {
+      clean = withoutOpenai;
+    }
+    const lower = clean.toLowerCase();
+    if (!lower.includes('/v1beta') && !lower.includes('/v1alpha') && !lower.endsWith('/v1')) {
+      clean = `${clean}/v1beta`;
+    }
+  } else if (apiProtocol === 'azure-openai-responses') {
+    clean = stripSuffixCaseInsensitive(clean, '/responses') ?? clean;
+  }
+  return clean;
+}
+
 function readPiUserConfig() {
   const raw = readJsonFileSafe(cliOptions.configFile, {});
   const provider = typeof raw.provider === 'string' && PROVIDER_PRESETS[raw.provider]
     ? raw.provider
     : 'deepseek';
   const preset = PROVIDER_PRESETS[provider];
-  const baseUrl = typeof raw.baseUrl === 'string' && raw.baseUrl.trim()
+  const rawBaseUrl = typeof raw.baseUrl === 'string' && raw.baseUrl.trim()
     ? raw.baseUrl.trim().replace(/\/+$/, '')
     : preset.defaultBaseUrl;
-  const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
+  const configuredApiProtocol = typeof raw.apiProtocol === 'string' && raw.apiProtocol.trim()
+    ? raw.apiProtocol.trim()
+    : 'auto';
+  const apiProtocol = resolveEffectiveApiProtocol(provider, configuredApiProtocol, rawBaseUrl);
+  const baseUrl = normalizeBaseUrlForApi(rawBaseUrl, apiProtocol);
+  const fileApiKey = typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
+  const apiKey = runtimeEnvApiKey || fileApiKey;
   const defaultModel = typeof raw.defaultModel === 'string' && raw.defaultModel.trim()
     ? raw.defaultModel.trim()
     : preset.defaultModels[0]?.id || 'deepseek-v4-flash';
@@ -266,6 +370,8 @@ function readPiUserConfig() {
   return {
     provider,
     preset,
+    apiProtocol,
+    configuredApiProtocol,
     baseUrl,
     apiKey,
     defaultModel,
@@ -301,17 +407,18 @@ function buildProviderModelDefs(config, discoveredModelIds = [], requestedModelI
     const cleanId = String(id || '').trim();
     if (!cleanId || seen.has(cleanId)) return;
     seen.add(cleanId);
+    const activeApi = config.apiProtocol || config.preset.api;
     defs.push({
       id: cleanId,
       name: name || cleanId,
-      api: config.preset.api,
+      api: activeApi,
       baseUrl: config.baseUrl,
       reasoning,
       input: ['text', 'image'],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow,
       maxTokens,
-      ...(config.preset.api === 'openai-completions'
+      ...(activeApi === 'openai-completions'
         ? {
           compat: {
             supportsDeveloperRole: false,
@@ -379,22 +486,29 @@ async function createConfiguredModelRuntime(requestedModelId = '') {
     await modelRuntime.setRuntimeApiKey(config.provider, effectiveApiKey);
   }
 
-  // Register or override the active provider so custom baseUrl, models, and intranet OpenAI gateways work seamlessly.
+  // Register or override the active provider so custom baseUrl, protocols, models, and intranet gateways work seamlessly.
+  const activeApi = config.apiProtocol || config.preset.api;
   const shouldRegisterCustomProvider =
     config.provider === 'deepseek'
     || config.provider === 'custom-openai'
     || config.provider === 'ollama'
+    || activeApi !== config.preset.api
     || config.baseUrl !== config.preset.defaultBaseUrl
     || config.extraModels.length > 0
     || Boolean(requestedModelId);
+
+  const useBearerAuthHeader =
+    activeApi === 'openai-completions'
+    || activeApi === 'openai-responses'
+    || activeApi === 'mistral-conversations';
 
   if (shouldRegisterCustomProvider || effectiveApiKey) {
     modelRuntime.registerProvider(config.provider, {
       name: config.preset.label,
       baseUrl: config.baseUrl,
       apiKey: effectiveApiKey || 'UNCONFIGURED_API_KEY',
-      api: config.preset.api,
-      authHeader: true,
+      api: activeApi,
+      authHeader: useBearerAuthHeader,
       models: modelDefs,
     });
   }
@@ -896,6 +1010,265 @@ function mapEffortToThinkingLevel(effort) {
   return 'medium';
 }
 
+function normalizeMcpServersConfig(rawConfig) {
+  const servers = rawConfig && typeof rawConfig === 'object' ? rawConfig.mcp_servers : null;
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return {};
+  const normalized = {};
+  for (const [name, spec] of Object.entries(servers)) {
+    if (!name || !spec || typeof spec !== 'object' || Array.isArray(spec)) continue;
+    if (typeof spec.command === 'string' && spec.command.trim()) {
+      normalized[name] = {
+        command: spec.command.trim(),
+        args: Array.isArray(spec.args) ? spec.args.map((arg) => String(arg)) : [],
+        env: spec.env && typeof spec.env === 'object' && !Array.isArray(spec.env)
+          ? Object.fromEntries(Object.entries(spec.env).map(([k, v]) => [k, String(v ?? '')]))
+          : undefined,
+      };
+    }
+  }
+  return normalized;
+}
+
+function sanitizeMcpIdentifier(name) {
+  const cleaned = String(name || 'tool').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return cleaned || 'tool';
+}
+
+function toolSetSignature(record) {
+  return JSON.stringify({
+    tools: (Array.isArray(record.dynamicTools) ? record.dynamicTools : []).map((tool) => tool?.name || ''),
+    mcp: record.mcpServers || {},
+  });
+}
+
+const mcpServerPool = new Map();
+
+class McpStdioClient {
+  constructor(serverName, spec) {
+    this.serverName = serverName;
+    this.spec = spec;
+    this.child = null;
+    this.rl = null;
+    this.nextId = 1;
+    this.pending = new Map();
+    this.tools = [];
+    this.connectPromise = null;
+    this.closed = false;
+  }
+
+  close() {
+    this.closed = true;
+    try { this.rl?.close(); } catch { /* ignore */ }
+    this.rl = null;
+    for (const [, waiter] of this.pending) {
+      clearTimeout(waiter.timer);
+      waiter.reject(new Error(`MCP server ${this.serverName} closed`));
+    }
+    this.pending.clear();
+    if (this.child && !this.child.killed) {
+      try {
+        if (process.platform === 'win32' && this.child.pid) {
+          const killer = spawn('taskkill', ['/T', '/F', '/PID', String(this.child.pid)], {
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          killer.unref();
+        } else {
+          this.child.kill('SIGTERM');
+        }
+      } catch {
+        try { this.child.kill(); } catch { /* ignore */ }
+      }
+    }
+    this.child = null;
+  }
+
+  request(method, params, timeoutMs = 15_000) {
+    if (this.closed || !this.child?.stdin || !this.child.stdin.writable) {
+      return Promise.reject(new Error(`MCP server ${this.serverName} unavailable`));
+    }
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`MCP ${this.serverName}.${method} timed out`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+
+  notify(method, params) {
+    if (this.closed || !this.child?.stdin || !this.child.stdin.writable) return;
+    try {
+      this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async ensureConnected() {
+    if (this.closed) throw new Error(`MCP server ${this.serverName} is closed`);
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = (async () => {
+      const serverSecrets = runtimeMcpSecrets[this.serverName];
+      const spawnEnv = {
+        ...process.env,
+        ...(this.spec.env && typeof this.spec.env === 'object' ? this.spec.env : {}),
+        ...(serverSecrets && typeof serverSecrets === 'object' ? serverSecrets : {}),
+      };
+      const rawCommand = String(this.spec.command || '');
+      const rawArgs = Array.isArray(this.spec.args) ? this.spec.args : [];
+      const needsCmdWrapper = process.platform === 'win32'
+        && (/\.(cmd|bat)$/i.test(rawCommand) || /^(npx|npm|pnpm)$/i.test(rawCommand));
+      const child = needsCmdWrapper
+        ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', rawCommand, ...rawArgs], {
+            env: spawnEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          })
+        : spawn(rawCommand, rawArgs, {
+            env: spawnEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+          });
+      this.child = child;
+      this.rl = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+      this.rl.on('line', (line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        let frame;
+        try { frame = JSON.parse(trimmed); } catch { return; }
+        if (!frame || typeof frame !== 'object' || !('id' in frame)) return;
+        const waiter = this.pending.get(frame.id);
+        if (!waiter) return;
+        this.pending.delete(frame.id);
+        clearTimeout(waiter.timer);
+        if (frame.error) {
+          waiter.reject(new Error(frame.error.message || `MCP error from ${this.serverName}`));
+        } else {
+          waiter.resolve(frame.result);
+        }
+      });
+      child.stderr?.on('data', (chunk) => {
+        const msg = String(chunk || '').trim();
+        if (msg) process.stderr.write(`[pi-mcp:${this.serverName}] ${msg}\n`);
+      });
+      child.on('exit', () => {
+        this.closed = true;
+        for (const [, waiter] of this.pending) {
+          clearTimeout(waiter.timer);
+          waiter.reject(new Error(`MCP server ${this.serverName} exited`));
+        }
+        this.pending.clear();
+      });
+      await this.request('initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'rocketx-pi', version: PI_VERSION },
+      }, 10_000);
+      this.notify('notifications/initialized', {});
+      const listResult = await this.request('tools/list', {}, 10_000);
+      this.tools = Array.isArray(listResult?.tools) ? listResult.tools : [];
+      return this.tools;
+    })();
+    try {
+      return await this.connectPromise;
+    } catch (err) {
+      this.close();
+      throw err;
+    }
+  }
+}
+
+async function getOrConnectMcpClient(serverName, spec) {
+  const key = JSON.stringify([serverName, spec.command, spec.args || [], spec.env || null]);
+  let client = mcpServerPool.get(key);
+  if (client?.closed) {
+    mcpServerPool.delete(key);
+    client = undefined;
+  }
+  if (!client) {
+    client = new McpStdioClient(serverName, spec);
+    mcpServerPool.set(key, client);
+  }
+  await client.ensureConnected();
+  return client;
+}
+
+function closeAllMcpServers() {
+  for (const client of mcpServerPool.values()) {
+    client.close();
+  }
+  mcpServerPool.clear();
+}
+
+async function buildMcpToolDefinitions(record) {
+  const servers = record.mcpServers && typeof record.mcpServers === 'object' ? record.mcpServers : {};
+  const entries = Object.entries(servers);
+  if (entries.length === 0) return [];
+  const definitions = [];
+  const usedNames = new Set((Array.isArray(record.dynamicTools) ? record.dynamicTools : []).map((t) => t.name));
+  for (const [serverName, spec] of entries) {
+    try {
+      const client = await getOrConnectMcpClient(serverName, spec);
+      for (const tool of client.tools) {
+        if (!tool || typeof tool.name !== 'string' || !tool.name.trim()) continue;
+        const baseName = `mcp__${sanitizeMcpIdentifier(serverName)}__${sanitizeMcpIdentifier(tool.name)}`;
+        let exposedName = baseName;
+        let suffix = 2;
+        while (usedNames.has(exposedName)) {
+          exposedName = `${baseName}_${suffix++}`;
+        }
+        usedNames.add(exposedName);
+        definitions.push({
+          name: exposedName,
+          label: `${serverName}:${tool.name}`,
+          description: tool.description ? `[${serverName}] ${tool.description}` : `[${serverName}] ${tool.name}`,
+          promptSnippet: `[${serverName}] ${tool.name}: ${tool.description || ''}`.slice(0, 180),
+          parameters: tool.inputSchema && typeof tool.inputSchema === 'object'
+            ? tool.inputSchema
+            : { type: 'object', properties: {} },
+          async execute(_toolCallId, params) {
+            const activeClient = await getOrConnectMcpClient(serverName, spec);
+            const result = await activeClient.request('tools/call', {
+              name: tool.name,
+              arguments: params ?? {},
+            }, 15_000);
+            const rawContent = Array.isArray(result?.content) ? result.content : [];
+            const content = rawContent.map((item) => {
+              if (item?.type === 'image' && typeof item.data === 'string') {
+                return { type: 'image', mimeType: item.mimeType || 'image/png', data: item.data };
+              }
+              return {
+                type: 'text',
+                text: typeof item?.text === 'string' ? item.text : JSON.stringify(item ?? ''),
+              };
+            });
+            if (result?.isError) {
+              const errMsg = content.map((c) => (c.type === 'text' ? c.text : '')).join('\n') || `${tool.name} failed`;
+              throw new Error(errMsg);
+            }
+            return {
+              content: content.length > 0 ? content : [{ type: 'text', text: JSON.stringify(result ?? 'OK') }],
+              details: { mcpServer: serverName, mcpTool: tool.name },
+            };
+          },
+        });
+      }
+    } catch (err) {
+      process.stderr.write(`[pi-mcp] Failed to load server "${serverName}": ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  }
+  return definitions;
+}
+
 function buildDynamicToolDefinitions(record) {
   const specs = Array.isArray(record.dynamicTools) ? record.dynamicTools : [];
   return specs.map((spec) => ({
@@ -1043,6 +1416,18 @@ function selectModelFromRuntime(modelRuntime, requestedModelId, fallbackProvider
     || snapshot[0];
 }
 
+function computeRuntimeFingerprint(config) {
+  return JSON.stringify([
+    config.provider,
+    config.apiProtocol,
+    config.baseUrl,
+    config.apiKey || '',
+    config.defaultModel,
+    config.extraModels || [],
+    runtimeMcpSecrets || {},
+  ]);
+}
+
 async function ensureAgentSession(record) {
   const runtimeBundle = await createConfiguredModelRuntime(record.model);
   if (!runtimeBundle.hasRealCredentials) {
@@ -1063,12 +1448,20 @@ async function ensureAgentSession(record) {
   }
   record.modelProvider = selectedModel.provider;
 
+  const desiredToolSig = toolSetSignature(record);
+  const desiredRuntimeFp = computeRuntimeFingerprint(runtimeBundle.config);
   if (record.agentSession) {
-    try {
-      await record.agentSession.setModel(selectedModel);
-      record.agentSession.setThinkingLevel(mapEffortToThinkingLevel(record.effort));
-      return record.agentSession;
-    } catch {
+    if (record.activeToolSignature === desiredToolSig && record.runtimeFingerprint === desiredRuntimeFp) {
+      try {
+        await record.agentSession.setModel(selectedModel);
+        record.agentSession.setThinkingLevel(mapEffortToThinkingLevel(record.effort));
+        return record.agentSession;
+      } catch {
+        record.unsubscribeEvents?.();
+        record.agentSession.dispose?.();
+        record.agentSession = null;
+      }
+    } else {
       record.unsubscribeEvents?.();
       record.agentSession.dispose?.();
       record.agentSession = null;
@@ -1094,7 +1487,9 @@ async function ensureAgentSession(record) {
       diagnostics: base.diagnostics,
     }),
     appendSystemPrompt: [
-      '你是运行在 RocketX 桌面工作台中的内建 Super Agent（由 Pi 驱动）。需要访问统一工作看板（WorkCard）、隔离 Git Worktree 子会话、Rocket.Chat 消息或 Azure DevOps 时，优先调用已注入的宿主工具与 Skills。',
+      'You are the built-in Proactive Chief-of-Staff (powered by Pi) running inside the RocketX desktop workspace. Prefer the injected host tools and Skills when accessing the unified WorkCard board, isolated Git worktree sub-sessions, Rocket.Chat messages, or Azure DevOps.',
+      'Proactive Chief-of-Staff operating principles: (1) Compose `read_activity_stream`, `read_room_messages`, `list_work_cards`, and `acp_inspect_session` to track changes since `lastUserActivityAt` and present concise decisions vs background progress. (2) When dispatching or steering ACP sub-agents (`acp_dispatch_task`, `delegate_specialists`, `acp_steer_session`), arm `watchpoint_manage` (`acp_session_settle` or `after_minutes`) to follow up autonomously when sub-agents settle. (3) Respect the Attention Gate in background turns (`surface_proactive_insight` only when user action or high-value synthesis is warranted; otherwise reply NOOP), store durable preferences/facts via `memory_save`, and inspect/evolve reusable playbooks via `skill_evolve`.',
+      ...(record.developerInstructions ? [record.developerInstructions] : []),
     ],
   });
   await resourceLoader.reload();
@@ -1103,6 +1498,9 @@ async function ensureAgentSession(record) {
     ? ['+powershell', '+grep', '+find', '+ls']
     : ['+grep', '+find', '+ls'];
 
+  const mcpTools = await buildMcpToolDefinitions(record);
+  const customTools = [...buildDynamicToolDefinitions(record), ...mcpTools];
+
   const { session } = await createAgentSession({
     cwd: record.cwd,
     agentDir,
@@ -1110,13 +1508,15 @@ async function ensureAgentSession(record) {
     model: selectedModel,
     thinkingLevel: mapEffortToThinkingLevel(record.effort),
     tools: toolModifiers,
-    customTools: buildDynamicToolDefinitions(record),
+    customTools,
     resourceLoader,
     sessionManager,
     settingsManager,
   });
 
   record.agentSession = session;
+  record.activeToolSignature = desiredToolSig;
+  record.runtimeFingerprint = desiredRuntimeFp;
   return session;
 }
 
@@ -1572,10 +1972,14 @@ async function handleRpcRequest(method, params = {}) {
         sessionManager,
         agentSession: null,
         dynamicTools: Array.isArray(params.dynamicTools) ? params.dynamicTools : [],
+        mcpServers: normalizeMcpServersConfig(params.config),
         permissions: params.permissions || ':workspace',
         approvalPolicy: params.approvalPolicy || 'on-request',
         approvalsReviewer: params.approvalsReviewer || 'guardian_subagent',
         sessionApprovedTools: new Set(),
+        developerInstructions: typeof params.developerInstructions === 'string' && params.developerInstructions.trim()
+          ? params.developerInstructions.trim()
+          : null,
         model: params.model || '',
         effort: 'medium',
         modelProvider: readPiUserConfig().provider,
@@ -1599,13 +2003,36 @@ async function handleRpcRequest(method, params = {}) {
       }
       const record = threadRecords.get(threadId);
       if (!record) throw new Error(`找不到 Pi 会话：${threadId}`);
+      const prevSig = toolSetSignature(record);
       if (typeof params.cwd === 'string' && params.cwd.trim()) {
         record.cwd = path.resolve(params.cwd);
+      }
+      if (Array.isArray(params.dynamicTools)) {
+        record.dynamicTools = params.dynamicTools;
+      }
+      if (params.config && typeof params.config === 'object') {
+        record.mcpServers = normalizeMcpServersConfig(params.config);
       }
       if (params.model) record.model = params.model;
       if (params.permissions) record.permissions = params.permissions;
       if (params.approvalPolicy) record.approvalPolicy = params.approvalPolicy;
       if (params.approvalsReviewer) record.approvalsReviewer = params.approvalsReviewer;
+      if (typeof params.developerInstructions === 'string' && params.developerInstructions.trim()) {
+        const nextInstructions = params.developerInstructions.trim();
+        if (record.developerInstructions !== nextInstructions) {
+          record.developerInstructions = nextInstructions;
+          if (!record.activeTurnId && record.agentSession) {
+            record.unsubscribeEvents?.();
+            record.agentSession.dispose?.();
+            record.agentSession = null;
+          }
+        }
+      }
+      if (toolSetSignature(record) !== prevSig && !record.activeTurnId && record.agentSession) {
+        record.unsubscribeEvents?.();
+        record.agentSession.dispose?.();
+        record.agentSession = null;
+      }
       ensureSessionManager(record);
       return { thread: buildRocketxThreadObject(record, !params.excludeTurns) };
     }
@@ -1634,7 +2061,17 @@ async function handleRpcRequest(method, params = {}) {
         sessionFile: forkedManager.getSessionFile() || null,
         sessionManager: forkedManager,
         agentSession: null,
+        activeToolSignature: null,
+        dynamicTools: Array.isArray(params.dynamicTools)
+          ? params.dynamicTools
+          : (Array.isArray(source.dynamicTools) ? [...source.dynamicTools] : []),
+        mcpServers: params.config && typeof params.config === 'object'
+          ? normalizeMcpServersConfig(params.config)
+          : (source.mcpServers ? { ...source.mcpServers } : {}),
         sessionApprovedTools: new Set(),
+        developerInstructions: typeof params.developerInstructions === 'string' && params.developerInstructions.trim()
+          ? params.developerInstructions.trim()
+          : source.developerInstructions ?? null,
         forkedFromId: sourceId,
         createdAt: nowSec,
         updatedAt: nowSec,
@@ -1831,7 +2268,22 @@ rl.on('line', (rawLine) => {
   }
 
   // Client-initiated notification (no id)
-  if (!('id' in frame)) return;
+  if (!('id' in frame)) {
+    if (frame.method === 'rocketx/runtimeConfigUpdated') {
+      const nextParams = frame.params && typeof frame.params === 'object' ? frame.params : {};
+      if (typeof nextParams.apiKey === 'string') {
+        runtimeEnvApiKey = nextParams.apiKey.trim();
+      }
+      if (nextParams.mcpSecrets && typeof nextParams.mcpSecrets === 'object' && !Array.isArray(nextParams.mcpSecrets)) {
+        runtimeMcpSecrets = nextParams.mcpSecrets;
+      }
+      closeAllMcpServers();
+      for (const record of threadRecords.values()) {
+        record.runtimeFingerprint = '';
+      }
+    }
+    return;
+  }
 
   const requestId = frame.id;
   void handleRpcRequest(frame.method, frame.params || {}).then(
@@ -1851,9 +2303,14 @@ rl.on('line', (rawLine) => {
 });
 
 rl.on('close', () => {
+  closeAllMcpServers();
   for (const [, waiter] of pendingServerRequests) {
     waiter.reject(new Error('Pi App-Server stdin closed'));
   }
   pendingServerRequests.clear();
   process.exit(0);
+});
+
+process.on('exit', () => {
+  closeAllMcpServers();
 });

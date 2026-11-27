@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { MessageCircle, Settings, X } from 'lucide-react';
+import { useT, type MessageKey } from '../i18n';
 import { useChat } from '../stores/chat';
 import { useAuth } from '../stores/auth';
 import { useUI } from '../stores/ui';
@@ -8,11 +9,11 @@ import { personName, useAliases } from '../stores/aliases';
 import Avatar from './Avatar';
 import { useDialogBehavior } from './Dialog';
 
-const STATUS_TEXT: Record<string, string> = {
-  online: '在线',
-  away: '离开',
-  busy: '忙碌',
-  offline: '离线',
+const STATUS_LABEL_KEYS: Record<string, MessageKey> = {
+  online: 'nav.presence.online',
+  away: 'nav.presence.away',
+  busy: 'nav.presence.busy',
+  offline: 'nav.presence.offline',
 };
 
 export interface UserCardTarget {
@@ -33,6 +34,7 @@ export default function UserCard({
   user: UserCardTarget;
   onClose: () => void;
 }) {
+  const t = useT();
   const startDM = useChat((s) => s.startDM);
   const setPanel = useChat((s) => s.setPanel);
   const setModule = useUI((s) => s.setModule);
@@ -56,7 +58,7 @@ export default function UserCard({
       setModule('messages');
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '发起会话失败');
+      setError(err instanceof Error ? err.message : t('nav.userCard.startDmFailed'));
       setBusy(false);
     }
   };
@@ -78,7 +80,7 @@ export default function UserCard({
       setPanel(null);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '账号状态更新失败');
+      setError(err instanceof Error ? err.message : t('nav.userCard.updateStatusFailed'));
       setBusy(false);
     }
   };
@@ -94,14 +96,14 @@ export default function UserCard({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`${shownName}的个人信息`}
+        aria-label={t('nav.userCard.profileAria', { name: shownName })}
         tabIndex={-1}
         className="w-80 overflow-hidden rounded-xl bg-surface-4 shadow-2xl"
       >
         <div className="relative h-20 bg-gradient-to-r from-[#3370ff] to-[#4e83fd]">
           <button
             onClick={onClose}
-            aria-label="关闭个人信息"
+            aria-label={t('nav.userCard.closeAria')}
             className="absolute top-2 right-2 flex h-7 w-7 items-center justify-center rounded text-white/90 hover:bg-white/20"
           >
             <X size={16} />
@@ -126,7 +128,7 @@ export default function UserCard({
                           : 'bg-line'
                   }`}
                 />
-                {STATUS_TEXT[user.status] ?? user.status}
+                {STATUS_LABEL_KEYS[user.status] ? t(STATUS_LABEL_KEYS[user.status]) : user.status}
               </span>
             )}
           </div>
@@ -138,7 +140,7 @@ export default function UserCard({
               className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover"
             >
               <Settings size={16} />
-              编辑资料与状态
+              {t('nav.userCard.editProfile')}
             </button>
           ) : (
             <>
@@ -148,17 +150,19 @@ export default function UserCard({
                 className="mt-4 flex h-9 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
               >
                 <MessageCircle size={16} />
-                {busy ? '打开中…' : '发消息'}
+                {busy ? t('nav.userCard.opening') : t('nav.userCard.sendMessage')}
               </button>
               {/* 停用账号：管理员动作，做成折叠项，避免误点 */}
               {canManageAccount && user._id && (
                 <details className="mt-3 border-t border-line pt-3">
                   <summary className="cursor-pointer text-xs text-ink-3 hover:text-ink-2">
-                    账号管理（管理员）
+                    {t('nav.userCard.adminSection')}
                   </summary>
                   <div className="mt-2 space-y-2">
                     <div className="text-xs text-ink-3">
-                      当前状态：{user.active === false ? '已停用' : '正常'}
+                      {t('nav.userCard.accountStatusLabel', {
+                        status: user.active === false ? t('nav.userCard.accountDisabled') : t('nav.userCard.accountActive'),
+                      })}
                     </div>
                     <button
                       onClick={() => void toggleActive()}
@@ -169,10 +173,10 @@ export default function UserCard({
                           : 'border-danger text-danger hover:bg-danger/10'
                       }`}
                     >
-                      {user.active === false ? '启用账号' : '停用账号'}
+                      {user.active === false ? t('nav.userCard.enableAccount') : t('nav.userCard.disableAccount')}
                     </button>
                     <div className="text-xs leading-relaxed text-ink-3">
-                      停用后该账号无法登录，但历史消息和成员关系保留（不是删除用户）。
+                      {t('nav.userCard.disableHint')}
                     </div>
                   </div>
                 </details>

@@ -1,4 +1,5 @@
 import type { AppPermission } from './manifest';
+import { t } from '../i18n';
 
 export const BASIC_PERMISSIONS: readonly AppPermission[] = [
   'chat:read',
@@ -74,15 +75,21 @@ export class PermissionGate {
   async authorize(appId: string, permission: AppPermission, action: string): Promise<void> {
     const granted = this.grants.get(appId)?.has(permission) === true;
     if (!granted) {
-      await this.audit(appId, action, false, `缺少权限 ${permission}`);
-      throw new Error(`应用 ${appId} 未获得 ${permission}`);
+      await this.audit(
+        appId,
+        action,
+        false,
+        t('settings.kernel.permission.missingAuditReason', { permission }),
+      );
+      throw new Error(t('settings.kernel.permission.missingError', { appId, permission }));
     }
 
     if (DANGEROUS.has(permission) && !this.sessionDangerous.get(appId)?.has(permission)) {
       const decision = (await this.approveDangerous?.({ appId, permission, action })) ?? 'deny';
       if (decision === 'deny') {
-        await this.audit(appId, action, false, `用户拒绝 ${permission}`);
-        throw new Error(`用户拒绝 ${permission}`);
+        const reason = t('settings.kernel.permission.userDenied', { permission });
+        await this.audit(appId, action, false, reason);
+        throw new Error(reason);
       }
       if (decision === 'session') {
         const permissions = this.sessionDangerous.get(appId) ?? new Set<AppPermission>();

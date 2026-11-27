@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 export const DEFAULT_MESSAGE_MAX_ALLOWED_SIZE = 5000;
 
 interface FenceState {
@@ -220,7 +222,7 @@ function chunkText(
     rendered = renderChunk(text, start, fallbackEnd, state, startsAtLineStart);
     chunk = rendered.text;
     nextState = rendered.nextState;
-    if (chunk.length > limit) throw new Error('单个字符超过消息上限');
+    if (chunk.length > limit) throw new Error(t('chat.messageChunks.charExceedsLimit'));
     return {
       text: chunk,
       end: fallbackEnd,

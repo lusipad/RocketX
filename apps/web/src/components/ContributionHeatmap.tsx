@@ -1,4 +1,6 @@
 import { useMemo } from 'react';
+import { useI18n, type ResolvedLocale } from '../i18n';
+import { formatDate } from '../i18n/format';
 import type { ContributionEvent, ContributionRange } from '../lib/adoContributions';
 
 const LEVEL_COLORS = [
@@ -64,15 +66,16 @@ export function contributionLevel(count: number, maximum: number): number {
   return Math.max(1, Math.min(4, Math.ceil((count / maximum) * 4)));
 }
 
-function monthLabels(weeks: ContributionHeatmapDay[][]): (string | null)[] {
+function monthLabels(weeks: ContributionHeatmapDay[][], locale: ResolvedLocale): (string | null)[] {
   let previous = -1;
   return weeks.map((week) => {
     const firstInRange = week.find((day) => day.inRange);
     if (!firstInRange) return null;
-    const month = parseLocalDay(firstInRange.day).getMonth();
+    const date = parseLocalDay(firstInRange.day);
+    const month = date.getMonth();
     if (month === previous) return null;
     previous = month;
-    return `${month + 1}月`;
+    return formatDate(date, { month: 'short' }, locale);
   });
 }
 
@@ -87,13 +90,14 @@ export default function ContributionHeatmap({
   selectedDay: string | null;
   onSelectDay: (day: string) => void;
 }) {
+  const { t, tp, locale } = useI18n();
   const weeks = useMemo(() => buildContributionWeeks(range, events), [events, range]);
-  const labels = useMemo(() => monthLabels(weeks), [weeks]);
+  const labels = useMemo(() => monthLabels(weeks, locale), [weeks, locale]);
   const maximum = Math.max(0, ...weeks.flat().map((day) => day.count));
 
   return (
     <section
-      aria-label="贡献日历"
+      aria-label={t('pages.contributions.heatmapAria')}
       className="w-full rounded-xl border border-line bg-surface-3 p-4"
     >
       <div className="max-w-full overflow-x-auto pb-2">
@@ -108,11 +112,11 @@ export default function ContributionHeatmap({
           <div className="flex gap-2">
             <div className="grid grid-rows-7 gap-1 pt-0.5 text-xs leading-3 text-ink-3" aria-hidden="true">
               <span />
-              <span>一</span>
+              <span>{t('pages.contributions.weekday.mon')}</span>
               <span />
-              <span>三</span>
+              <span>{t('pages.contributions.weekday.wed')}</span>
               <span />
-              <span>五</span>
+              <span>{t('pages.contributions.weekday.fri')}</span>
               <span />
             </div>
             <div className="flex gap-1">
@@ -121,11 +125,17 @@ export default function ContributionHeatmap({
                   {week.map((day) => {
                     if (!day.inRange) return <span key={day.day} className="h-3 w-3" aria-hidden="true" />;
                     const level = contributionLevel(day.count, maximum);
-                    const label = `${new Intl.DateTimeFormat('zh-CN', {
-                      year: 'numeric',
-                      month: 'long',
-                      day: 'numeric',
-                    }).format(parseLocalDay(day.day))}，${day.count} 项贡献`;
+                    const formattedDate = formatDate(
+                      parseLocalDay(day.day),
+                      { year: 'numeric', month: 'long', day: 'numeric' },
+                      locale,
+                    );
+                    const label = tp(
+                      day.count,
+                      'pages.contributions.dayTooltipOne',
+                      'pages.contributions.dayTooltipOther',
+                      { date: formattedDate },
+                    );
                     return (
                       <button
                         key={day.day}
@@ -146,19 +156,19 @@ export default function ContributionHeatmap({
             </div>
           </div>
           <div
-            aria-label="贡献强度图例"
+            aria-label={t('pages.contributions.legendAria')}
             className="mt-3 flex items-center justify-end gap-1 text-xs text-ink-3"
           >
-            <span className="mr-1">较少</span>
+            <span className="mr-1">{t('pages.contributions.less')}</span>
             {LEVEL_COLORS.map((color, index) => (
               <span
                 key={color}
-                aria-label={`贡献强度 ${index}`}
+                aria-label={t('pages.contributions.levelAria', { level: index })}
                 className="h-3 w-3 rounded-[3px] border border-line/60"
                 style={{ background: color }}
               />
             ))}
-            <span className="ml-1">较多</span>
+            <span className="ml-1">{t('pages.contributions.more')}</span>
           </div>
         </div>
       </div>

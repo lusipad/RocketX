@@ -186,11 +186,50 @@ pub(crate) fn kill_owned_tree_and_wait(
     }
     #[cfg(not(windows))]
     {
-        let _ = (timeout, started);
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "owned process tree termination currently requires Windows",
-        ))
+        let pid_str = child.id().to_string();
+        if let Ok(mut term_children) = hidden_command("pkill")
+            .args(["-TERM", "-P", &pid_str])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let _ = wait_for_exit(
+                &mut term_children,
+                Duration::from_millis(250),
+                Duration::from_millis(10),
+            );
+        }
+        let _ = child.kill();
+        if let Some(status) = wait_for_exit(
+            child,
+            timeout.saturating_sub(started.elapsed()),
+            Duration::from_millis(10),
+        )? {
+            return Ok(status);
+        }
+        if let Ok(mut kill_children) = hidden_command("pkill")
+            .args(["-KILL", "-P", &pid_str])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            let _ = wait_for_exit(
+                &mut kill_children,
+                Duration::from_millis(250),
+                Duration::from_millis(10),
+            );
+        }
+        let _ = child.kill();
+        wait_for_exit(child, Duration::from_millis(300), Duration::from_millis(10))?.ok_or_else(
+            || {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "owned parent exit was not confirmed before deadline",
+                )
+            },
+        )
     }
 }
 

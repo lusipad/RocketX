@@ -1,6 +1,7 @@
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { personName, useAliases } from '../stores/aliases';
+import { useI18n } from '../i18n';
 import {
   digitCharAt,
   pollIsClosed,
@@ -18,6 +19,7 @@ import { BarChart3, CheckCircle2, Lock } from 'lucide-react';
  * 题目 + 编号选项文本，他们用表情也能参与同一套计票。
  */
 export default function PollCard({ message, poll }: { message: RcMessage; poll: PollPayload }) {
+  const { t, tp } = useI18n();
   const myUsername = useAuth((s) => s.user?.username);
   const votePoll = useChat((s) => s.votePoll);
   const closePoll = useChat((s) => s.closePoll);
@@ -40,19 +42,19 @@ export default function PollCard({ message, poll }: { message: RcMessage; poll: 
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-ink">{poll.question}</div>
           <div className="mt-0.5 text-xs text-ink-3">
-            {poll.multi ? '可多选 · ' : '单选 · '}
-            {tally.total > 0 ? `${tally.total} 票` : '还没有人投票'}
-            {closed && ' · 已结束'}
+            {poll.multi ? t('chat.poll.multiChoice') : t('chat.poll.singleChoice')}
+            {tally.total > 0 ? tp(tally.total, 'chat.poll.votesOne', 'chat.poll.votesOther') : t('chat.poll.noVotes')}
+            {closed && t('chat.poll.closedSuffix')}
           </div>
         </div>
         {isCreator && !closed && (
           <button
-            title="结束投票"
+            title={t('chat.poll.closeTooltip')}
             onClick={() => void closePoll(message.rid, message._id)}
             className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-line px-2 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <Lock size={12} />
-            结束
+            {t('chat.poll.closeBtn')}
           </button>
         )}
       </div>
@@ -63,8 +65,8 @@ export default function PollCard({ message, poll }: { message: RcMessage; poll: 
           const mine = tally.myVotes.includes(i);
           const voters = tally.voters[i] ?? [];
           const title = voters.length
-            ? voters.map((u) => personName(aliases, u, u, nameFormat)).join('、')
-            : '还没有人投';
+            ? voters.map((u) => personName(aliases, u, u, nameFormat)).join(t('chat.common.listSep'))
+            : t('chat.poll.noVotersOption');
           return (
             <button
               key={i}
@@ -97,7 +99,7 @@ export default function PollCard({ message, poll }: { message: RcMessage; poll: 
         })}
       </div>
       {closed && (
-        <div className="mt-2 text-center text-xs text-ink-3">投票已结束，感谢参与</div>
+        <div className="mt-2 text-center text-xs text-ink-3">{t('chat.poll.closedFooter')}</div>
       )}
     </div>
   );

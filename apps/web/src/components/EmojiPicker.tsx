@@ -2,8 +2,19 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search } from 'lucide-react';
 import { EMOJI_MAP, loadEmojiSections, type EmojiEntry, type EmojiSection } from '../lib/emoji';
+import { useT, type MessageKey } from '../i18n';
 
 const RECENT_KEY = 'rcx-recent-emojis';
+
+const EMOJI_GROUP_LABEL_KEYS: Record<string, MessageKey> = {
+  人物: 'chat.emoji.group.people',
+  动物与自然: 'chat.emoji.group.nature',
+  食物与饮品: 'chat.emoji.group.food',
+  旅行与地点: 'chat.emoji.group.travel',
+  物品: 'chat.emoji.group.objects',
+  符号: 'chat.emoji.group.symbols',
+  旗帜: 'chat.emoji.group.flags',
+};
 
 function loadRecent(): string[] {
   try {
@@ -37,8 +48,11 @@ export default function EmojiPicker({
   pos?: { x: number; y: number };
   className?: string;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sectionLabel = (raw: string) =>
+    EMOJI_GROUP_LABEL_KEYS[raw] ? t(EMOJI_GROUP_LABEL_KEYS[raw]) : raw;
   const [keyword, setKeyword] = useState('');
   const [place, setPlace] = useState(pos ?? { x: 0, y: 0 });
   const [sections, setSections] = useState<EmojiSection[]>([]);
@@ -119,14 +133,14 @@ export default function EmojiPicker({
           autoFocus
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          placeholder="搜索表情"
+          placeholder={t('chat.emoji.searchPlaceholder')}
           className="w-full bg-transparent text-xs outline-none placeholder:text-ink-3"
         />
       </div>
 
       {!keyword && recent.length > 0 && (
         <>
-          <div className="px-1 pb-1 text-xs text-ink-3">最近使用</div>
+          <div className="px-1 pb-1 text-xs text-ink-3">{t('chat.emoji.recent')}</div>
           <div className="mb-1.5 grid grid-cols-8 gap-0.5 border-b border-line pb-1.5">
             {recent.map((e) => (
               <button
@@ -157,7 +171,7 @@ export default function EmojiPicker({
             ))}
             {results.length === 0 && (
               <div className="col-span-8 py-4 text-center text-xs text-ink-3">
-                没有匹配的表情
+                {t('chat.emoji.noMatches')}
               </div>
             )}
           </div>
@@ -165,7 +179,7 @@ export default function EmojiPicker({
           sections.map((section) => (
             <div key={section.label} data-emoji-section={section.label}>
               <div className="sticky top-0 bg-surface-4 px-1 py-1 text-xs text-ink-3">
-                {section.label}
+                {sectionLabel(section.label)}
               </div>
               <div className="grid grid-cols-8 gap-0.5">
                 {section.items.map((e) => (
@@ -190,7 +204,7 @@ export default function EmojiPicker({
           {sections.map((s) => (
             <button
               key={s.label}
-              title={s.label}
+              title={sectionLabel(s.label)}
               onClick={() => {
                 scrollRef.current
                   ?.querySelector(`[data-emoji-section="${s.label}"]`)

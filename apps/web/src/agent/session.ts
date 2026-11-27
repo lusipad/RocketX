@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { CodexProcessInfo } from './protocol/client';
 import type { CodexPermissionPreset } from './AppServerController';
 
@@ -88,12 +89,12 @@ export function takeHostLease(
   now: number,
   leaseMs: number,
 ): AgentSession {
-  if (leaseMs <= 0) throw new Error('宿主租约时长必须大于 0');
+  if (leaseMs <= 0) throw new Error(t('agent.session.invalidLeaseDuration'));
   if (
     leaseIsActive(session, now) &&
     (session.host.userId !== host.userId || session.host.deviceId !== host.deviceId)
   ) {
-    throw new Error('该 Agent 会话已有活跃宿主，请等待租约超时后接管');
+    throw new Error(t('agent.session.activeHostExists'));
   }
   return {
     ...session,
@@ -120,7 +121,7 @@ export function approveMember(
   now = Date.now(),
 ): AgentSession {
   assertHost(session, actor, now);
-  if (!memberId) throw new Error('成员 ID 不能为空');
+  if (!memberId) throw new Error(t('agent.session.emptyMemberId'));
   if (session.approvedMemberIds.includes(memberId)) return session;
   return {
     ...session,
@@ -139,7 +140,7 @@ export function assertHost(
     actor.userId !== session.host.userId ||
     actor.deviceId !== session.host.deviceId
   ) {
-    throw new Error('只有当前宿主设备可以审批 Agent 请求');
+    throw new Error(t('agent.session.hostDeviceOnly'));
   }
 }
 
@@ -172,12 +173,12 @@ export function resumeSession(
   assertHost(session, actor, now);
   const backend = agentBackend(session);
   if (backend === 'deepseek' && !session.dshSessionId) {
-    throw new Error('缺少可恢复的 DeepSeek sessionId');
+    throw new Error(t('agent.session.missingDshId'));
   }
   if (backend === 'codex' && !session.codexThreadId) {
-    throw new Error('缺少可恢复的 Codex threadId');
+    throw new Error(t('agent.session.missingCodexThreadId'));
   }
-  if (session.status !== 'interrupted') throw new Error('只有已中断会话可以恢复');
+  if (session.status !== 'interrupted') throw new Error(t('agent.session.onlyInterruptedResumable'));
   return { ...session, status: 'starting', updatedAt: now };
 }
 

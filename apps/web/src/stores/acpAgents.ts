@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import { AcpController, type AcpControllerOptions } from '../agent/acp/AcpController';
 import { expireDisconnectedAcpPermissions, readAcpPermissionJournal, writeAcpPermissionJournal, type AcpPermissionJournalEntry } from '../agent/acp/permissionJournal';
 import type {
@@ -28,6 +29,7 @@ import {
   acpLocalSessionMessages,
   acpLocalSessionHandoff,
   acpLocalSessionsDiscover,
+  createGitCheckpoint,
   type AcpAgentPreset,
   type AcpAgentProbeResult,
   type AcpAgentProfile,
@@ -53,7 +55,7 @@ export interface AcpPresetTemplate {
   command: string;
   args: string[];
   badge?: string;
-  transportLabel?: '原生 ACP' | '内置桥接';
+  transportLabel?: string;
   description: string;
   defaultAutoApproveSafeReads: boolean;
 }
@@ -64,9 +66,9 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     name: 'Codex CLI',
     command: 'codex',
     args: ['--rocketx-acp-bridge=codex'],
-    badge: '推荐',
-    transportLabel: '内置桥接',
-    description: 'OpenAI Codex 本地 CLI，通过 RocketX 内置 ACP 桥接支持代码读写、工作区会话与恢复',
+    get badge() { return t('agent.acpPreset.badge.recommended'); },
+    get transportLabel() { return t('agent.acpPreset.transport.bridge'); },
+    get description() { return t('agent.acpPreset.codex.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -74,9 +76,9 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     name: 'Google Antigravity',
     command: 'agy',
     args: ['--rocketx-acp-bridge=antigravity'],
-    badge: 'IDE 代理',
-    transportLabel: '内置桥接',
-    description: 'Google Antigravity 本地开发者代理，通过内置 ACP 桥接联动 RocketX 工作区与任务',
+    get badge() { return t('agent.acpPreset.badge.ideAgent'); },
+    get transportLabel() { return t('agent.acpPreset.transport.bridge'); },
+    get description() { return t('agent.acpPreset.antigravity.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -85,8 +87,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     command: 'claude',
     args: ['--rocketx-acp-bridge=claude'],
     badge: 'Anthropic',
-    transportLabel: '内置桥接',
-    description: 'Anthropic Claude Code CLI，通过内置 ACP 桥接支持多文件协作、终端执行与工具审批',
+    get transportLabel() { return t('agent.acpPreset.transport.bridge'); },
+    get description() { return t('agent.acpPreset.claude.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -95,8 +97,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     command: 'kimi',
     args: ['acp'],
     badge: 'Moonshot',
-    transportLabel: '原生 ACP',
-    description: 'Kimi CLI 原生 ACP 模式（kimi acp），支持本地工程问答、编辑与阶段计划流式汇报',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.kimi.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -105,8 +107,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     command: 'copilot',
     args: ['--acp'],
     badge: 'GitHub',
-    transportLabel: '原生 ACP',
-    description: 'GitHub Copilot CLI 原生 ACP 模式（copilot --acp），支持仓内代码分析与终端协同',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.copilot.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -115,8 +117,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     command: 'gemini',
     args: ['--experimental-acp'],
     badge: 'Google',
-    transportLabel: '原生 ACP',
-    description: 'Google Gemini CLI 原生 ACP 模式（gemini --experimental-acp），支持工作区读写与计划输出',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.gemini.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -124,8 +126,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     name: 'OpenCode (ACP)',
     command: 'opencode',
     args: ['acp'],
-    transportLabel: '原生 ACP',
-    description: 'OpenCode 本地原生 ACP 客户端（opencode acp），支持多模型代码检索与交互编辑',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.opencode.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -133,8 +135,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     name: 'Goose (ACP)',
     command: 'goose',
     args: ['acp'],
-    transportLabel: '原生 ACP',
-    description: 'Block Goose 本地开发者代理（goose acp），通过原生 ACP 协同脚本与项目维护',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.goose.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -143,8 +145,8 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     command: 'qwen',
     args: ['--acp'],
     badge: 'Alibaba',
-    transportLabel: '原生 ACP',
-    description: 'Qwen Code CLI 原生 ACP 模式（qwen --acp），支持本地仓库理解、改动与命令执行',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.qwen.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
@@ -153,17 +155,17 @@ export const ACP_PRESET_TEMPLATES: readonly AcpPresetTemplate[] = [
     command: 'dsh',
     args: ['--rocketx-acp-bridge=dsh'],
     badge: 'DeepSeek',
-    transportLabel: '内置桥接',
-    description: 'DeepSeek Harness (dsh) 本地代理，通过内置 ACP 桥接兼容工具链并接入管家协作',
+    get transportLabel() { return t('agent.acpPreset.transport.bridge'); },
+    get description() { return t('agent.acpPreset.dsh.desc'); },
     defaultAutoApproveSafeReads: true,
   },
   {
     preset: 'custom',
-    name: '自定义 ACP 客户端',
+    get name() { return t('agent.acpPreset.custom.name'); },
     command: '',
     args: [],
-    transportLabel: '原生 ACP',
-    description: '接入任意实现了 Agent Client Protocol (stdio JSON-RPC 2.0) 的本地命令行代理',
+    get transportLabel() { return t('agent.acpPreset.transport.native'); },
+    get description() { return t('agent.acpPreset.custom.desc'); },
     defaultAutoApproveSafeReads: false,
   },
 ];
@@ -214,6 +216,7 @@ export interface AcpManagedSessionState {
   error: string | null;
   modes: AcpSessionModeState | null;
   models: AcpSessionModelState | null;
+  queuedPrompts?: Array<{ id: string; text: string }>;
   availableCommands: AcpAvailableCommand[];
   plan: AcpPlanEntry[];
   messages: AcpChatMessage[];
@@ -264,7 +267,7 @@ export function evaluateAcpPermissionPolicy(
     return {
       decision: 'reject',
       optionId: rejectOpt?.optionId,
-      reason: '当前会话处于只读策略，已自动拒绝变更或执行权限请求',
+      reason: t('agent.acp.perm.readonlyRejected'),
     };
   }
 
@@ -279,19 +282,19 @@ export function evaluateAcpPermissionPolicy(
         return {
           decision: 'allow',
           optionId: allowOpt.optionId,
-          reason: '自主策略自动放行工作区只读/检索操作',
+          reason: t('agent.acp.perm.autonomousAllowed'),
         };
       }
     }
     return {
       decision: 'prompt',
-      reason: `该操作（${kind}${title ? `: ${title}` : ''}）涉及写入、执行或外部访问，需要您确认后继续`,
+      reason: t('agent.acp.perm.needsConfirm', { kind, titlePart: title ? `: ${title}` : '' }),
     };
   }
 
   return {
     decision: 'prompt',
-    reason: '当前自主策略为「建议确认」，请审批后继续执行',
+    reason: t('agent.acp.perm.confirmMode'),
   };
 }
 
@@ -543,6 +546,9 @@ export interface AcpAgentsState {
   ) => Promise<{ stopReason: string }>;
   cancelTurn: (sessionKey: string) => Promise<void>;
   setMode: (sessionKey: string, modeId: string) => Promise<void>;
+  setModel: (sessionKey: string, modelId: string) => Promise<void>;
+  enqueuePrompt: (sessionKey: string, text: string) => string;
+  removeQueuedPrompt: (sessionKey: string, queueId: string) => void;
   resolvePermission: (
     sessionKey: string,
     requestId: string,
@@ -573,10 +579,10 @@ function applySessionUpdate(
       if (!update.nativeSessionId.trim() || update.nativeSessionId.startsWith('acp-bridge-')
         || workContextPathKey(update.workspaceRoot) !== workContextPathKey(session.workspaceRoot)
         || (session.sourceScope && session.sourceScope !== update.sourceScope)) {
-        return { ...session, status: 'error', error: '执行器返回的原生身份与来源或目录不一致', updatedAt: now };
+        return { ...session, status: 'error', error: t('agent.acp.error.identityMismatch'), updatedAt: now };
       }
       if (session.nativeSessionId && session.nativeSessionId !== update.nativeSessionId) {
-        return { ...session, status: 'error', error: '执行器返回了不同的原生会话，禁止替换已有工作', updatedAt: now };
+        return { ...session, status: 'error', error: t('agent.acp.error.differentNativeSession'), updatedAt: now };
       }
       return { ...session, nativeSessionId: update.nativeSessionId, nativeIdentityPending: false, sourceScope: update.sourceScope, updatedAt: now };
     }
@@ -707,7 +713,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
           ...prev,
           status: code === 0 || prev.status === 'stopped' ? 'stopped' : 'error',
           connectionReady: false,
-          error: code === 0 || prev.status === 'stopped' ? prev.error : (reason ?? `进程退出 (${code})`),
+          error: code === 0 || prev.status === 'stopped' ? prev.error : (reason ?? t('agent.acp.error.processExited', { code: code ?? '' })),
           pendingPermissions: [],
           updatedAt: Date.now(),
         }));
@@ -760,7 +766,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
             if (!pending) return;
             permissionResolvers.delete(requestId);
             pending.resolve({ outcome: { outcome: 'cancelled' } });
-            updateSession(sessionKey, (prev) => ({ ...prev, pendingPermissions: prev.pendingPermissions.filter((entry) => entry.requestId !== requestId), error: '权限请求已超时，需由执行器重新请求', updatedAt: Date.now() }));
+            updateSession(sessionKey, (prev) => ({ ...prev, pendingPermissions: prev.pendingPermissions.filter((entry) => entry.requestId !== requestId), error: t('agent.acp.error.permTimeout'), updatedAt: Date.now() }));
             set({ expiredPermissions: expireDisconnectedAcpPermissions(accountScope, new Set(permissionResolvers.keys())) });
           }, 10 * 60_000);
           permissionResolvers.set(requestId, { resolve, sessionKey, accountScope, nativeSessionId: params.sessionId, turnCount: currentSession.turnCount, expiresAt, controller, timer });
@@ -884,8 +890,8 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
           enabled: true,
           autoApproveSafeReads: tpl?.defaultAutoApproveSafeReads ?? true,
           description: candidate.version
-            ? `自动探测发现 (${candidate.version})`
-            : '自动探测发现的本地 ACP 客户端',
+            ? t('agent.acp.notes.detectedWithVersion', { version: candidate.version })
+            : t('agent.acp.notes.detected'),
         });
         adopted.push(saved);
       }
@@ -1012,7 +1018,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
           ready: false,
           resolvedPath: null,
           version: null,
-          reason: '网页版不支持直接拉起本机 ACP 命令行进程，请在 RocketX 桌面端中使用',
+          reason: t('agent.acp.error.desktopOnly'),
         };
         set((state) => ({ probes: { ...state.probes, [id]: result } }));
         return result;
@@ -1025,14 +1031,14 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
     startSession: async (input) => {
       const agent = get().agents.find((a) => a.id === input.agentId);
       if (!agent) {
-        throw new Error(`未找到 ACP 客户端配置: ${input.agentId}`);
+        throw new Error(t('agent.acp.error.agentNotFound', { agentId: input.agentId }));
       }
       if (!agent.enabled) {
-        throw new Error(`ACP 客户端 ${agent.name} 当前已停用`);
+        throw new Error(t('agent.acp.error.agentDisabled', { name: agent.name }));
       }
       const workspaceRoot = input.workspaceRoot.trim();
       if (!workspaceRoot) {
-        throw new Error('启动 ACP 会话需要指定有效的本地工作区路径');
+        throw new Error(t('agent.acp.error.startWorkspaceRequired'));
       }
 
       const autonomyMode: WorkCardAutonomyMode =
@@ -1120,11 +1126,11 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
     loadSession: async (input) => {
       const agent = get().agents.find((a) => a.id === input.agentId);
       if (!agent) {
-        throw new Error(`未找到 ACP 客户端配置: ${input.agentId}`);
+        throw new Error(t('agent.acp.error.agentNotFound', { agentId: input.agentId }));
       }
       const workspaceRoot = input.workspaceRoot.trim();
       if (!workspaceRoot) {
-        throw new Error('加载 ACP 会话需要指定本地工作区路径');
+        throw new Error(t('agent.acp.error.loadWorkspaceRequired'));
       }
       const autonomyMode: WorkCardAutonomyMode =
         input.autonomyMode ?? (agent.autoApproveSafeReads ? 'autonomous' : 'confirm');
@@ -1225,10 +1231,10 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
     resumeLocalSession: async (input) => {
       const accountScope = resolveButlerAccountScope();
       const assertAccount = () => {
-        if (resolveButlerAccountScope() !== accountScope) throw new Error('账号已切换，已停止原会话交接');
+        if (resolveButlerAccountScope() !== accountScope) throw new Error(t('agent.superAgent.accountSwitchedHandoff'));
       };
       if (input.provider === 'codex' && !input.handoffConfirmed) {
-        throw new Error('原生 Codex 会话当前只读：请先在原端停止执行，再明确交接到 RocketX');
+        throw new Error(t('agent.acp.error.codexReadonly'));
       }
       const owned = Object.values(get().sessions).find((candidate) =>
         controllers.has(candidate.sessionKey) && candidate.status !== 'stopped' && candidate.status !== 'error'
@@ -1240,7 +1246,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
       }
 
       if (input.executionProfileId && !get().agents.some((agent) => agent.id === input.executionProfileId && agent.enabled)) {
-        throw new Error('原会话执行配置已不存在或已停用，请恢复原配置后继续');
+        throw new Error(t('agent.acp.error.profileMissingOrDisabled'));
       }
       let agent = input.executionProfileId
         ? get().agents.find((a) => a.id === input.executionProfileId && a.enabled)
@@ -1266,13 +1272,13 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
             enabled: true,
             autoApproveSafeReads: tpl?.defaultAutoApproveSafeReads ?? true,
             description: candidate.version
-              ? `自动探测发现 (${candidate.version})`
-              : '自动探测发现的本地 ACP 客户端',
+              ? t('agent.acp.notes.detectedWithVersion', { version: candidate.version })
+              : t('agent.acp.notes.detected'),
           });
         } else {
           const tpl = ACP_PRESET_TEMPLATES.find((item) => item.preset === input.preset);
           if (!tpl) {
-            throw new Error(`未找到适配 ${input.provider} (${input.preset}) 的本地 ACP 客户端配置`);
+            throw new Error(t('agent.acp.error.providerNotFound', { provider: input.provider, preset: input.preset }));
           }
           agent = await get().upsertAgent({
             name: tpl.name,
@@ -1303,10 +1309,10 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
 
       const workspaceRoot = input.workspaceRoot.trim() || agent.cwd?.trim() || '';
       if (!workspaceRoot) {
-        throw new Error('无法恢复该本机会话：缺少工作区路径');
+        throw new Error(t('agent.acp.error.resumeWorkspaceMissing'));
       }
       if (input.provider === 'codex' && (!input.sourceScope || agent.sourceScope !== input.sourceScope)) {
-        throw new Error('原生 Codex 数据来源与执行配置不一致，请选择原配置重新交接');
+        throw new Error(t('agent.acp.error.codexProfileMismatch'));
       }
       const nativeResume = input.provider === 'codex'
         ? await acpLocalSessionHandoff({ sessionId: input.nativeSessionId, sourceScope: input.sourceScope!, accountScope, hostDeviceId: agentDeviceId(), workspaceRoot, profileId: agent.id })
@@ -1366,18 +1372,18 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
       const session = get().sessions[sessionKey];
       const controller = controllers.get(sessionKey);
       if (!session || !controller || !session.acpSessionId) {
-        throw new Error('ACP 会话未就绪或已停止');
+        throw new Error(t('agent.acp.error.notReadyOrStopped'));
       }
 
       const trimmed = text.trim();
       if (!trimmed) {
-        throw new Error('发送给 ACP 客户端的内容不能为空');
+        throw new Error(t('agent.acp.error.emptyPrompt'));
       }
 
       const accountScope = session.accountScope ?? resolveButlerAccountScope();
-      if (accountScope !== resolveButlerAccountScope()) throw new Error('会话属于其他账号，不能发送指令');
+      if (accountScope !== resolveButlerAccountScope()) throw new Error(t('agent.acp.error.otherAccountSend'));
       if (session.status === 'running' || session.status === 'waiting_approval') {
-        if (!options.steer) throw new Error('该会话仍在执行，请等待结束或明确修改当前要求');
+        if (!options.steer) throw new Error(t('agent.acp.error.sessionBusy'));
         await get().cancelTurn(sessionKey);
       }
 
@@ -1397,7 +1403,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
           promptText = `${memoryBlock}\n\n${trimmed}`;
         }
       }
-      if (accountScope !== resolveButlerAccountScope()) throw new Error('账号已切换，本次指令未发送');
+      if (accountScope !== resolveButlerAccountScope()) throw new Error(t('agent.acp.error.accountSwitchedNotSent'));
 
       const userMsgId = `u:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`;
       updateSession(sessionKey, (prev) => ({
@@ -1437,7 +1443,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
                   {
                     id: `a:${Date.now()}:${Math.random().toString(36).slice(2, 6)}`,
                     role: 'assistant' as const,
-                    text: finalText || `（本轮已结束：${result.stopReason}）`,
+                    text: finalText || t('agent.acp.error.turnEndedFallback', { stopReason: result.stopReason }),
                     ...(finalThoughts ? { thoughts: finalThoughts } : {}),
                     timestamp: Date.now(),
                   },
@@ -1457,6 +1463,23 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
         const after = get().sessions[sessionKey];
         if (after) {
           await syncAcpSessionToLedger(after);
+          if (isTauriRuntime() && after.workspaceRoot?.trim()) {
+            void createGitCheckpoint(
+              after.workspaceRoot,
+              t('agent.diff.turnCheckpointLabel'),
+              `acp-${after.turnCount}`,
+            ).catch(() => undefined);
+          }
+          const nextQueued = after.queuedPrompts?.[0];
+          if (nextQueued && after.status === 'ready') {
+            updateSession(sessionKey, (prev) => ({
+              ...prev,
+              queuedPrompts: (prev.queuedPrompts ?? []).slice(1),
+            }));
+            queueMicrotask(() => {
+              void get().sendPrompt(sessionKey, nextQueued.text, options).catch(() => undefined);
+            });
+          }
         }
         return { stopReason: result.stopReason };
       } catch (error) {
@@ -1495,7 +1518,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
     cancelTurn: async (sessionKey) => {
       const session = get().sessions[sessionKey];
       const controller = controllers.get(sessionKey);
-      if (!session || !controller || !session.acpSessionId) throw new Error('原执行连接已失效，无法确认本轮已经停止');
+      if (!session || !controller || !session.acpSessionId) throw new Error(t('agent.acp.error.stopConnectionLost'));
       await controller.cancel(session.acpSessionId);
       // Release approvals before waiting for the old turn: a bridge can be awaiting this host response.
       for (const [requestId, pending] of permissionResolvers) {
@@ -1510,7 +1533,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
       if (activePrompt) {
         let timeout: ReturnType<typeof setTimeout> | undefined;
         try {
-          await Promise.race([activePrompt, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('执行器尚未确认停止，请检查原端状态')), 10_000); })]);
+          await Promise.race([activePrompt, new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error(t('agent.acp.error.stopUnconfirmed'))), 10_000); })]);
         } finally { if (timeout) clearTimeout(timeout); }
       }
       updateSession(sessionKey, (prev) => ({
@@ -1527,7 +1550,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
       const session = get().sessions[sessionKey];
       const controller = controllers.get(sessionKey);
       if (!session || !controller || !session.acpSessionId) {
-        throw new Error('ACP 会话尚未连接');
+        throw new Error(t('agent.acp.error.notConnected'));
       }
       await controller.setMode(modeId, session.acpSessionId);
       updateSession(sessionKey, (prev) => ({
@@ -1539,14 +1562,49 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
       }));
     },
 
+    setModel: async (sessionKey, modelId) => {
+      const session = get().sessions[sessionKey];
+      const controller = controllers.get(sessionKey);
+      if (!session || !controller || !session.acpSessionId) {
+        throw new Error(t('agent.acp.error.notConnected'));
+      }
+      await controller.setModel(modelId, session.acpSessionId);
+      updateSession(sessionKey, (prev) => ({
+        ...prev,
+        models: prev.models
+          ? { ...prev.models, currentModelId: modelId }
+          : { currentModelId: modelId, availableModels: [] },
+        updatedAt: Date.now(),
+      }));
+    },
+
+    enqueuePrompt: (sessionKey, text) => {
+      const trimmed = text.trim();
+      const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      if (!trimmed) return id;
+      updateSession(sessionKey, (prev) => ({
+        ...prev,
+        queuedPrompts: [...(prev.queuedPrompts ?? []), { id, text: trimmed }],
+        updatedAt: Date.now(),
+      }));
+      return id;
+    },
+
+    removeQueuedPrompt: (sessionKey, queueId) => {
+      updateSession(sessionKey, (prev) => ({
+        ...prev,
+        queuedPrompts: (prev.queuedPrompts ?? []).filter((item) => item.id !== queueId),
+      }));
+    },
+
     resolvePermission: async (sessionKey, requestId, optionId) => {
       const pending = permissionResolvers.get(requestId);
       const session = get().sessions[sessionKey];
       const request = session?.pendingPermissions.find((entry) => entry.requestId === requestId);
       if (!pending || pending.sessionKey !== sessionKey || pending.accountScope !== resolveButlerAccountScope() || pending.nativeSessionId !== session?.acpSessionId || pending.turnCount !== session?.turnCount || controllers.get(sessionKey) !== pending.controller || pending.expiresAt <= Date.now()) {
-        throw new Error('原执行连接或权限请求已失效，需重新请求权限');
+        throw new Error(t('agent.acp.error.permInvalidOrExpired'));
       }
-      if (optionId && !request?.options.some((option) => option.optionId === optionId)) throw new Error('无效的权限选项');
+      if (optionId && !request?.options.some((option) => option.optionId === optionId)) throw new Error(t('agent.acp.error.invalidPermOption'));
       if (pending) {
         clearTimeout(pending.timer);
         removePermissionRecord(requestId, pending.accountScope);

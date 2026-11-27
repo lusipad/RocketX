@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { t } from '../i18n';
 import { isTauri } from '../lib/http';
 import { takePendingNotificationNavigation } from '../platform/desktopCommands';
 import { listenDesktopEvent } from '../platform/desktopEvents';
@@ -49,7 +50,7 @@ export default function NotificationNavigationBridge() {
       if (!next.target) return;
       handlingRef.current = true;
       void openTarget(next.target)
-        .catch((err) => toast.error(err, '无法打开通知对应的会话'))
+        .catch((err) => toast.error(err, t('nav.notification.openRoomFailed')))
         .finally(() => {
           handlingRef.current = false;
           flushPending();

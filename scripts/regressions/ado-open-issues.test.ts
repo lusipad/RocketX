@@ -22,6 +22,8 @@ import {
   type HierarchyLayout,
 } from '../../apps/web/src/stores/wiTemplates';
 import { pullRequestReviewSummary } from '../../apps/web/src/components/AdoEntityLink';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 (globalThis as Record<string, unknown>).React = React;
 
@@ -402,12 +404,22 @@ test('PR 列表默认跳转 Azure DevOps，AI 审查是独立次要动作', () =
 
   assert.match(primaryLink, /href=\{pr\.webUrl\}/);
   assert.match(primaryLink, /className="flex min-w-0 flex-1/);
-  assert.match(primaryLink, /aria-label=\{`在 Azure DevOps 中打开 PR !\$\{pr\.id\}`\}/);
+  assert.match(primaryLink, /aria-label=\{t\('workbench\.pr\.openInAdoAria', \{ id: pr\.id \}\)\}/);
+  assert.match(zhCN['workbench.pr.openInAdoAria'], /在 Azure DevOps 中打开 PR !\{id\}/);
+  assert.ok(enUS['workbench.pr.openInAdoAria'].trim());
   assert.doesNotMatch(primaryLink, /onAsk\(pr\)/);
   assert.match(row, /onClick=\{\(\) => onAsk\(pr\)\}/);
-  assert.match(row, /aria-label=\{`用 AI 管家审查 PR !\$\{pr\.id\}：\$\{pr\.title\}`\}/);
-  assert.match(row, /AI 审查/);
-  assert.match(row, /aria-label=\{comparing \? '取消选择' : '选它交给 AI 管家比较'\}/);
+  assert.match(row, /aria-label=\{t\('workbench\.pr\.aiReviewAria', \{ id: pr\.id, title: pr\.title \}\)\}/);
+  assert.match(zhCN['workbench.pr.aiReviewAria'], /用 AI 管家审查 PR !\{id\}：\{title\}/);
+  assert.ok(enUS['workbench.pr.aiReviewAria'].trim());
+  assert.match(row, /\{t\('workbench\.pr\.aiReviewButton'\)\}/);
+  assert.match(zhCN['workbench.pr.aiReviewButton'], /AI 审查/);
+  assert.ok(enUS['workbench.pr.aiReviewButton'].trim());
+  assert.match(row, /aria-label=\{comparing \? t\('workbench\.pr\.deselectCompare'\) : t\('workbench\.pr\.selectCompare'\)\}/);
+  assert.match(zhCN['workbench.pr.deselectCompare'], /取消选择/);
+  assert.match(zhCN['workbench.pr.selectCompare'], /选它交给 AI 管家比较/);
+  assert.ok(enUS['workbench.pr.deselectCompare'].trim());
+  assert.ok(enUS['workbench.pr.selectCompare'].trim());
 });
 
 test('只把当前 ADO 集合的工作项、PR 和构建 URL 识别为卡片', () => {

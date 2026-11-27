@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { t } from '../i18n';
 import { isTauri } from '../lib/http';
 import {
   checkGithubUpdate,
@@ -23,26 +24,26 @@ async function checkGithubSource(installed: string): Promise<void> {
 
   toast.show({
     kind: 'info',
-    message: `RocketX ${update.version} 已发布`,
+    message: t('nav.updater.available', { version: update.version }),
     duration: 0,
     action: {
-      label: '更新并重启',
+      label: t('nav.updater.updateAndRestart'),
       onClick: () => {
         void (async () => {
           const freshUpdate = await checkGithubUpdate(installed);
           if (!freshUpdate) return;
-          const toastId = toast.loading(`正在下载 RocketX ${freshUpdate.version}…`);
+          const toastId = toast.loading(t('nav.updater.downloading', { version: freshUpdate.version }));
           try {
             await freshUpdate.downloadAndInstall((event) => {
               if (event.event === 'Finished') {
-                toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
+                toast.update(toastId, { kind: 'success', message: t('nav.updater.installedRestarting') });
               }
             });
             await relaunchDesktop();
           } catch (error) {
-            toast.update(toastId, { kind: 'error', message: humanError(error, '自动更新失败') });
+            toast.update(toastId, { kind: 'error', message: humanError(error, t('nav.updater.failed')) });
           }
-        })().catch((error) => toast.error(error, '自动更新失败'));
+        })().catch((error) => toast.error(error, t('nav.updater.failed')));
       },
     },
   });
@@ -56,23 +57,23 @@ async function checkCustomSource(installed: string): Promise<void> {
     if (!update) return;
     toast.show({
       kind: 'info',
-      message: `RocketX ${update.version} 已发布（签名内网源）`,
+      message: t('nav.updater.availableSignedHttp', { version: update.version }),
       duration: 0,
       action: {
-        label: '更新并重启',
+        label: t('nav.updater.updateAndRestart'),
         onClick: () => {
           void (async () => {
             const freshUpdate = await checkHttpUpdate(config.location, installed);
             if (!freshUpdate) return;
-            const toastId = toast.loading(`正在下载并验证 RocketX ${freshUpdate.version}…`);
+            const toastId = toast.loading(t('nav.updater.downloadingAndVerifying', { version: freshUpdate.version }));
             try {
               await freshUpdate.downloadAndInstall();
-              toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
+              toast.update(toastId, { kind: 'success', message: t('nav.updater.installedRestarting') });
               await relaunchDesktop();
             } catch (error) {
-              toast.update(toastId, { kind: 'error', message: humanError(error, '自动更新失败') });
+              toast.update(toastId, { kind: 'error', message: humanError(error, t('nav.updater.failed')) });
             }
-          })().catch((error) => toast.error(error, '自动更新失败'));
+          })().catch((error) => toast.error(error, t('nav.updater.failed')));
         },
       },
     });
@@ -83,9 +84,9 @@ async function checkCustomSource(installed: string): Promise<void> {
 
   const action = probe.installerPath && probe.sha256 && probe.installerType
     ? {
-        label: `更新到 v${probe.version} 并重启`,
+        label: t('nav.updater.updateToVersionAndRestart', { version: probe.version }),
         onClick: () => {
-          const toastId = toast.loading(`正在退出并安装 RocketX ${probe.version}…`);
+          const toastId = toast.loading(t('nav.updater.exitingAndInstalling', { version: probe.version }));
           void launchDirInstaller({
             dir: config.location,
             path: probe.installerPath!,
@@ -102,7 +103,10 @@ async function checkCustomSource(installed: string): Promise<void> {
 
   toast.show({
     kind: 'info',
-    message: `RocketX ${probe.version} 已发布（${probe.signature ? '签名共享目录' : '未签名共享目录，已固定 SHA-256'}）`,
+    message: t(
+      probe.signature ? 'nav.updater.availableSignedDir' : 'nav.updater.availableUnsignedDir',
+      { version: probe.version },
+    ),
     duration: 0,
     ...(action ? { action } : {}),
   });
@@ -117,9 +121,9 @@ export default function UpdaterBridge() {
       .then((result) => {
         if (!result) return;
         if (result.status === 'success') {
-          toast.success(result.message || `RocketX ${result.version} 已更新`);
+          toast.success(result.message || t('nav.updater.updated', { version: result.version }));
         } else {
-          toast.error(result.message || '安装未完成', '自动更新失败');
+          toast.error(result.message || t('nav.updater.installIncomplete'), t('nav.updater.failed'));
         }
       })
       .catch(() => undefined);
@@ -134,7 +138,7 @@ export default function UpdaterBridge() {
       )
       .catch((error) => {
         // 默认 GitHub 源离线时不打扰；用户显式配置的内网源失败必须可见，避免长期误以为在自动更新。
-        if (config.kind !== 'github') toast.error(error, '自定义更新源检查失败');
+        if (config.kind !== 'github') toast.error(error, t('nav.updater.customSourceFailed'));
       });
   }, []);
 

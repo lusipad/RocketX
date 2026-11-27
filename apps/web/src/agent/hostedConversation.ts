@@ -1,4 +1,5 @@
 import { tsMs, type RcMessage } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { parseAgentSessionCard, stripAgentSessionMarker } from './card';
 import { agentMessageInstruction } from './context';
 import type { AgentSession } from './session';
@@ -68,7 +69,7 @@ export function projectHostedConversation(
               id: message._id,
               role: 'assistant',
               text,
-              speaker: 'AI 托管',
+              speaker: t('agent.hostedConversation.speaker'),
               at: tsMs(message.ts),
             }]
           : [];

@@ -598,8 +598,8 @@ async fn start(
             connection.execute("UPDATE work_native_starts SET process_id=?3,process_stopped=0,updated_at=?4 WHERE request_id=?1 AND owner_id=?2",
                     params![input.request_id,lease.record.owner_id,handle.info.process_id,now_millis()]).map_err(|error|error.to_string())?;
         }
-        if !matches!(handle.info.version.as_str(), "0.144.4" | "0.165.0") {
-            return Err("所选 Codex 版本尚未验证新工作写控制，尚未创建线程".into());
+        if !crate::native::codex_contract::is_supported_codex_version(&handle.info.version) {
+            return Err("所选 Codex 版本低于受管写控制基线（0.144.4），尚未创建线程".into());
         }
         let rpc = Arc::clone(&handle.rpc);
         tauri::async_runtime::spawn_blocking(move||->Result<(),String>{
@@ -701,7 +701,7 @@ async fn start(
                     view.capabilities=NativeWorkCapabilities{resume:false,prompt:true,steer:true,interrupt:true,answer:true,external_live_attach:false};
                     let native=Arc::new(NativeConnection{app:app.clone(),account_scope:input.account.account_scope.clone(),db:Arc::clone(&admitted),binding,
                         core:Mutex::new(Core{view,terminals:HashMap::new()}),rpc:OnceLock::new(),process_id:OnceLock::new(),resume_action_id:OnceLock::new(),closed:AtomicBool::new(false),
-                        sequence:AtomicI64::new(1),profile_fingerprint:fingerprint.clone(),resource_directory:db.directory.clone(),
+                        worker_handle:Mutex::new(None),sequence:AtomicI64::new(1),profile_fingerprint:fingerprint.clone(),resource_directory:db.directory.clone(),
                         _resource_owner_guard:lease.owner_guard.take().ok_or("启动归属锁缺失")?});
                     native.rpc.set(Arc::clone(&handle.rpc)).map_err(|_|"原生连接已注册")?;
                     native.process_id.set(handle.info.process_id.clone()).map_err(|_|"原生进程已注册")?;
@@ -725,7 +725,10 @@ async fn start(
         }
         if !native.closed.load(Ordering::Acquire) {
             let worker = Arc::clone(&native);
-            thread::spawn(move || worker.run());
+            let handle = thread::spawn(move || worker.run());
+            if let Ok(mut slot) = native.worker_handle.lock() {
+                *slot = Some(handle);
+            }
         }
         let view = native
             .core

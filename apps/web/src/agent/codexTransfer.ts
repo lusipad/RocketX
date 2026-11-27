@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { t } from '../i18n';
 import { isTauri } from '../lib/http';
 
 const MAX_EXTERNAL_URL_LENGTH = 8192;
@@ -31,7 +32,7 @@ export function codexNewThreadDeepLink(prompt: string, path: string): string {
   const query = new URLSearchParams();
   if (prompt) query.set('prompt', prompt);
   if (path.trim()) query.set('path', path.trim());
-  if ([...query].length === 0) throw new Error('Codex 新对话缺少上下文和工作区');
+  if ([...query].length === 0) throw new Error(t('agent.codexTransfer.missingContextAndWorkspace'));
   return `codex://threads/new?${query.toString()}`;
 }
 
@@ -51,7 +52,7 @@ export function codexThreadDeepLink(threadId: string): string {
     || !/^[A-Za-z0-9_-]+$/.test(normalized)
     || normalized === 'new'
   ) {
-    throw new Error('Codex 线程编号无效');
+    throw new Error(t('agent.codexTransfer.invalidThreadId'));
   }
   return `codex://threads/${normalized}`;
 }
@@ -137,7 +138,7 @@ export function agentConversationLines(
     .map((message) =>
       message.assistant
         ? { role: 'assistant' as const, text: message.text }
-        : { role: 'user' as const, text: `${message.author}：${message.text}` },
+        : { role: 'user' as const, text: t('agent.codexTransfer.authorLine', { author: message.author, text: message.text }) },
     );
 }
 
@@ -149,16 +150,16 @@ export function transferTranscript(
   const usable = (firstUser === -1 ? [] : lines.slice(firstUser)).filter(
     (item) => !!item.text.trim() && !item.text.startsWith('📌'),
   );
-  if (usable.length === 0) throw new Error('还没有可转移的对话内容');
+  if (usable.length === 0) throw new Error(t('agent.codexTransfer.noContent'));
   const body = usable
-    .map((item) => `${item.role === 'user' ? '【用户】' : '【助手】'}\n${item.text}`)
+    .map((item) => `${item.role === 'user' ? t('agent.codexTransfer.userSpeaker') : t('agent.codexTransfer.assistantSpeaker')}\n${item.text}`)
     .join('\n\n');
   return [
-    `以下是从 RocketX 转移过来的${kind}完整记录，请作为上下文接续：`,
+    t('agent.codexTransfer.header', { kind }),
     '',
     body,
     '',
     '———',
-    '请接续以上上下文：如果最后一个用户请求包含尚未完成的明确任务，直接继续执行；否则简要确认已接收并等待用户下一步。',
+    t('agent.codexTransfer.footer'),
   ].join('\n');
 }

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   ControlledWorkItemStateError,
   directGetWorkItem,
@@ -75,7 +77,14 @@ test('direct ADO 请求给 fetch 传真实 AbortSignal', async () => {
 
 test('ADO 设置不会再引导用户创建无法执行确认写入的只读 PAT', () => {
   const settings = readFileSync('apps/web/src/pages/SettingsPage.tsx', 'utf8');
-  assert.match(settings, /Work Items 读写、Code \/ Build 读取/);
+  assert.match(settings, /t\('settings\.workbench\.patHintDesktop'\)/);
+  assert.match(settings, /t\('settings\.workbench\.patHintWeb'\)/);
+  assert.match(zhCN['settings.workbench.patHintDesktop'], /Work Items 读写、Code \/ Build 读取/);
+  assert.match(zhCN['settings.workbench.patHintWeb'], /Work Items 读写、Code \/ Build 读取/);
+  assert.ok(enUS['settings.workbench.patHintDesktop'].trim());
+  assert.ok(enUS['settings.workbench.patHintWeb'].trim());
+  assert.doesNotMatch(zhCN['settings.workbench.patHintDesktop'], /Work Items \/ Code \/ Build 只读/);
+  assert.doesNotMatch(zhCN['settings.workbench.patHintWeb'], /Work Items \/ Code \/ Build 只读/);
   assert.doesNotMatch(settings, /Work Items \/ Code \/ Build 只读/);
 });
 
@@ -587,14 +596,20 @@ test('工作项讨论默认启动本机 Agent，但默认不写回 ADO（issue #
 
   assert.match(source, /const \[startAgent, setStartAgent\] = useState\(true\);/);
   assert.match(source, /const \[writeBack, setWriteBack\] = useState\(false\);/);
-  assert.match(source, /创建后启动本机 Agent/);
-  assert.match(source, /将讨论链接写回 ADO 工作项/);
+  assert.match(source, /t\('chat\.wiDiscussion\.startAgentTitle'\)/);
+  assert.match(zhCN['chat.wiDiscussion.startAgentTitle'], /创建后启动本机 Agent/);
+  assert.ok(enUS['chat.wiDiscussion.startAgentTitle'].trim());
+  assert.match(source, /t\('chat\.wiDiscussion\.writeBackTitle'\)/);
+  assert.match(zhCN['chat.wiDiscussion.writeBackTitle'], /将讨论链接写回 ADO 工作项/);
+  assert.ok(enUS['chat.wiDiscussion.writeBackTitle'].trim());
 });
 
 test('工作项讨论写回只走 commentWorkItem 评论，不触碰 AssignedTo（issue #292）', () => {
   const source = readFileSync('apps/web/src/components/CreateWorkItemDiscussionDialog.tsx', 'utf8');
 
   assert.match(source, /if \(writeBack\) \{/);
-  assert.match(source, /await commentWorkItem\(item\.id, `RocketX 已创建工作项讨论：<a href="\$\{escapeHtml\(href\)\}">\$\{escapeHtml\(resolvedName\)\}<\/a>`\)/);
+  assert.match(source, /await commentWorkItem\(item\.id, t\('chat\.wiDiscussion\.adoComment', \{ href: escapeHtml\(href\), name: escapeHtml\(resolvedName\) \}\)\)/);
+  assert.match(zhCN['chat.wiDiscussion.adoComment'], /RocketX 已创建工作项讨论：<a href="\{href\}">\{name\}<\/a>/);
+  assert.ok(enUS['chat.wiDiscussion.adoComment'].trim());
   assert.doesNotMatch(source, /System\.AssignedTo/);
 });

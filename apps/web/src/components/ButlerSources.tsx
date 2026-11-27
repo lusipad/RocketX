@@ -1,10 +1,11 @@
 import { ChevronRight, ExternalLink } from 'lucide-react';
 import { useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { useT } from '../i18n';
 import type { ButlerSource } from '../lib/butlerContext';
 import type { MarkdownLinkRenderer } from '../lib/markdown';
 import { openButlerSource as openSource } from '../lib/butlerSourceNavigation';
 
-const MARKDOWN_CITATION = /\[来源\]\((https?:\/\/[^\s)]+)\)/g;
+const MARKDOWN_CITATION = /\[(?:来源|Source)\]\((https?:\/\/[^\s)]+)\)/g;
 const NO_SOURCE_LINK: MarkdownLinkRenderer = () => undefined;
 
 function citedSources(text: string, sources: readonly ButlerSource[]): ButlerSource[] {
@@ -33,6 +34,7 @@ export default function ButlerSources({
   text: string;
   children?: (renderLink: MarkdownLinkRenderer) => ReactNode;
 }) {
+  const t = useT();
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const sourceRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const matchedSources = useMemo(
@@ -48,31 +50,33 @@ export default function ButlerSources({
       source.webUrl ? [[source.webUrl, index + 1] as const] : []
     )),
   ), [visibleSources]);
-  if (!sources?.length) return children?.(NO_SOURCE_LINK) ?? null;
 
   const revealSources = useCallback((index: number): void => {
     if (detailsRef.current) detailsRef.current.open = true;
     requestAnimationFrame(() => sourceRefs.current[index]?.focus());
   }, []);
   const renderLink = useCallback<MarkdownLinkRenderer>((label, href) => {
-    if (label.trim() !== '来源') return undefined;
+    const trimmed = label.trim();
+    if (trimmed !== '来源' && trimmed !== 'Source') return undefined;
     const number = citationNumbers.get(href);
     if (!number || matchedSources.length === 0) return undefined;
     return (
       <button
         type="button"
-        aria-label={`查看参考来源 ${number}`}
-        title={`查看参考来源 ${number}`}
+        aria-label={t('butler.sources.viewSourceAria', { number })}
+        title={t('butler.sources.viewSourceAria', { number })}
         onClick={() => revealSources(number - 1)}
         className="ml-0.5 inline-flex h-4 items-center rounded-sm px-0.5 text-xs font-medium leading-none text-primary underline decoration-primary/35 underline-offset-2 hover:bg-primary-light hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
       >
         <sup>{number}</sup>
       </button>
     );
-  }, [citationNumbers, matchedSources.length, revealSources]);
+  }, [citationNumbers, matchedSources.length, revealSources, t]);
+
+  if (!sources?.length) return children?.(NO_SOURCE_LINK) ?? null;
 
   return (
-    <div role="group" aria-label="回答引用" className="contents">
+    <div role="group" aria-label={t('butler.sources.groupAria')} className="contents">
       {children?.(renderLink)}
 
       <details ref={detailsRef} className="group mt-1.5 block border-t border-line/80 pt-1.5">
@@ -82,7 +86,7 @@ export default function ButlerSources({
             aria-hidden="true"
             className="transition-transform motion-reduce:transition-none group-open:rotate-90"
           />
-          <span>参考来源（{visibleSources.length}）</span>
+          <span>{t('butler.sources.summaryCount', { count: visibleSources.length })}</span>
         </summary>
         <ol className="mt-1.5 space-y-0.5 border-l border-line pl-2.5">
           {visibleSources.map((source, index) => (
@@ -92,7 +96,7 @@ export default function ButlerSources({
                   sourceRefs.current[index] = node;
                 }}
                 type="button"
-                title={`打开来源：${source.label}`}
+                title={t('butler.sources.openSourceTitle', { label: source.label })}
                 onClick={() => void openSource(source)}
                 className="grid w-full max-w-full grid-cols-[1.25rem_minmax(0,1fr)_auto] items-start gap-1 rounded-sm px-1 py-1 text-left text-xs text-ink-2 hover:bg-fill-hover hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45"
               >

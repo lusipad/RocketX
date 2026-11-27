@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { isTauri } from './http';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -11,9 +12,9 @@ export async function readAutostartEnabled(): Promise<boolean | null> {
 }
 
 export async function updateAutostartEnabled(enabled: boolean): Promise<boolean> {
-  if (!isTauri) throw new Error('开机自启仅桌面端可用');
+  if (!isTauri) throw new Error(t('nav.autostart.desktopOnly'));
   if (isDebugBuild) {
-    throw new Error('Debug 版依赖开发服务器，不能设置为开机启动；请使用正式安装版');
+    throw new Error(t('nav.autostart.debugDisabled'));
   }
   return invoke<boolean>('set_autostart_enabled', { enabled });
 }

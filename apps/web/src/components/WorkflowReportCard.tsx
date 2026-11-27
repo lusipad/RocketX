@@ -26,6 +26,8 @@ import { useChat } from '../stores/chat';
 import { useWorkLedger } from '../stores/workLedger';
 import { readExternalActionSpec, reconcileExternalWorkActions } from '../agent/externalWorkActions';
 import { toast } from '../stores/toast';
+import { useI18n } from '../i18n';
+import { compareLocaleText, formatDateTime } from '../i18n/format';
 
 export interface WorkflowReportCardProps {
   report: WorkflowExecutionReport;
@@ -72,6 +74,7 @@ export default function WorkflowReportCard({
   onMemoryDistilled,
   onPostedToRoom,
 }: WorkflowReportCardProps) {
+  const { t, locale } = useI18n();
   const rooms = useChat((state) => state.rooms);
   const subscriptions = useChat((state) => state.subscriptions);
   const activeRid = useChat((state) => state.activeRid);
@@ -93,8 +96,8 @@ export default function WorkflowReportCard({
         label: rooms[sub.rid]?.fname || sub.fname || sub.name || sub.rid,
       });
     }
-    return [...merged.values()].sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
-  }, [rooms, subscriptions]);
+    return [...merged.values()].sort((a, b) => compareLocaleText(a.label, b.label, locale));
+  }, [locale, rooms, subscriptions]);
 
   const persistedReports = actions.flatMap((action) => {
     const spec = readExternalActionSpec(action);
@@ -105,43 +108,47 @@ export default function WorkflowReportCard({
   const reportAction = persistedReport?.action;
   const displayGeneratedAt = persistedReport?.spec.reportGeneratedAt ?? report.generatedAt;
   const deliveryLabel = reportAction?.state === 'acknowledged' || reportAction?.state === 'completed'
-    ? '已确认送达' : reportAction?.state === 'verifying_delivery' || reportAction?.state === 'dispatched'
-      ? '送达待确认' : reportAction?.state === 'awaiting_approval' ? '等待审阅确认'
-        : reportAction?.state === 'failed' ? '投递失败或冲突' : '汇报草稿';
+    ? t('agent.reportCard.delivery.confirmed') : reportAction?.state === 'verifying_delivery' || reportAction?.state === 'dispatched'
+      ? t('agent.reportCard.delivery.verifying') : reportAction?.state === 'awaiting_approval' ? t('agent.reportCard.delivery.awaitingApproval')
+        : reportAction?.state === 'failed' ? t('agent.reportCard.delivery.failed') : t('agent.reportCard.delivery.draft');
   const style = STATUS_STYLE_MAP[report.status];
   const generatedTime = useMemo(
     () =>
-      new Intl.DateTimeFormat('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }).format(displayGeneratedAt),
-    [displayGeneratedAt],
+      formatDateTime(
+        displayGeneratedAt,
+        {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        },
+        locale,
+      ),
+    [displayGeneratedAt, locale],
   );
 
   const handleCopyMarkdown = async () => {
     try {
       await navigator.clipboard.writeText(report.markdown);
       setCopied(true);
-      toast.success('已复制工作流汇报 Markdown');
+      toast.success(t('agent.reportCard.toast.copiedMarkdown'));
       window.setTimeout(() => setCopied(false), 1800);
     } catch (error) {
-      toast.error(error, '复制汇报失败');
+      toast.error(error, t('agent.reportCard.toast.copyFailed'));
     }
   };
 
   const handleRecordEvidence = async () => {
     if (!report.todoId) {
-      toast.info('当前汇报尚未绑定工作卡片，无法登记验收证据');
+      toast.info(t('agent.reportCard.toast.noCardBound'));
       return;
     }
     setRecordingEvidence(true);
     try {
       await recordReportAsWorkEvidence(report.todoId, report);
-      toast.success('已保存汇报记录；此记录不会自动通过验收');
+      toast.success(t('agent.reportCard.toast.evidenceSaved'));
       onEvidenceRecorded?.();
     } catch (error) {
-      toast.error(error, '登记验收证据失败');
+      toast.error(error, t('agent.reportCard.toast.evidenceFailed'));
     } finally {
       setRecordingEvidence(false);
     }
@@ -151,10 +158,10 @@ export default function WorkflowReportCard({
     setDistillingMemory(true);
     try {
       await distillReportToMemory(report, report.workspaceRoot);
-      toast.success('已将工作流结论沉淀到长期记忆');
+      toast.success(t('agent.reportCard.toast.memorySaved'));
       onMemoryDistilled?.();
     } catch (error) {
-      toast.error(error, '沉淀长期记忆失败');
+      toast.error(error, t('agent.reportCard.toast.memoryFailed'));
     } finally {
       setDistillingMemory(false);
     }
@@ -162,21 +169,21 @@ export default function WorkflowReportCard({
 
   const handleConfirmPostToRoom = async () => {
     if (!effectiveRid) {
-      toast.error('没有可用的 Rocket.Chat 讨论室');
+      toast.error(t('agent.reportCard.toast.noRoom'));
       return;
     }
     setPostingRoom(true);
     try {
       const result = await postWorkflowReportToRoom(effectiveRid, report, { userConfirmed: true, retry: true });
       if (result.ok) {
-        toast.success('汇报已由目标服务器确认送达');
+        toast.success(t('agent.reportCard.toast.posted'));
         setRoomComposerOpen(false);
         onPostedToRoom?.(effectiveRid);
       } else {
-        toast.info(result.action.errorMessage || '汇报送达待确认，请先核对原讨论室');
+        toast.info(result.action.errorMessage || t('agent.reportCard.toast.postPendingFallback'));
       }
     } catch (error) {
-      toast.error(error, '发送汇报失败');
+      toast.error(error, t('agent.reportCard.toast.postFailed'));
     } finally {
       setPostingRoom(false);
     }
@@ -184,7 +191,7 @@ export default function WorkflowReportCard({
 
   return (
     <section
-      aria-label="工作流执行汇报"
+      aria-label={t('agent.reportCard.ariaLabel')}
       className="flex flex-col gap-3 rounded-2xl border border-line bg-surface-4 p-4 shadow-raise"
     >
       {/* 头部：状态徽章、标题、进度条 */}
@@ -203,7 +210,7 @@ export default function WorkflowReportCard({
               )}
               <span>{report.statusLabel}</span>
             </span>
-            <span className="text-xs text-ink-3">生成于 {generatedTime}</span>
+            <span className="text-xs text-ink-3">{t('agent.reportCard.generatedAt', { time: generatedTime })}</span>
           </div>
           <h3 className="mt-1.5 break-words text-sm font-semibold text-ink">
             {report.title}
@@ -213,16 +220,16 @@ export default function WorkflowReportCard({
           {report.progressPercent !== null ? (
             <>
               <div className="font-mono text-sm font-bold text-ink">{report.progressPercent}%</div>
-              <div className="text-xs text-ink-3">计划步骤完成比例</div>
+              <div className="text-xs text-ink-3">{t('agent.reportCard.planCompletionLabel')}</div>
             </>
-          ) : <div className="text-xs text-ink-3">进度未量化</div>}
+          ) : <div className="text-xs text-ink-3">{t('agent.reportCard.progressUnquantified')}</div>}
         </div>
       </div>
 
       {/* 完成度进度条 */}
       {report.progressPercent !== null && <div
         role="progressbar"
-        aria-label="计划步骤完成比例"
+        aria-label={t('agent.reportCard.planCompletionLabel')}
         aria-valuenow={report.progressPercent}
         aria-valuemin={0}
         aria-valuemax={100}
@@ -239,10 +246,10 @@ export default function WorkflowReportCard({
         {report.summary}
       </div>
       <div role="status" className="text-xs text-ink-3">
-        <span>对外汇报：{deliveryLabel}</span>
+        <span>{t('agent.reportCard.externalReportPrefix', { status: deliveryLabel })}</span>
         {reportAction?.errorMessage && <p className="mt-1 break-words">{reportAction.errorMessage}</p>}
         {(reportAction?.state === 'verifying_delivery' || reportAction?.state === 'dispatched') && (
-          <button type="button" className="ml-2 text-primary hover:underline" onClick={() => void reconcileExternalWorkActions()}>核对送达</button>
+          <button type="button" className="ml-2 text-primary hover:underline" onClick={() => void reconcileExternalWorkActions()}>{t('agent.reportCard.verifyDelivery')}</button>
         )}
       </div>
 
@@ -251,8 +258,11 @@ export default function WorkflowReportCard({
         <div className="space-y-1.5">
           <div className="text-xs font-semibold text-ink">
             {report.progressPercent === null
-              ? `验收条件（尚未逐项确认）· ${report.planBreakdown.length} 项`
-              : `计划步骤 (${report.planBreakdown.filter((p) => p.status === 'completed').length}/${report.planBreakdown.length})`}
+              ? t('agent.reportCard.acceptanceUnverified', { count: report.planBreakdown.length })
+              : t('agent.reportCard.planSteps', {
+                  done: report.planBreakdown.filter((p) => p.status === 'completed').length,
+                  total: report.planBreakdown.length,
+                })}
           </div>
           <div className="space-y-1">
             {report.planBreakdown.map((step, index) => (
@@ -290,7 +300,7 @@ export default function WorkflowReportCard({
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-ink">
             <Wrench size={12} className="text-primary" />
-            <span>关键产出与执行 ({report.keyChanges.length})</span>
+            <span>{t('agent.reportCard.keyChanges', { count: report.keyChanges.length })}</span>
           </div>
           <div className="space-y-1">
             {report.keyChanges.slice(0, 8).map((change, idx) => (
@@ -325,7 +335,7 @@ export default function WorkflowReportCard({
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-ink">
             <ShieldCheck size={12} className="text-success" />
-            <span>验证证据 ({report.evidences.length})</span>
+            <span>{t('agent.reportCard.evidences', { count: report.evidences.length })}</span>
           </div>
           <div className="space-y-1">
             {report.evidences.map((ev) => (
@@ -345,7 +355,7 @@ export default function WorkflowReportCard({
                         : 'bg-danger/15 text-danger'
                   }`}
                 >
-                  {ev.stale ? '已过期' : ev.kind === 'agent_report' ? '说明记录' : ev.passed ? '通过' : '失败'}
+                  {ev.stale ? t('agent.reportCard.evidenceStale') : ev.kind === 'agent_report' ? t('agent.reportCard.evidenceNote') : ev.passed ? t('agent.reportCard.evidencePassed') : t('agent.reportCard.evidenceFailed')}
                 </span>
               </div>
             ))}
@@ -358,7 +368,7 @@ export default function WorkflowReportCard({
         <div className="rounded-xl border border-warning/30 bg-warning/10 p-2.5 text-xs">
           <div className="flex items-center gap-1.5 font-semibold text-warning">
             <ShieldAlert size={13} />
-            <span>待确认与风险</span>
+            <span>{t('agent.reportCard.risksAndBlockers')}</span>
           </div>
           <ul className="mt-1 space-y-1 text-ink-2">
             {report.risksAndBlockers.map((risk, idx) => (
@@ -373,7 +383,7 @@ export default function WorkflowReportCard({
         <div className="space-y-1">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-ink">
             <Sparkles size={12} className="text-primary" />
-            <span>下一步建议</span>
+            <span>{t('agent.reportCard.nextActions')}</span>
           </div>
           <ul className="space-y-1 text-xs text-ink-2">
             {report.nextActions.map((act, idx) => (
@@ -393,7 +403,7 @@ export default function WorkflowReportCard({
           className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 py-1.5 text-xs font-medium text-ink shadow-raise transition hover:bg-fill-hover"
         >
           {copied ? <Check size={12} className="text-success" /> : <ClipboardCopy size={12} />}
-          <span>{copied ? '已复制' : '复制 Markdown'}</span>
+          <span>{copied ? t('common.copied') : t('agent.reportCard.copyMarkdown')}</span>
         </button>
 
         {report.todoId && (
@@ -404,7 +414,7 @@ export default function WorkflowReportCard({
             className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 py-1.5 text-xs font-medium text-ink shadow-raise transition hover:bg-fill-hover disabled:opacity-50"
           >
             <FileCheck2 size={12} className="text-success" />
-            <span>{recordingEvidence ? '保存中…' : '保存汇报记录'}</span>
+            <span>{recordingEvidence ? t('agent.reportCard.savingRecord') : t('agent.reportCard.saveRecord')}</span>
           </button>
         )}
 
@@ -415,18 +425,18 @@ export default function WorkflowReportCard({
           className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 py-1.5 text-xs font-medium text-ink shadow-raise transition hover:bg-fill-hover disabled:opacity-50"
         >
           <Brain size={12} className="text-primary" />
-          <span>{distillingMemory ? '沉淀中…' : '沉淀长期记忆'}</span>
+          <span>{distillingMemory ? t('agent.reportCard.distillingMemory') : t('agent.reportCard.distillMemory')}</span>
         </button>
 
         <button
           type="button"
           disabled={!report.todoId}
-          title={!report.todoId ? '请先将汇报关联到工作' : undefined}
+          title={!report.todoId ? t('agent.reportCard.linkWorkFirstTitle') : undefined}
           onClick={() => setRoomComposerOpen((prev) => !prev)}
           className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
         >
           <Send size={12} />
-          <span>发送到讨论室</span>
+          <span>{t('agent.reportCard.sendToRoom')}</span>
         </button>
       </div>
 
@@ -434,22 +444,22 @@ export default function WorkflowReportCard({
       {roomComposerOpen && (
         <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 text-xs">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-semibold text-ink">确认将此工作流汇报发送到 Rocket.Chat 讨论室</span>
+            <span className="font-semibold text-ink">{t('agent.reportCard.confirmRoomTitle')}</span>
             <button
               type="button"
               onClick={() => setRoomComposerOpen(false)}
               className="rounded p-0.5 text-ink-3 hover:bg-fill-hover hover:text-ink"
-              aria-label="取消发送"
+              aria-label={t('agent.reportCard.cancelSendAria')}
             >
               <X size={13} />
             </button>
           </div>
-          <p className="mt-2 text-ink-2">请确认目标讨论室及上方完整汇报均可向该讨论室成员公开。投递使用当前连接账号，原始快照和送达回执会随工作保留。</p>
+          <p className="mt-2 text-ink-2">{t('agent.reportCard.confirmRoomDesc')}</p>
           {roomOptions.length > 0 ? (
             <div className="mt-2 flex flex-col gap-2">
               <label className="flex flex-col gap-1 text-ink-2">
-                目标讨论室
-                <select aria-label="汇报目标讨论室" value={effectiveRid} onChange={(event) => setTargetRid(event.target.value)} className="rounded-lg border border-line bg-surface-4 px-2 py-1.5 text-ink">
+                {t('agent.reportCard.targetRoomLabel')}
+                <select aria-label={t('agent.reportCard.targetRoomAria')} value={effectiveRid} onChange={(event) => setTargetRid(event.target.value)} className="rounded-lg border border-line bg-surface-4 px-2 py-1.5 text-ink">
                   {roomOptions.map((room) => <option key={room.rid} value={room.rid}>#{room.label}</option>)}
                 </select>
               </label>
@@ -475,7 +485,7 @@ export default function WorkflowReportCard({
                   onClick={() => setRoomComposerOpen(false)}
                   className="rounded-lg border border-line bg-surface-4 px-2.5 py-1 text-xs text-ink-2 hover:bg-fill-hover"
                 >
-                  取消
+                  {t('common.cancel')}
                 </button>
                 <button
                   type="button"
@@ -484,13 +494,13 @@ export default function WorkflowReportCard({
                   className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-50"
                 >
                   <Send size={11} />
-                  <span>{postingRoom ? '发送中…' : '确认发送汇报'}</span>
+                  <span>{postingRoom ? t('agent.reportCard.sending') : t('agent.reportCard.confirmSendBtn')}</span>
                 </button>
               </div>
             </div>
           ) : (
             <p className="mt-2 text-xs text-ink-3">
-              当前处于未连接状态或暂无已加入的讨论室，连接 Rocket.Chat 后即可一键同步汇报。
+              {t('agent.reportCard.noConnectedRooms')}
             </p>
           )}
         </div>

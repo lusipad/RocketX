@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { t } from '../../i18n';
 import type { CodexProcessInfo, CodexTransport, CodexTransportHandlers } from './client';
 
 interface OutputEvent {
@@ -31,7 +32,7 @@ export class TauriPiTransport implements CodexTransport {
     const keepListener = (unlisten: UnlistenFn) => {
       if (generation !== this.generation) {
         unlisten();
-        throw new Error('Pi 连接已取消');
+        throw new Error(t('agent.transport.piCanceled'));
       }
       listeners.push(unlisten);
     };
@@ -43,10 +44,10 @@ export class TauriPiTransport implements CodexTransport {
       keepListener(await listen<ExitEvent>('pi-app-server-exit', (event) => {
         if (generation === this.generation && event.payload.processId === this.processId) {
           const { code, reason } = event.payload;
-          const codeSuffix = code === null ? '' : `（退出码 ${code}）`;
+          const codeSuffix = code === null ? '' : t('agent.transport.piExitCodePart', { code });
           const errorDetail = reason
-            ? `Pi 子进程已退出（退出码 ${code ?? '未知'}）：${reason}`
-            : `Pi 子进程已退出${codeSuffix}`;
+            ? t('agent.transport.piExitedWithReason', { code: code ?? t('agent.acpClient.unknownCode'), reason })
+            : t('agent.transport.piExited', { codePart: codeSuffix });
           handlers.onExit(code, errorDetail);
         }
       }));
@@ -56,7 +57,7 @@ export class TauriPiTransport implements CodexTransport {
       });
       if (generation !== this.generation) {
         void invoke('pi_app_server_stop', { processId: process.processId }).catch(() => undefined);
-        throw new Error('Pi 连接已取消');
+        throw new Error(t('agent.transport.piCanceled'));
       }
       this.processId = process.processId;
       return process;
@@ -67,7 +68,7 @@ export class TauriPiTransport implements CodexTransport {
   }
 
   async write(message: Record<string, unknown>): Promise<void> {
-    if (!this.processId) throw new Error('Pi app-server process is not active');
+    if (!this.processId) throw new Error(t('agent.transport.piNotActive'));
     await invoke('pi_app_server_write', { processId: this.processId, message });
   }
 

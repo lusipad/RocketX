@@ -15,6 +15,7 @@ import {
   syncBusinessMcpAzureDevOps,
   syncBusinessMcpRocketChat,
 } from '../../apps/web/src/agent/businessMcp';
+import { buildUiLanguageInstruction } from '../../apps/web/src/i18n';
 import { useTodos } from '../../apps/web/src/stores/todos';
 
 class FakeTransport implements CodexTransport {
@@ -186,7 +187,9 @@ test('已连接 Runtime 可直接切换房间工作区，不重启 app-server', 
     { model: 'gpt-test', effort: 'medium', permissionPreset: 'auto' },
   );
   const request = await answerLatest(transport, 'thread/resume', { thread: { id: 'room-thread' } });
-  assert.equal((request.params as Record<string, unknown>).cwd, 'D:/room-workspace');
+  const resumeParams = request.params as Record<string, unknown>;
+  assert.equal(resumeParams.cwd, 'D:/room-workspace');
+  assert.ok(Array.isArray(resumeParams.dynamicTools) && (resumeParams.dynamicTools as unknown[]).length > 0);
   await answerLatest(transport, 'thread/memoryMode/set', {});
   await answerLatest(transport, 'thread/settings/update', {});
   await resuming;
@@ -232,6 +235,21 @@ test('新任务先启用原生 Memory，再更新设置和开始 Turn', async ()
       'acp_list_agents',
       'acp_dispatch_task',
       'acp_session_status',
+      'delegate_specialists',
+      'github_list_prs',
+      'github_list_issues',
+      'github_get_pr_diff',
+      'github_get_issue',
+      'github_create_comment',
+      'browser_inspect_url',
+      'project_policy_check',
+      'read_activity_stream',
+      'read_room_messages',
+      'acp_inspect_session',
+      'acp_steer_session',
+      'watchpoint_manage',
+      'surface_proactive_insight',
+      'skill_evolve',
     ],
   );
 
@@ -301,17 +319,23 @@ test('外部线程可通过原生 fork 继承历史、权限和 Memory 后继续
     '原任务 · RocketX 继续',
   );
   const forkRequest = await answerLatest(transport, 'thread/fork', { thread: { id: 'thread-fork' } });
-  assert.deepEqual(forkRequest.params, {
-    threadId: 'thread-owned-by-codex',
-    model: 'gpt-test',
-    cwd: 'D:/workspace',
-    runtimeWorkspaceRoots: ['D:/workspace'],
-    permissions: ':workspace',
-    approvalPolicy: 'on-request',
-    approvalsReviewer: 'guardian_subagent',
-    excludeTurns: true,
-    config: { features: { memories: true } },
-  });
+  const forkParams = forkRequest.params as Record<string, unknown>;
+  assert.ok(Array.isArray(forkParams.dynamicTools) && (forkParams.dynamicTools as unknown[]).length > 0);
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(forkParams).filter(([key]) => key !== 'dynamicTools')),
+    {
+      threadId: 'thread-owned-by-codex',
+      model: 'gpt-test',
+      cwd: 'D:/workspace',
+      runtimeWorkspaceRoots: ['D:/workspace'],
+      developerInstructions: buildUiLanguageInstruction(),
+      permissions: ':workspace',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'guardian_subagent',
+      excludeTurns: true,
+      config: { features: { memories: true } },
+    },
+  );
   const memoryRequest = await answerLatest(transport, 'thread/memoryMode/set', {});
   assert.deepEqual(memoryRequest.params, { threadId: 'thread-fork', mode: 'enabled' });
   await answerLatest(transport, 'thread/settings/update', {});

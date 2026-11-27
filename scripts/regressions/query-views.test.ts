@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import type { WorkItem } from '../../apps/web/src/stores/workbench';
 import { boardColumns, wbsStats, wbsSummary, workItemRisk } from '../../apps/web/src/lib/queryViews';
 import { updateWorkItemStateRequest } from '../../apps/web/src/lib/adoDirect';
@@ -124,7 +126,9 @@ test('看板卡片暴露排给 AI 动作并阻断默认导航/拖拽（issue #29
 
   assert.match(source, /onAssignToAi\?: \(item: WorkItem\) => void;/);
   assert.match(source, /type="button"/);
-  assert.match(source, /aria-label=\{`排给 AI：工作项 #\$\{w\.id\}`\}/);
+  assert.match(source, /aria-label=\{t\('workbench\.queryViews\.assignToAiAria', \{ id: w\.id \}\)\}/);
+  assert.equal(zhCN['workbench.queryViews.assignToAiAria'], '排给 AI：工作项 #{id}');
+  assert.ok(enUS['workbench.queryViews.assignToAiAria'].length > 0);
   assert.match(source, /e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*onAssignToAi\(w\);/s);
   assert.match(source, /onMouseDown=\{\(e\) => e\.stopPropagation\(\)\}/);
 });

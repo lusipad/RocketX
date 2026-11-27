@@ -1,4 +1,6 @@
 import type { RcTeam, RcTeamMember, RcTeamRoom, RcUser } from '@rcx/rc-client';
+import { t } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 
 /**
  * 团队（Team）的判定与整理逻辑。
@@ -14,7 +16,7 @@ export function sortTeamRooms(rooms: RcTeamRoom[]): {
   others: RcTeamRoom[];
 } {
   const sorted = [...rooms].sort((left, right) =>
-    roomLabel(left).localeCompare(roomLabel(right), 'zh-CN'),
+    compareLocaleText(roomLabel(left), roomLabel(right)),
   );
   const main = sorted.find((room) => room.isDefault);
   return { main, others: sorted.filter((room) => room !== main) };
@@ -49,7 +51,7 @@ export function canManageTeam(
 
 /** 团队类型：0 公开 / 1 私有（与 `teams.create` 的 type 一致） */
 export function teamTypeLabel(type: number | undefined): string {
-  return type === 0 ? '公开团队' : '私有团队';
+  return type === 0 ? t('chat.team.public') : t('chat.team.private');
 }
 
 /**

@@ -8,10 +8,12 @@ import {
   type ReverseMcpConfigStatus,
 } from '../platform/desktopCommands';
 import { toast } from '../stores/toast';
+import { useT } from '../i18n';
 
 type McpStatus = ReverseMcpConfigStatus;
 
 export default function ReverseMcpSettings() {
+  const t = useT();
   const [status, setStatus] = useState<McpStatus>({ enabled: false });
   const [busy, setBusy] = useState(true);
 
@@ -22,7 +24,7 @@ export default function ReverseMcpSettings() {
     }
     readReverseMcpConfig()
       .then(setStatus)
-      .catch((error) => toast.error(error, '读取让外部 AI 工具读你的聊天 状态失败'))
+      .catch((error) => toast.error(error, t('settings.reverseMcp.readFailed')))
       .finally(() => setBusy(false));
   }, []);
 
@@ -44,11 +46,11 @@ export default function ReverseMcpSettings() {
       if (status.enabled) {
         await disableReverseMcp();
         setStatus((current) => ({ ...current, enabled: false, serverUrl: undefined, userId: undefined }));
-        toast.success('已关闭，凭据已从系统里删除');
+        toast.success(t('settings.reverseMcp.disabledToast'));
       } else {
         const auth = loadStoredAuth();
         const serverUrl = getServerBase();
-        if (!auth || !serverUrl) throw new Error('需要先登录桌面端 Rocket.Chat');
+        if (!auth || !serverUrl) throw new Error(t('settings.reverseMcp.loginRequired'));
         await enableReverseMcp({
           serverUrl,
           userId: auth.userId,
@@ -60,10 +62,10 @@ export default function ReverseMcpSettings() {
           serverUrl,
           userId: auth.userId,
         }));
-        toast.success('已开启：外部 AI 工具现在能只读你的聊天；凭据只存在系统凭据库里');
+        toast.success(t('settings.reverseMcp.enabledToast'));
       }
     } catch (error) {
-      toast.error(error, '开关没改成');
+      toast.error(error, t('settings.reverseMcp.toggleFailed'));
     } finally {
       setBusy(false);
     }
@@ -71,7 +73,7 @@ export default function ReverseMcpSettings() {
 
   return (
     <section>
-      <h2 className="mb-2 text-sm font-semibold text-ink">让外部 AI 工具读你的聊天</h2>
+      <h2 className="mb-2 text-sm font-semibold text-ink">{t('settings.reverseMcp.heading')}</h2>
       <div className="rounded-lg bg-surface shadow-raise p-4">
         <div className="flex items-start gap-3">
           <div className="mt-0.5 rounded-md bg-primary-light p-2 text-primary">
@@ -80,9 +82,9 @@ export default function ReverseMcpSettings() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-sm font-medium text-ink">让外部 Agent 读取聊天上下文</div>
+                <div className="text-sm font-medium text-ink">{t('settings.reverseMcp.title')}</div>
                 <div className="mt-1 text-xs leading-5 text-ink-3">
-                  只暴露会话列表、房间历史、话题消息和附件原图四个只读工具；访问范围等同当前 Rocket.Chat 账号。
+                  {t('settings.reverseMcp.description')}
                 </div>
               </div>
               <button
@@ -101,25 +103,25 @@ export default function ReverseMcpSettings() {
                 ) : (
                   <Check size={14} />
                 )}
-                {status.enabled ? '停用' : '启用'}
+                {status.enabled ? t('settings.reverseMcp.disableAction') : t('settings.reverseMcp.enableAction')}
               </button>
             </div>
             {status.enabled && config ? (
               <div className="mt-3">
                 <div className="mb-1 flex items-center justify-between text-xs text-ink-3">
-                  <span>外部 Agent 配置</span>
+                  <span>{t('settings.reverseMcp.configTitle')}</span>
                   <button
                     onClick={() =>
-                      void navigator.clipboard.writeText(config).then(() => toast.success('MCP 配置已复制'))
+                      void navigator.clipboard.writeText(config).then(() => toast.success(t('settings.reverseMcp.configCopied')))
                     }
                     className="flex items-center gap-1 hover:text-primary"
                   >
-                    <Copy size={12} /> 复制
+                    <Copy size={12} /> {t('common.copy')}
                   </button>
                 </div>
                 <pre className="max-h-40 overflow-auto rounded bg-fill-1 p-3 text-xs text-ink-2">{config}</pre>
                 <div className="mt-2 text-xs text-ink-3">
-                  凭据不会出现在这段配置、命令行或环境变量中。
+                  {t('settings.reverseMcp.credentialNote')}
                 </div>
               </div>
             ) : null}

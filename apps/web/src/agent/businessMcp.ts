@@ -1,5 +1,7 @@
+import { t } from '../i18n';
 import type { JsonValue } from './protocol/generated/serde_json/JsonValue';
 import { isTauri } from '../lib/http';
+import { butlerMcpLaunchConfigs, type ButlerMcpLaunchConfig } from '../platform/desktopCommands';
 
 const LAUNCH_CONFIG_DEADLINE_MS = 1_000;
 const SERVER_NAME = 'rocketx_business';
@@ -22,7 +24,7 @@ function isRecord(value: unknown): value is Record<string, JsonValue> {
 
 function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('业务 MCP 本地配置读取超时')), timeoutMs);
+    const timer = setTimeout(() => reject(new Error(t('agent.businessMcp.configTimeout'))), timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -50,7 +52,7 @@ async function nativeLaunchConfig(): Promise<BusinessMcpLaunchConfig | null> {
     || !Array.isArray(value.args)
     || value.args.some((argument) => typeof argument !== 'string')
   ) {
-    throw new Error('业务 MCP 启动配置无效');
+    throw new Error(t('agent.businessMcp.invalidConfig'));
   }
   return value;
 }
@@ -67,6 +69,9 @@ async function nativeCommandInvoker(
 
 let launchConfigProvider: LaunchConfigProvider = nativeLaunchConfig;
 let launchConfigPromise: Promise<BusinessMcpLaunchConfig | null> | null = null;
+let customMcpProvider: () => Promise<ButlerMcpLaunchConfig[]> = async () => (
+  isTauri ? butlerMcpLaunchConfigs().catch(() => []) : []
+);
 let commandInvoker: CommandInvoker = nativeCommandInvoker;
 let credentialGateRequired = isTauri;
 let rocketChatCredentialReady = !credentialGateRequired;
@@ -120,13 +125,46 @@ export function mergeBusinessMcpConfig(
   };
 }
 
+export function mergeCustomMcpConfigs(
+  current: ThreadConfig | null | undefined,
+  customServers: readonly ButlerMcpLaunchConfig[],
+): ThreadConfig {
+  if (!customServers.length) return current ?? {};
+  const currentServers = current?.mcp_servers;
+  if (currentServers !== undefined && !isRecord(currentServers)) {
+    return current ?? {};
+  }
+  const merged: Record<string, JsonValue> = { ...(currentServers ?? {}) };
+  for (const server of customServers) {
+    const key = server.id || server.name;
+    if (!key || key === SERVER_NAME || !server.command.trim()) continue;
+    merged[key] = {
+      command: server.command,
+      args: server.args,
+      ...(Object.keys(server.env).length > 0 ? { env: server.env } : {}),
+    };
+  }
+  return {
+    ...(current ?? {}),
+    mcp_servers: merged,
+  };
+}
+
 export async function businessMcpThreadConfig(
   current?: ThreadConfig | null,
 ): Promise<ThreadConfig | undefined> {
-  if (!credentialsReady()) return current ?? undefined;
-  const launch = await loadLaunchConfig();
-  if (!launch) return current ?? undefined;
-  return mergeBusinessMcpConfig(current, launch);
+  let next: ThreadConfig | undefined = current ?? undefined;
+  if (credentialsReady()) {
+    const launch = await loadLaunchConfig();
+    if (launch) {
+      next = mergeBusinessMcpConfig(next, launch);
+    }
+  }
+  const custom = await withDeadline(customMcpProvider(), LAUNCH_CONFIG_DEADLINE_MS).catch(() => []);
+  if (custom.length > 0) {
+    next = mergeCustomMcpConfigs(next, custom);
+  }
+  return next;
 }
 
 async function invokeBestEffort(command: string, args?: Record<string, unknown>): Promise<boolean> {

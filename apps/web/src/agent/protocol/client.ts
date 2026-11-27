@@ -1,3 +1,5 @@
+import { t } from '../../i18n';
+import type { DynamicToolSpec } from './generated/v2/DynamicToolSpec';
 import type { ExternalAgentConfigImportParams } from './generated/v2/ExternalAgentConfigImportParams';
 import type { ExternalAgentConfigImportResponse } from './generated/v2/ExternalAgentConfigImportResponse';
 import type { AppsListParams } from './generated/v2/AppsListParams';
@@ -146,8 +148,8 @@ interface ClientMethods {
     result: McpServerToolCallResponse;
   };
   'thread/start': { params: ThreadStartParams; result: ThreadStartResponse };
-  'thread/resume': { params: ThreadResumeParams; result: ThreadResumeResponse };
-  'thread/fork': { params: ThreadForkParams; result: ThreadForkResponse };
+  'thread/resume': { params: ThreadResumeParams & { dynamicTools?: Array<DynamicToolSpec> | null }; result: ThreadResumeResponse };
+  'thread/fork': { params: ThreadForkParams & { dynamicTools?: Array<DynamicToolSpec> | null }; result: ThreadForkResponse };
   'thread/settings/update': {
     params: ThreadSettingsUpdateParams;
     result: ThreadSettingsUpdateResponse;
@@ -210,34 +212,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assertClientResponse(method: keyof ClientMethods, value: unknown): void {
   const response = isRecord(value) ? value : null;
-  if (!response) throw new Error(`Codex app-server ${method} 返回了非对象响应。`);
+  if (!response) throw new Error(t('agent.protocol.nonObjectResponse', { method }));
   if (method === 'initialize') {
     if (typeof response.userAgent !== 'string') {
-      throw new Error('Codex app-server initialize 响应缺少 userAgent。');
+      throw new Error(t('agent.protocol.missingField', { method: 'initialize', field: 'userAgent' }));
     }
     return;
   }
   if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
     if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
-      throw new Error(`Codex app-server ${method} 响应缺少 thread.id。`);
+      throw new Error(t('agent.protocol.missingField', { method, field: 'thread.id' }));
     }
     return;
   }
   if (method === 'model/list' || method === 'permissionProfile/list' || method === 'app/list') {
     if (!Array.isArray(response.data)) {
-      throw new Error(`Codex app-server ${method} 响应缺少 data。`);
+      throw new Error(t('agent.protocol.missingField', { method, field: 'data' }));
     }
     return;
   }
   if (method === 'skills/list') {
     if (!Array.isArray(response.data)) {
-      throw new Error('Codex app-server skills/list 响应缺少 data。');
+      throw new Error(t('agent.protocol.missingField', { method: 'skills/list', field: 'data' }));
     }
     return;
   }
   if (method === 'skills/config/write') {
     if (typeof response.effectiveEnabled !== 'boolean') {
-      throw new Error('Codex app-server skills/config/write 响应缺少 effectiveEnabled。');
+      throw new Error(t('agent.protocol.missingField', { method: 'skills/config/write', field: 'effectiveEnabled' }));
     }
     return;
   }
@@ -247,7 +249,7 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
       || typeof response.installedRoot !== 'string'
       || typeof response.alreadyAdded !== 'boolean'
     ) {
-      throw new Error('Codex app-server marketplace/add 返回了无效市场。');
+      throw new Error(t('agent.protocol.invalidMarketplace', { method: 'marketplace/add' }));
     }
     return;
   }
@@ -256,7 +258,7 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
       typeof response.marketplaceName !== 'string'
       || (response.installedRoot !== null && typeof response.installedRoot !== 'string')
     ) {
-      throw new Error('Codex app-server marketplace/remove 返回了无效市场。');
+      throw new Error(t('agent.protocol.invalidMarketplace', { method: 'marketplace/remove' }));
     }
     return;
   }
@@ -266,28 +268,28 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
       || !Array.isArray(response.upgradedRoots)
       || !Array.isArray(response.errors)
     ) {
-      throw new Error('Codex app-server marketplace/upgrade 返回了无效结果。');
+      throw new Error(t('agent.protocol.invalidResult', { method: 'marketplace/upgrade' }));
     }
     return;
   }
   if (method === 'plugin/list' || method === 'plugin/installed') {
     if (!Array.isArray(response.marketplaces) || !Array.isArray(response.marketplaceLoadErrors)) {
-      throw new Error(`Codex app-server ${method} 返回了无效插件市场。`);
+      throw new Error(t('agent.protocol.invalidPluginMarketplace', { method }));
     }
     if (method === 'plugin/list' && !Array.isArray(response.featuredPluginIds)) {
-      throw new Error('Codex app-server plugin/list 响应缺少 featuredPluginIds。');
+      throw new Error(t('agent.protocol.missingField', { method: 'plugin/list', field: 'featuredPluginIds' }));
     }
     return;
   }
   if (method === 'plugin/read') {
     if (!isRecord(response.plugin)) {
-      throw new Error('Codex app-server plugin/read 响应缺少 plugin。');
+      throw new Error(t('agent.protocol.missingField', { method: 'plugin/read', field: 'plugin' }));
     }
     return;
   }
   if (method === 'plugin/skill/read') {
     if (response.contents !== null && typeof response.contents !== 'string') {
-      throw new Error('Codex app-server plugin/skill/read 返回了无效 Skill 正文。');
+      throw new Error(t('agent.protocol.invalidSkillBody'));
     }
     return;
   }
@@ -296,58 +298,58 @@ function assertClientResponse(method: keyof ClientMethods, value: unknown): void
       (response.authPolicy !== 'ON_INSTALL' && response.authPolicy !== 'ON_USE')
       || !Array.isArray(response.appsNeedingAuth)
     ) {
-      throw new Error('Codex app-server plugin/install 返回了无效安装结果。');
+      throw new Error(t('agent.protocol.invalidInstallResult'));
     }
     return;
   }
   if (method === 'mcpServerStatus/list') {
     if (!Array.isArray(response.data)) {
-      throw new Error('Codex app-server mcpServerStatus/list 响应缺少 data。');
+      throw new Error(t('agent.protocol.missingField', { method: 'mcpServerStatus/list', field: 'data' }));
     }
     return;
   }
   if (method === 'mcpServer/tool/call') {
     if (!Array.isArray(response.content)) {
-      throw new Error('Codex app-server mcpServer/tool/call 响应缺少 content。');
+      throw new Error(t('agent.protocol.missingField', { method: 'mcpServer/tool/call', field: 'content' }));
     }
     return;
   }
   if (method === 'thread/goal/set') {
     if (!isRecord(response.goal) || typeof response.goal.threadId !== 'string') {
-      throw new Error('Codex app-server thread/goal/set 响应缺少 goal。');
+      throw new Error(t('agent.protocol.missingField', { method: 'thread/goal/set', field: 'goal' }));
     }
     return;
   }
   if (method === 'thread/goal/get') {
     if (response.goal !== null && (!isRecord(response.goal) || typeof response.goal.threadId !== 'string')) {
-      throw new Error('Codex app-server thread/goal/get 返回了无效 goal。');
+      throw new Error(t('agent.protocol.invalidGoal'));
     }
     return;
   }
   if (method === 'thread/goal/clear') {
     if (typeof response.cleared !== 'boolean') {
-      throw new Error('Codex app-server thread/goal/clear 响应缺少 cleared。');
+      throw new Error(t('agent.protocol.missingField', { method: 'thread/goal/clear', field: 'cleared' }));
     }
     return;
   }
   if (method === 'thread/list' || method === 'thread/turns/list') {
     if (!Array.isArray(response.data)) {
-      throw new Error(`Codex app-server ${method} 响应缺少 data。`);
+      throw new Error(t('agent.protocol.missingField', { method, field: 'data' }));
     }
     return;
   }
   if (method === 'thread/read') {
     if (!isRecord(response.thread) || typeof response.thread.id !== 'string') {
-      throw new Error('Codex app-server thread/read 响应缺少 thread.id。');
+      throw new Error(t('agent.protocol.missingField', { method: 'thread/read', field: 'thread.id' }));
     }
     return;
   }
   if (method === 'turn/start' && (!isRecord(response.turn) || typeof response.turn.id !== 'string')) {
-    throw new Error('Codex app-server turn/start 响应缺少 turn.id。');
+    throw new Error(t('agent.protocol.missingField', { method: 'turn/start', field: 'turn.id' }));
     return;
   }
   if (method === 'turn/steer' && typeof response.turnId !== 'string') {
-    throw new Error('Codex app-server turn/steer 响应缺少 turnId。');
+    throw new Error(t('agent.protocol.missingField', { method: 'turn/steer', field: 'turnId' }));
   }
 }
 
@@ -375,11 +377,14 @@ export class AppServerClient {
         if (generation === this.generation) this.receiveLine(line);
       },
       onExit: (code, reason) => {
-        if (generation === this.generation) this.interrupt(new Error(reason || `Codex app-server 已退出${code === null ? '' : `（${code}）`}`));
+        if (generation === this.generation) {
+          const codePart = code === null ? '' : t('agent.protocol.exitedCodePart', { code });
+          this.interrupt(new Error(reason || t('agent.protocol.exited', { codePart })));
+        }
       },
     });
     try {
-      if (generation !== this.generation) throw new Error('Codex app-server 已停止');
+      if (generation !== this.generation) throw new Error(t('agent.protocol.stopped'));
       const initialized = await this.request('initialize', {
         clientInfo: { name: 'rocketx', title: 'RocketX', version: '0.23.0' },
         capabilities: {
@@ -391,7 +396,7 @@ export class AppServerClient {
       });
       assertCodexHandshake(initialized.userAgent, process.version);
       await this.transport.write({ method: 'initialized' });
-      if (generation !== this.generation) throw new Error('Codex app-server 已停止');
+      if (generation !== this.generation) throw new Error(t('agent.protocol.stopped'));
       this.currentProcess = process;
       this.started = true;
       return process;
@@ -411,7 +416,7 @@ export class AppServerClient {
     return new Promise<ClientMethods[M]['result']>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Codex app-server 请求超时：${method}`));
+        reject(new Error(t('agent.protocol.timeout', { method })));
       }, timeoutMs);
       this.pending.set(id, {
         method,
@@ -438,7 +443,7 @@ export class AppServerClient {
     this.generation += 1;
     this.started = false;
     this.currentProcess = undefined;
-    this.rejectPending(new Error('Codex app-server 已停止'));
+    this.rejectPending(new Error(t('agent.protocol.stopped')));
     await this.transport.stop();
   }
 
@@ -447,11 +452,11 @@ export class AppServerClient {
     try {
       message = JSON.parse(line) as unknown;
     } catch {
-      this.interrupt(new Error('Codex app-server 返回了无效 JSON'));
+      this.interrupt(new Error(t('agent.protocol.invalidJson')));
       return;
     }
     if (!isRecord(message)) {
-      this.interrupt(new Error('Codex app-server 返回了非对象消息'));
+      this.interrupt(new Error(t('agent.protocol.nonObjectMessage')));
       return;
     }
     if ('id' in message && !('method' in message)) {
@@ -460,7 +465,7 @@ export class AppServerClient {
     }
     const method = typeof message.method === 'string' ? message.method : null;
     if (!method) {
-      this.interrupt(new Error('Codex app-server 返回了缺少 method 的消息'));
+      this.interrupt(new Error(t('agent.protocol.missingMethod')));
       return;
     }
     if ('id' in message) {
@@ -479,12 +484,15 @@ export class AppServerClient {
     this.pending.delete(response.id);
     if (response.error) {
       if (response.error.code === -32601) {
-        pending.reject(new Error(`Codex app-server 不支持 RocketX 所需方法：${pending.method}。`));
+        pending.reject(new Error(t('agent.protocol.unsupportedMethod', { method: pending.method })));
         return;
       }
       pending.reject(
         new Error(
-          `Codex app-server 请求失败${response.error.code === undefined ? '' : ` ${response.error.code}`}：${response.error.message ?? '未知错误'}`,
+          t('agent.protocol.requestFailed', {
+            codePart: response.error.code === undefined ? '' : ` ${response.error.code}`,
+            message: response.error.message ?? t('common.unknownError'),
+          }),
         ),
       );
     } else {

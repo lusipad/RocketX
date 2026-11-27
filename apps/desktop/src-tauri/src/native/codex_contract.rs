@@ -15,6 +15,11 @@ pub(crate) const CODEX_MINIMUM_CANDIDATE: &str = "0.140.0";
 pub(crate) const CODEX_PROTOCOL_BASELINE: &str = "0.144.4";
 pub(crate) const CODEX_VERIFIED_VERSIONS: &[&str] = &[CODEX_PROTOCOL_BASELINE];
 
+pub(crate) fn is_supported_codex_version(version: &str) -> bool {
+    crate::native::codex::parse_semantic_version(version.trim())
+        .is_some_and(|parsed| parsed >= (0, 144, 4))
+}
+
 #[derive(Default)]
 pub struct CodexRuntimeConfig {
     pub(crate) manual_path: Mutex<Option<PathBuf>>,
@@ -116,4 +121,22 @@ pub struct CodexProcessInfo {
     pub(crate) runtime_workspace_root: String,
     pub(crate) runtime_source: CodexRuntimeSource,
     pub(crate) managed_skill_roots: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_supported_codex_version, CODEX_PROTOCOL_BASELINE, CODEX_VERIFIED_VERSIONS};
+
+    #[test]
+    fn accepts_codex_versions_at_or_above_protocol_baseline() {
+        assert_eq!(CODEX_VERIFIED_VERSIONS, &[CODEX_PROTOCOL_BASELINE]);
+        assert!(is_supported_codex_version("0.144.4"));
+        assert!(is_supported_codex_version("0.144.5"));
+        assert!(is_supported_codex_version("0.165.0"));
+        assert!(is_supported_codex_version("0.200.1-alpha.2"));
+        assert!(is_supported_codex_version("1.0.0"));
+        assert!(!is_supported_codex_version("0.144.3"));
+        assert!(!is_supported_codex_version("0.140.0"));
+        assert!(!is_supported_codex_version("invalid"));
+    }
 }

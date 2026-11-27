@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '../i18n';
 import type { LocalAgentEnvironment } from '../stores/agentEnvironments';
 import Dialog from './Dialog';
 
@@ -26,7 +27,8 @@ export default function ButlerProjectConfigDialog({
   onClose: () => void;
   onSave: (patch: ButlerProjectConfigPatch) => void;
 }) {
-  const [name, setName] = useState(environment?.name ?? path.split(/[\\/]/).filter(Boolean).at(-1) ?? '本地环境');
+  const t = useT();
+  const [name, setName] = useState(environment?.name ?? path.split(/[\\/]/).filter(Boolean).at(-1) ?? t('butler.projectConfig.defaultName'));
   const [enabled, setEnabled] = useState(environment?.enabled ?? true);
   const [adoProjects, setAdoProjects] = useState(environment?.adoProjects.join(', ') ?? '');
   const [defaultBaseBranch, setDefaultBaseBranch] = useState(environment?.defaultBaseBranch ?? 'main');
@@ -34,10 +36,10 @@ export default function ButlerProjectConfigDialog({
 
   return (
     <Dialog
-      title="项目配置"
+      title={t('butler.projectConfig.title')}
       hint={environment
-        ? '这里只维护 AI 托管项目的元数据，不会改动磁盘目录或现有会话。'
-        : '保存后会为这个目录创建默认项目配置，后续 AI 托管和工作项讨论都复用它。'}
+        ? t('butler.projectConfig.hintExisting')
+        : t('butler.projectConfig.hintNew')}
       width={520}
       onClose={onClose}
       footer={(
@@ -47,7 +49,7 @@ export default function ButlerProjectConfigDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -60,21 +62,21 @@ export default function ButlerProjectConfigDialog({
             })}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white"
           >
-            保存
+            {t('common.save')}
           </button>
         </>
       )}
     >
       <div className="space-y-4 px-5 pb-4 pt-2">
         <div className="rounded-lg bg-fill-1 px-3 py-2">
-          <div className="text-xs text-ink-3">目录</div>
+          <div className="text-xs text-ink-3">{t('butler.projectConfig.directory')}</div>
           <div className="mt-1 break-all text-sm text-ink">{path}</div>
         </div>
         <div className="flex items-end gap-3">
           <label className="min-w-0 flex-1 text-xs text-ink-3">
-            项目名称
+            {t('butler.projectConfig.name')}
             <input
-              aria-label="项目名称"
+              aria-label={t('butler.projectConfig.name')}
               value={name}
               onChange={(event) => setName(event.target.value)}
               className={`mt-1 ${inputCls}`}
@@ -87,14 +89,14 @@ export default function ButlerProjectConfigDialog({
               disabled={busy}
               onChange={(event) => setEnabled(event.target.checked)}
             />
-            启用
+            {t('butler.projectConfig.enabled')}
           </label>
         </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <label className="text-xs text-ink-3 sm:col-span-1">
-            ADO 项目
+            {t('butler.projectConfig.adoProjects')}
             <input
-              aria-label="ADO 项目"
+              aria-label={t('butler.projectConfig.adoProjects')}
               value={adoProjects}
               onChange={(event) => setAdoProjects(event.target.value)}
               placeholder="RocketChatX"
@@ -102,9 +104,9 @@ export default function ButlerProjectConfigDialog({
             />
           </label>
           <label className="text-xs text-ink-3">
-            基础分支
+            {t('butler.projectConfig.baseBranch')}
             <input
-              aria-label="基础分支"
+              aria-label={t('butler.projectConfig.baseBranch')}
               value={defaultBaseBranch}
               onChange={(event) => setDefaultBaseBranch(event.target.value)}
               placeholder="main"
@@ -112,9 +114,9 @@ export default function ButlerProjectConfigDialog({
             />
           </label>
           <label className="text-xs text-ink-3">
-            任务分支前缀
+            {t('butler.projectConfig.branchPrefix')}
             <input
-              aria-label="任务分支前缀"
+              aria-label={t('butler.projectConfig.branchPrefix')}
               value={branchPrefix}
               onChange={(event) => setBranchPrefix(event.target.value)}
               placeholder="ai/"
@@ -122,7 +124,7 @@ export default function ButlerProjectConfigDialog({
             />
           </label>
         </div>
-        {busy ? <div className="text-xs text-warning">当前有活动讨论占用这个项目，不能停用或删除。</div> : null}
+        {busy ? <div className="text-xs text-warning">{t('butler.projectConfig.busyWarning')}</div> : null}
       </div>
     </Dialog>
   );

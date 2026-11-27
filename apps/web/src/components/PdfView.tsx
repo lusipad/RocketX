@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { useT } from '../i18n';
 
 /**
  * PDF 渲染。
@@ -13,6 +14,7 @@ import { Loader2 } from 'lucide-react';
 const MAX_PAGES = 50;
 
 export default function PdfView({ data }: { data: ArrayBuffer }) {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const [pages, setPages] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +103,7 @@ export default function PdfView({ data }: { data: ArrayBuffer }) {
   if (error) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <div className="text-sm text-danger">PDF 解析失败</div>
+        <div className="text-sm text-danger">{t('chat.pdf.parseFailed')}</div>
         <div className="max-w-md text-xs break-words text-ink-3">{error}</div>
       </div>
     );
@@ -112,13 +114,13 @@ export default function PdfView({ data }: { data: ArrayBuffer }) {
       {loading && (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-ink-3">
           <Loader2 size={16} className="animate-spin" />
-          解析 PDF…
+          {t('chat.pdf.parsing')}
         </div>
       )}
       <div ref={containerRef} className="flex-1 overflow-auto bg-fill-2 p-4" />
       {pages > MAX_PAGES && (
         <div className="shrink-0 border-t border-line py-2 text-center text-xs text-ink-3">
-          共 {pages} 页，只渲染了前 {MAX_PAGES} 页，完整内容请下载查看
+          {t('chat.pdf.truncatedNotice', { total: pages, max: MAX_PAGES })}
         </div>
       )}
     </div>

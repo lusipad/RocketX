@@ -14,6 +14,8 @@ import { normalizeDiscussionName, useChat } from '../stores/chat';
 import { toast } from '../stores/toast';
 import type { WorkItem } from '../stores/workbench';
 import Dialog from './Dialog';
+import { useI18n } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 
 const inputCls =
   'h-9 w-full rounded-md border border-line bg-surface px-3 text-sm outline-none transition focus:border-primary';
@@ -39,6 +41,7 @@ export default function CreateWorkItemDiscussionDialog({
   item: WorkItem;
   onClose: () => void;
 }) {
+  const { t, locale } = useI18n();
   const rooms = useChat((state) => state.rooms);
   const subscriptions = useChat((state) => state.subscriptions);
   const activeRid = useChat((state) => state.activeRid);
@@ -52,8 +55,8 @@ export default function CreateWorkItemDiscussionDialog({
     // 所以父房间候选必须排除讨论本身（`prid` 非空）。
     () => Object.values(rooms)
       .filter((room) => (room.t === 'c' || room.t === 'p') && !room.prid && !!subscriptions[room._id])
-      .sort((left, right) => roomLabel(left, left._id).localeCompare(roomLabel(right, right._id), 'zh-CN')),
-    [rooms, subscriptions],
+      .sort((left, right) => compareLocaleText(roomLabel(left, left._id), roomLabel(right, right._id))),
+    [rooms, subscriptions, locale],
   );
   const defaultParent = parentRooms.some((room) => room._id === activeRid) ? activeRid! : parentRooms[0]?._id ?? '';
   const defaultEnvironment = selectEnvironmentForProject(
@@ -82,9 +85,9 @@ export default function CreateWorkItemDiscussionDialog({
 
   const create = async () => {
     const environment = environments.find((candidate) => candidate.id === environmentId);
-    if (!parentRid) throw new Error('请选择所属工作群');
-    if (!environment) throw new Error('请选择空闲的本地环境');
-    if (environmentIsBusy(environment.id, bindings)) throw new Error('所选本地环境已被其他活动讨论占用');
+    if (!parentRid) throw new Error(t('chat.wiDiscussion.selectParentError'));
+    if (!environment) throw new Error(t('chat.wiDiscussion.selectEnvError'));
+    if (environmentIsBusy(environment.id, bindings)) throw new Error(t('chat.wiDiscussion.envBusyError'));
     setBusy(true);
     let discussionRid = '';
     try {
@@ -103,13 +106,14 @@ export default function CreateWorkItemDiscussionDialog({
         environmentId: environment.id,
       });
       const branch = proposedAgentBranch(environment.branchPrefix, item.id, item.title);
+      const assignee = item.assignedTo ? t('chat.wiDiscussion.summaryAssignee', { name: item.assignedTo }) : '';
       const summary = [
-        `🤖 **工作项讨论已建立：[#${item.id} ${item.title}](${item.webUrl})**`,
-        `ADO：${item.project} · ${item.state}${item.assignedTo ? ` · 负责人 ${item.assignedTo}` : ''}`,
-        `本地项目：${environment.name} · 默认只读`,
-        `计划分支：\`${branch}\`（首次获准修改时由 AI 创建）`,
+        t('chat.wiDiscussion.summaryHeader', { id: item.id, title: item.title, url: item.webUrl }),
+        t('chat.wiDiscussion.summaryAdo', { project: item.project, state: item.state, assignee }),
+        t('chat.wiDiscussion.summaryProject', { name: environment.name }),
+        t('chat.wiDiscussion.summaryBranch', { branch }),
         '',
-        '房间成员使用 `@ai` 提问；本地目录、命令和审批只在代码宿主的 RocketChat X 中显示。',
+        t('chat.wiDiscussion.summaryFooter'),
       ].join('\n');
       await rest.sendMessage(room._id, summary);
 
@@ -117,8 +121,8 @@ export default function CreateWorkItemDiscussionDialog({
         const base = getServerBase().replace(/\/+$/, '');
         const route = room.t === 'c' ? 'channel' : 'group';
         const href = `${base}/${route}/${encodeURIComponent(room.name ?? room._id)}`;
-        await commentWorkItem(item.id, `RocketX 已创建工作项讨论：<a href="${escapeHtml(href)}">${escapeHtml(resolvedName)}</a>`)
-          .catch((error) => toast.error(error, '讨论已创建，但写回 ADO 失败'));
+        await commentWorkItem(item.id, t('chat.wiDiscussion.adoComment', { href: escapeHtml(href), name: escapeHtml(resolvedName) }))
+          .catch((error) => toast.error(error, t('chat.wiDiscussion.writeBackFailed')));
       }
 
       await useChat.getState().openRoom(room._id);
@@ -136,13 +140,13 @@ export default function CreateWorkItemDiscussionDialog({
           });
           useChat.getState().setPanel({ kind: 'agent', tmid: sessionKey });
         } catch (error) {
-          toast.error(error, '讨论已创建并绑定环境，但本地 Agent 启动失败');
+          toast.error(error, t('chat.wiDiscussion.agentStartFailed'));
         }
       }
-      toast.success(`已创建讨论「${resolvedName}」`);
+      toast.success(t('chat.discussion.created', { name: resolvedName }));
       onClose();
     } catch (error) {
-      toast.error(error, discussionRid ? '讨论已创建，但绑定本地环境失败' : '创建工作项讨论失败');
+      toast.error(error, discussionRid ? t('chat.wiDiscussion.bindEnvFailed') : t('chat.wiDiscussion.createFailed'));
     } finally {
       setBusy(false);
     }
@@ -151,14 +155,14 @@ export default function CreateWorkItemDiscussionDialog({
   if (existing) {
     return (
       <Dialog
-        title={`工作项 #${item.id} 已有讨论`}
-        hint="同一工作项默认只保留一个活动讨论，避免上下文和执行结果分散。"
+        title={t('chat.wiDiscussion.existingTitle', { id: item.id })}
+        hint={t('chat.wiDiscussion.existingHint')}
         onClose={onClose}
         footer={
           <>
-            <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2">取消</button>
+            <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2">{t('common.cancel')}</button>
             <button onClick={() => void openExisting()} className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-sm text-white">
-              <ExternalLink size={14} /> 进入已有讨论
+              <ExternalLink size={14} /> {t('chat.wiDiscussion.openExisting')}
             </button>
           </>
         }
@@ -170,43 +174,43 @@ export default function CreateWorkItemDiscussionDialog({
 
   return (
     <Dialog
-      title={`为 #${item.id} 创建讨论`}
-      hint="创建 Rocket.Chat 原生 Discussion，并在本机绑定一个独占的共享 Agent 环境。"
+      title={t('chat.wiDiscussion.createTitle', { id: item.id })}
+      hint={t('chat.wiDiscussion.createHint')}
       width={520}
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose} disabled={busy} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 disabled:opacity-50">取消</button>
+          <button onClick={onClose} disabled={busy} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 disabled:opacity-50">{t('common.cancel')}</button>
           <button
             onClick={() => void create()}
             disabled={busy || !parentRid || !environmentId}
             className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-sm text-white disabled:opacity-50"
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <MessageSquarePlus size={14} />}
-            {busy ? '创建中…' : '创建讨论'}
+            {busy ? t('chat.common.creating') : t('chat.discussion.createTitle')}
           </button>
         </>
       }
     >
       <div className="space-y-4 px-5 pb-3 pt-2">
         <label className="block text-xs text-ink-3">
-          讨论名称
+          {t('chat.discussion.nameLabel')}
           <input value={discussionName} onChange={(event) => setDiscussionName(event.target.value)} maxLength={100} className={`mt-1 ${inputCls}`} />
         </label>
         <label className="block text-xs text-ink-3">
-          所属工作群
+          {t('chat.wiDiscussion.parentGroupLabel')}
           <select value={parentRid} onChange={(event) => setParentRid(event.target.value)} className={`mt-1 ${inputCls}`}>
             {parentRooms.map((room) => <option key={room._id} value={room._id}>{roomLabel(room, room._id)}</option>)}
           </select>
-          {parentRooms.length === 0 ? <span className="mt-1 block text-danger">当前没有可创建讨论的频道或群组</span> : null}
+          {parentRooms.length === 0 ? <span className="mt-1 block text-danger">{t('chat.discussion.noParentRoomsError')}</span> : null}
         </label>
         <label className="block text-xs text-ink-3">
-          本地环境
+          {t('chat.wiDiscussion.localEnvLabel')}
           <select value={environmentId} onChange={(event) => setEnvironmentId(event.target.value)} className={`mt-1 ${inputCls}`}>
-            <option value="">选择空闲环境</option>
+            <option value="">{t('chat.wiDiscussion.selectIdleEnv')}</option>
             {environments.filter((environment) => environment.enabled).map((environment) => {
               const busyEnvironment = environmentIsBusy(environment.id, bindings);
-              return <option key={environment.id} value={environment.id} disabled={busyEnvironment}>{environment.name}{busyEnvironment ? '（使用中）' : ''}</option>;
+              return <option key={environment.id} value={environment.id} disabled={busyEnvironment}>{environment.name}{busyEnvironment ? t('chat.wiDiscussion.envInUseSuffix') : ''}</option>;
             })}
           </select>
           {environmentId ? (
@@ -214,15 +218,15 @@ export default function CreateWorkItemDiscussionDialog({
               <FolderOpen size={12} /> {environments.find((environment) => environment.id === environmentId)?.path}
             </span>
           ) : null}
-          {environments.length === 0 ? <span className="mt-1 block text-danger">请先到“管家 → 托管项目”添加专用工作项目</span> : null}
+          {environments.length === 0 ? <span className="mt-1 block text-danger">{t('chat.wiDiscussion.noEnvsHint')}</span> : null}
         </label>
         <label className="flex items-start gap-2 text-xs text-ink-2">
           <input type="checkbox" checked={startAgent} onChange={(event) => setStartAgent(event.target.checked)} className="mt-0.5" />
-          <span><span className="flex items-center gap-1 font-medium text-ink"><Bot size={12} /> 创建后启动本机 Agent</span>其他成员可以在原版 Rocket.Chat 中使用 @ai，写入仍由本机审批。</span>
+          <span><span className="flex items-center gap-1 font-medium text-ink"><Bot size={12} /> {t('chat.wiDiscussion.startAgentTitle')}</span>{t('chat.wiDiscussion.startAgentDesc')}</span>
         </label>
         <label className="flex items-start gap-2 text-xs text-ink-2">
           <input type="checkbox" checked={writeBack} onChange={(event) => setWriteBack(event.target.checked)} className="mt-0.5" />
-          <span><span className="font-medium text-ink">将讨论链接写回 ADO 工作项</span><br />只写一条可追溯链接，不同步本地路径。</span>
+          <span><span className="font-medium text-ink">{t('chat.wiDiscussion.writeBackTitle')}</span><br />{t('chat.wiDiscussion.writeBackDesc')}</span>
         </label>
       </div>
     </Dialog>

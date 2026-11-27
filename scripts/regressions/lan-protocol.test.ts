@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   encodeLanDeviceKey,
   isLanControlMessage,
@@ -109,7 +111,12 @@ test('P2P 只从输入区显式触发，并在点击时执行握手（issue #368
   assert.match(chat, /if \(!\(await probeLanPeer\(recipient\)\)\)/);
   const sendP2p = chat.slice(chat.indexOf('sendP2pFiles:'), chat.indexOf('prepareP2p:'));
   assert.doesNotMatch(sendP2p, /probeLanPeer\(/);
-  assert.match(readFileSync('apps/web/src/components/Composer.tsx', 'utf8'), /P2P 局域网直传/);
+  assert.match(
+    readFileSync('apps/web/src/components/Composer.tsx', 'utf8'),
+    /aria-label=\{t\('chat\.composer\.p2pBtn'\)\}/,
+  );
+  assert.equal(zhCN['chat.composer.p2pBtn'], 'P2P 局域网直传');
+  assert.ok(enUS['chat.composer.p2pBtn'].length > 0);
   assert.doesNotMatch(area, /confirmedLanUsers/);
 });
 

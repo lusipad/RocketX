@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { useTodos } from '../../apps/web/src/stores/todos';
 import { searchWork } from '../../apps/web/src/lib/workSearch';
 
@@ -77,8 +79,10 @@ test('待办说明和来源消息会把网址渲染成可点击链接（issue #1
   const page = readFileSync('apps/web/src/pages/TodosPage.tsx', 'utf8');
   const markdown = readFileSync('apps/web/src/lib/markdown.tsx', 'utf8');
 
-  assert.match(page, /<LinkifiedText text=\{todo\.note \|\| todo\.excerpt \|\| todo\.title \|\| '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
-  assert.match(page, /<LinkifiedText text=\{todo\.excerpt \?\? '（无文字内容）'\} renderPlain=\{emojify\} \/>/);
+  assert.match(page, /<LinkifiedText text=\{todo\.note \|\| todo\.excerpt \|\| todo\.title \|\| t\('pages\.todos\.emptyContent'\)\} renderPlain=\{emojify\} \/>/);
+  assert.match(page, /<LinkifiedText text=\{todo\.excerpt \?\? t\('pages\.todos\.emptyContent'\)\} renderPlain=\{emojify\} \/>/);
+  assert.equal(zhCN['pages.todos.emptyContent'], '（无文字内容）');
+  assert.ok(enUS['pages.todos.emptyContent'].length > 0);
   assert.match(markdown, /renderPlain\?: \(text: string\) => ReactNode/);
   assert.match(markdown, /target="_blank"/);
   assert.match(markdown, /rel="noreferrer"/);

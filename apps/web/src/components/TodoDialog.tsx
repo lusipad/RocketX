@@ -1,15 +1,16 @@
 import { useState } from 'react';
 import { CalendarDays } from 'lucide-react';
+import { useT, type MessageKey } from '../i18n';
 import { todayKey, useTodos, type Todo } from '../stores/todos';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import Dialog from './Dialog';
 
 /** 快捷截止日期：相对今天的天数 */
-const QUICK: { label: string; days: number }[] = [
-  { label: '今天', days: 0 },
-  { label: '明天', days: 1 },
-  { label: '本周内', days: 7 },
+const QUICK: { labelKey: MessageKey; days: number }[] = [
+  { labelKey: 'pages.todoDialog.quickToday', days: 0 },
+  { labelKey: 'pages.todoDialog.quickTomorrow', days: 1 },
+  { labelKey: 'pages.todoDialog.quickThisWeek', days: 7 },
 ];
 
 function shift(days: number): string {
@@ -38,6 +39,7 @@ export default function TodoDialog({
   initialDue?: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const add = useTodos((s) => s.add);
   const update = useTodos((s) => s.update);
   const setModule = useUI((s) => s.setModule);
@@ -68,7 +70,7 @@ export default function TodoDialog({
         committedTo: nextCommittedTo,
         waitingFor: nextWaitingFor,
       });
-      toast.success('待办已更新');
+      toast.success(t('pages.todoDialog.updated'));
     } else if (source) {
       add({
         ...source,
@@ -77,7 +79,7 @@ export default function TodoDialog({
         committedTo: nextCommittedTo,
         waitingFor: nextWaitingFor,
       });
-      toast.success('已加入待办', { label: '查看', onClick: () => setModule('todos') });
+      toast.success(t('pages.todoDialog.added'), { label: t('pages.todoDialog.viewAction'), onClick: () => setModule('todos') });
     } else {
       add({
         note: note.trim(),
@@ -85,16 +87,16 @@ export default function TodoDialog({
         committedTo: nextCommittedTo,
         waitingFor: nextWaitingFor,
       });
-      toast.success('已加入待办');
+      toast.success(t('pages.todoDialog.added'));
     }
     onClose();
   };
 
   return (
     <Dialog
-      title={existing ? '编辑待办' : manualCreate ? '新建待办' : '标记为待办'}
+      title={t(existing ? 'pages.todoDialog.titleEdit' : manualCreate ? 'pages.todoDialog.titleNew' : 'pages.todoDialog.titleMark')}
       hint={
-        manualCreate ? '待办保存在本机。' : '待办保存在本机，点开可以跳回原消息。'
+        t(manualCreate ? 'pages.todoDialog.hintManual' : 'pages.todoDialog.hintFromMessage')
       }
       onClose={onClose}
       footer={
@@ -103,14 +105,14 @@ export default function TodoDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={submit}
             disabled={!canSubmit}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {existing ? '保存' : '加入待办'}
+            {existing ? t('common.save') : t('pages.todoDialog.addSubmit')}
           </button>
         </>
       }
@@ -123,48 +125,48 @@ export default function TodoDialog({
               {roomName} · {author}
             </div>
             <div className="mt-0.5 line-clamp-3 text-sm break-words text-ink-2">
-              {excerpt || '（无文字内容）'}
+              {excerpt || t('pages.todos.emptyContent')}
             </div>
           </div>
         )}
 
         <div>
           <label className="mb-1 block text-xs text-ink-3">
-            {noteRequired ? '要做什么' : '补充说明（可选）'}
+            {t(noteRequired ? 'pages.todoDialog.noteLabelRequired' : 'pages.todoDialog.noteLabelOptional')}
           </label>
           <textarea
             autoFocus
             value={note}
             onChange={(e) => setNote(e.target.value)}
             rows={2}
-            placeholder="要做什么？例如「周五前给出排期」"
+            placeholder={t('pages.todoDialog.notePlaceholder')}
             className="w-full resize-none rounded-md border border-line px-2.5 py-1.5 text-sm outline-none transition focus:border-primary"
           />
         </div>
 
         <div className="grid gap-3 md:grid-cols-2">
           <div>
-            <label className="mb-1 block text-xs text-ink-3">我答应给谁（可选）</label>
+            <label className="mb-1 block text-xs text-ink-3">{t('pages.todoDialog.committedToLabel')}</label>
             <input
               value={committedTo}
               onChange={(e) => {
                 setCommittedTo(e.target.value);
                 if (e.target.value.trim()) setWaitingFor('');
               }}
-              placeholder="例如：张三"
+              placeholder={t('pages.todoDialog.committedToPlaceholder')}
               className="h-8 w-full rounded-md border border-line px-2.5 text-sm outline-none transition focus:border-primary"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-ink-3">我在等谁（可选）</label>
+            <label className="mb-1 block text-xs text-ink-3">{t('pages.todoDialog.waitingForLabel')}</label>
             <input
               value={waitingFor}
               onChange={(e) => {
                 setWaitingFor(e.target.value);
                 if (e.target.value.trim()) setCommittedTo('');
               }}
-              placeholder="例如：李四"
+              placeholder={t('pages.todoDialog.waitingForPlaceholder')}
               className="h-8 w-full rounded-md border border-line px-2.5 text-sm outline-none transition focus:border-primary"
             />
           </div>
@@ -173,7 +175,7 @@ export default function TodoDialog({
         <div>
           <label className="mb-1 flex items-center gap-1 text-xs text-ink-3">
             <CalendarDays size={12} />
-            截止日期（可选）
+            {t('pages.todoDialog.dueDateLabel')}
           </label>
           <div className="flex items-center gap-1.5">
             <input
@@ -185,7 +187,7 @@ export default function TodoDialog({
             />
             {QUICK.map((q) => (
               <button
-                key={q.label}
+                key={q.labelKey}
                 onClick={() => setDue(shift(q.days))}
                 className={`h-8 rounded-md border px-2.5 text-xs transition ${
                   due === shift(q.days)
@@ -193,7 +195,7 @@ export default function TodoDialog({
                     : 'border-line text-ink-2 hover:bg-fill-hover'
                 }`}
               >
-                {q.label}
+                {t(q.labelKey)}
               </button>
             ))}
             {due && (
@@ -201,7 +203,7 @@ export default function TodoDialog({
                 onClick={() => setDue('')}
                 className="h-8 px-1.5 text-xs text-ink-3 hover:text-danger"
               >
-                清除
+                {t('pages.todoDialog.clearDue')}
               </button>
             )}
           </div>

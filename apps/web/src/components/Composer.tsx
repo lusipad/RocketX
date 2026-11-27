@@ -50,7 +50,9 @@ import {
 import { matchSharedAiMention, resolveSharedAiMentionTarget } from '../lib/aiMention';
 import { runtimeFeatures } from '../lib/runtimeMode';
 import { useSharedAgent } from '../stores/sharedAgent';
+import { useRoomAiParticipants } from '../stores/roomAiParticipants';
 import { loadUserSearchRoster } from '../lib/userSearch';
+import { useT } from '../i18n';
 
 // 现代 Chromium（含 Tauri 的 WebView2）用 CSS field-sizing 原生自适应高度，
 // 就不必每次输入用 JS 重置 height='auto' 再量——那个每键强制回流在中文输入法
@@ -73,6 +75,7 @@ type MentionCandidate = {
 };
 
 export default function Composer() {
+  const t = useT();
   const activeRid = useChat((s) => s.activeRid);
   const myId = useAuth((s) => s.user?._id);
   const roomType = useChat((s) => (s.activeRid ? s.subscriptions[s.activeRid]?.t : undefined));
@@ -80,6 +83,11 @@ export default function Composer() {
   const sharedAiStatus = useSharedAgent((s) => {
     if (!activeRid || !runtimeFeatures().sharedAgent) return null;
     return resolveSharedAiMentionTarget(activeRid, undefined, s.sessions, s.remoteCards)?.status ?? null;
+  });
+  const roomAiParticipant = useRoomAiParticipants((s) => {
+    if (!activeRid) return undefined;
+    const entry = s.participants[activeRid];
+    return entry?.enabled ? entry : undefined;
   });
   const send = useChat((s) => s.send);
   const loadMembers = useChat((s) => s.loadMembers);
@@ -101,8 +109,13 @@ export default function Composer() {
   const serverSlashCommands = useChat((s) => s.slashCommands);
   const localSlashCommands = useKernelContributions('composer.command');
   const slashCommands = useMemo(
-    () => composerCommands(serverSlashCommands),
-    [localSlashCommands, serverSlashCommands],
+    () =>
+      composerCommands(serverSlashCommands).map((cmd) => {
+        if (cmd.command === 'summary') return { ...cmd, description: t('chat.command.summaryDesc') };
+        if (cmd.command === 'ai') return { ...cmd, description: t('chat.command.aiDesc'), params: t('chat.command.aiParams') };
+        return cmd;
+      }),
+    [localSlashCommands, serverSlashCommands, t],
   );
   const [text, setText] = useState('');
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -218,16 +231,48 @@ export default function Composer() {
   const candidates = useMemo(() => {
     if (!canMention || mentionQuery === null) return [];
     const q = mentionQuery.trim();
+    const roundtableAgentCandidates: MentionCandidate[] =
+      sharedAiStatus || !roomAiParticipant?.enabled || roomAiParticipant.mode !== 'roundtable'
+        ? []
+        : [
+            ...(roomAiParticipant.seats ?? [])
+              .filter((seat) => seat.enabled)
+              .filter((seat) => pinyinMatch(q, seat.roleTitle, seat.agentName))
+              .map((seat) => ({
+                username: seat.roleTitle,
+                name: seat.agentName,
+                kind: 'agent' as const,
+                agentStatus: 'active' as const,
+              })),
+            ...(pinyinMatch(q, t('chat.aiParticipant.roundtableAllAlias'), 'roundtable')
+              ? [{
+                  username: t('chat.aiParticipant.roundtableAllAlias'),
+                  name: t('chat.aiParticipant.composerRoundtableDesc'),
+                  kind: 'agent' as const,
+                  agentStatus: 'active' as const,
+                }]
+              : []),
+          ];
     const agent: MentionCandidate[] = sharedAiStatus && matchSharedAiMention(q)
-      ? [{ username: 'ai', name: 'AI 托管', kind: 'agent', agentStatus: sharedAiStatus }]
-      : [];
+      ? [{ username: 'ai', name: t('chat.area.aiHosting'), kind: 'agent', agentStatus: sharedAiStatus }]
+      : roomAiParticipant && matchSharedAiMention(q)
+        ? [
+            ...roundtableAgentCandidates,
+            {
+              username: 'ai',
+              name: t('chat.aiParticipant.composerMentionDesc', { name: roomAiParticipant.agentName }),
+              kind: 'agent',
+              agentStatus: 'active',
+            },
+          ]
+        : roundtableAgentCandidates;
     const base: MentionCandidate[] = [
       // 一对一私聊没有“通知所有人/在线成员”的语境，DM 候选里不出现广播项（issue #353）
       ...(roomType === 'd'
         ? []
         : [
-            { username: 'all', name: '通知所有人', kind: 'broadcast' as const },
-            { username: 'here', name: '通知在线成员', kind: 'broadcast' as const },
+            { username: 'all', name: t('chat.composer.notifyAll'), kind: 'broadcast' as const },
+            { username: 'here', name: t('chat.composer.notifyHere'), kind: 'broadcast' as const },
           ]),
       ...members
         .filter((member) => agent.length === 0 || member.username !== 'ai')
@@ -254,7 +299,7 @@ export default function Composer() {
       .sort((a, b) => pinyinScore(q, label(a)) - pinyinScore(q, label(b)))
       .slice(0, 8);
     // pinyinReady：字典异步加载完成后要重算一次候选
-  }, [canMention, mentionQuery, roomType, members, mentionRoster, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus]);
+  }, [canMention, mentionQuery, roomType, members, mentionRoster, aliases, nameFormat, pinyinReady, remoteUsers, sharedAiStatus, t]);
 
   const slashCandidates = useMemo(
     () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
@@ -266,16 +311,27 @@ export default function Composer() {
   useEffect(() => {
     if (!composerSeed) return;
     const value = composerSeed.text;
+    let nextLength = value.length;
     setText((prev) => {
-      // 输入框已经是别的正文时不覆盖，避免用户打了一半的话被命令顶掉
+      if (composerSeed.mode === 'append') {
+        const next = prev.trim() ? `${prev.trimEnd()}\n\n${value}` : value;
+        nextLength = next.length;
+        return next;
+      }
       const ok = !prev.trim() || /^\/[\w-]*$/.test(prev.trim());
-      return ok ? value : prev;
+      if (ok) return value;
+      nextLength = prev.length;
+      return prev;
     });
+    if (activeRid && composerSeed.mode === 'append') {
+      const current = useChat.getState().drafts[activeRid] ?? '';
+      persistDraft(current.trim() ? `${current.trimEnd()}\n\n${value}` : value);
+    }
     setSlashQuery(null);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       el?.focus();
-      el?.setSelectionRange(value.length, value.length);
+      el?.setSelectionRange(nextLength, nextLength);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composerSeed?.nonce]);
@@ -457,8 +513,8 @@ export default function Composer() {
               requestUpload([await ensureFile()], text);
               toast.info(
                 collision
-                  ? '服务器里已有同名表情，已回退为图片附件发送。'
-                  : '当前账号不能注册服务器贴纸，已回退为图片附件发送。',
+                  ? t('chat.composer.stickerCollisionFallback')
+                  : t('chat.composer.stickerPermissionFallback'),
               );
             },
           });
@@ -466,7 +522,7 @@ export default function Composer() {
       });
       setStickerPicker(false);
     } catch (err) {
-      toast.error(err, '发送贴纸失败');
+      toast.error(err, t('chat.composer.sendStickerFailed'));
     }
   };
 
@@ -534,7 +590,7 @@ export default function Composer() {
         ); // 缓存已清，重拉刷新本地 @ 补全用的成员表
       } catch (err) {
         // 邀请失败：消息照常发，但对方可能收不到提醒，得说一声
-        toast.error(err, '把群外成员拉进群失败，对方可能收不到 @ 提醒');
+        toast.error(err, t('chat.composer.autoInviteFailed'));
       }
     }
 
@@ -549,6 +605,7 @@ export default function Composer() {
     // Ctrl+/ 打开命令帮助（参数提示条里提到这个快捷键，就一定要能用）
     if (!composing && e.key === '/' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
+      e.stopPropagation();
       useCommandUi.getState().open({ kind: 'help' });
       return;
     }
@@ -628,12 +685,12 @@ export default function Composer() {
   const chooseNativeFiles = async (imagesOnly: boolean) => {
     const selected = await openDesktopDialog({
       multiple: true,
-      title: imagesOnly ? '选择图片' : '选择文件',
+      title: imagesOnly ? t('chat.composer.selectImages') : t('chat.composer.selectFiles'),
       ...(imagesOnly
         ? {
             filters: [
               {
-                name: '图片',
+                name: t('chat.common.imageFilterName'),
                 extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'],
               },
             ],
@@ -649,7 +706,7 @@ export default function Composer() {
     const selected = await openDesktopDialog({
       multiple: true,
       directory: false,
-      title: '选择 P2P 文件',
+      title: t('chat.composer.selectP2pFiles'),
     });
     const paths = selected ? (Array.isArray(selected) ? selected : [selected]) : [];
     if (paths.length > 0 && await sendP2pFiles(paths)) clearInput();
@@ -700,7 +757,7 @@ export default function Composer() {
         <div
           id="composer-mention-list"
           role="listbox"
-          aria-label="提及成员或共享 AI"
+          aria-label={t('chat.composer.mentionListAria')}
           className="absolute bottom-full left-4 z-30 mb-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-line bg-surface-4 py-1.5 shadow-pop"
         >
           {candidates.map((u, i) => (
@@ -735,10 +792,15 @@ export default function Composer() {
               )}
               {u.kind === 'agent' ? (
                 <>
-                  <span className="font-medium text-ink">AI 托管</span>
-                  <span className="min-w-0 truncate text-xs text-ink-3">@ai</span>
+                  <span className="font-medium text-ink">
+                    {u.username === 'ai' ? t('chat.area.aiHosting') : u.username}
+                  </span>
+                  <span className="min-w-0 truncate text-xs text-ink-3">
+                    @{u.username}
+                    {u.username !== 'ai' && u.name ? ` · ${u.name}` : ''}
+                  </span>
                   <span className="ml-auto shrink-0 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-3">
-                    {u.agentStatus === 'interrupted' ? '房间共享 · 已中断' : '房间共享'}
+                    {u.agentStatus === 'interrupted' ? t('chat.composer.roomSharedInterrupted') : t('chat.composer.roomShared')}
                   </span>
                 </>
               ) : (
@@ -756,11 +818,11 @@ export default function Composer() {
                   }`}
                   title={
                     roomType === 'd'
-                      ? '对方不在此私聊中，只插入名字，不会收到 @ 提醒'
-                      : '发送前会自动把 TA 拉进群，@ 提醒可达'
+                      ? t('chat.composer.notInDmTooltip')
+                      : t('chat.composer.notInRoomTooltip')
                   }
                 >
-                  {roomType === 'd' ? '不在会话中' : '非群成员'}
+                  {roomType === 'd' ? t('chat.composer.notInDmBadge') : t('chat.composer.notInRoomBadge')}
                 </span>
               )}
             </button>
@@ -788,12 +850,12 @@ export default function Composer() {
         <div className="mb-2 flex items-center gap-2 rounded-xl border border-line-soft border-l-2 border-l-primary bg-fill-1/85 px-3 py-1.5">
           <Reply size={14} className="shrink-0 text-primary" />
           <span className="min-w-0 flex-1 truncate text-xs text-ink-2">
-            回复 {replyTo.u.name || replyTo.u.username}：
-            {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg)) || '[卡片消息]'}
+            {t('chat.composer.replyPrefix', { name: replyTo.u.name || replyTo.u.username })}
+            {stripQuotePrefix(stripAgentSessionMarker(replyTo.msg)) || t('chat.projection.cardMessage')}
           </span>
           <button
             onClick={() => setReplyTo(null)}
-            aria-label="取消引用回复"
+            aria-label={t('chat.composer.cancelReplyAria')}
             className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-ink"
           >
             <X size={12} />
@@ -803,7 +865,7 @@ export default function Composer() {
       <div className="rounded-2xl border border-line bg-surface-4 shadow-card transition focus-within:border-primary/70 focus-within:ring-2 focus-within:ring-primary/15">
       <div className="flex items-center gap-1 border-b border-line-soft px-2.5 py-1.5">
         <button
-          title="表情"
+          title={t('chat.composer.emojiBtn')}
           className={toolBtn}
           onClick={() => {
             setStickerPicker(false);
@@ -814,8 +876,8 @@ export default function Composer() {
         </button>
         <button
           type="button"
-          title="贴纸"
-          aria-label="贴纸"
+          title={t('chat.composer.stickerBtn')}
+          aria-label={t('chat.composer.stickerBtn')}
           className={`${toolBtn} text-xs font-medium`}
           onClick={() => {
             if (stickerPicker) {
@@ -825,14 +887,14 @@ export default function Composer() {
             setPicker(false);
             void ensureStickerPicker()
               .then(() => setStickerPicker(true))
-              .catch((err) => toast.error(err, '加载贴纸面板失败'));
+              .catch((err) => toast.error(err, t('chat.composer.loadStickersFailed')));
           }}
         >
-          贴
+          {t('chat.composer.stickerShort')}
         </button>
         {canMention && (
           <button
-            title="提及成员"
+            title={t('chat.composer.mentionBtn')}
             className={toolBtn}
             onClick={() => {
               const el = textareaRef.current;
@@ -852,7 +914,7 @@ export default function Composer() {
         )}
         {slashCommands.length > 0 && (
           <button
-            title="斜杠命令"
+            title={t('chat.composer.slashBtn')}
             className={toolBtn}
             onClick={() => {
               // 命令必须在最前面，所以直接把输入框换成 "/"（原文有内容就不动）
@@ -875,8 +937,8 @@ export default function Composer() {
           </button>
         )}
         <button
-          title="命令帮助"
-          aria-label="查看全部斜杠命令"
+          title={t('chat.composer.helpBtn')}
+          aria-label={t('chat.composer.helpAria')}
           className={toolBtn}
           onClick={() => useCommandUi.getState().open({ kind: 'help' })}
         >
@@ -884,8 +946,8 @@ export default function Composer() {
         </button>
         {activeRid && (
           <button
-            title="发起投票"
-            aria-label="发起投票"
+            title={t('chat.cmd.poll.title')}
+            aria-label={t('chat.cmd.poll.title')}
             className={toolBtn}
             onClick={() => useCommandUi.getState().open({ kind: 'poll', rid: activeRid, prefill: '' })}
           >
@@ -893,7 +955,7 @@ export default function Composer() {
           </button>
         )}
         <button
-          title="发送图片"
+          title={t('chat.composer.sendImageBtn')}
           className={toolBtn}
           onClick={() =>
             isTauri ? void chooseNativeFiles(true) : imageInputRef.current?.click()
@@ -902,7 +964,7 @@ export default function Composer() {
           <Image size={16} />
         </button>
         <button
-          title="发送文件"
+          title={t('chat.composer.sendFileBtn')}
           className={toolBtn}
           onClick={() =>
             isTauri ? void chooseNativeFiles(false) : fileInputRef.current?.click()
@@ -912,15 +974,15 @@ export default function Composer() {
         </button>
         {isTauri && (
           <button
-            title="P2P 局域网直传"
-            aria-label="P2P 局域网直传"
+            title={t('chat.composer.p2pBtn')}
+            aria-label={t('chat.composer.p2pBtn')}
             className={toolBtn}
             onClick={() => void chooseP2pFiles()}
           >
             <Network size={16} />
           </button>
         )}
-        {uploading > 0 && <span className="pl-1 text-xs text-ink-3">上传中（{uploading}）…</span>}
+        {uploading > 0 && <span className="pl-1 text-xs text-ink-3">{t('chat.composer.uploadingCount', { count: uploading })}</span>}
       </div>
       <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={onFiles} />
       <input ref={fileInputRef} type="file" multiple hidden onChange={onFiles} />
@@ -931,11 +993,11 @@ export default function Composer() {
           className="mx-2.5 mt-2 flex items-baseline gap-2 rounded-xl border border-line-soft bg-fill-1/80 px-3 py-1.5"
         >
           <span className="shrink-0 text-xs text-ink-2">
-            {paramHint.params || '无参数'}
+            {paramHint.params || t('chat.composer.noParams')}
           </span>
           <span className="min-w-0 truncate text-xs text-ink-3">{paramHint.desc}</span>
           {!paramHint.hasArgs && (
-            <span className="ml-auto shrink-0 text-xs text-ink-3">Ctrl+/ 查看全部命令</span>
+            <span className="ml-auto shrink-0 text-xs text-ink-3">{t('chat.composer.allCommandsShortcut')}</span>
           )}
         </div>
       )}
@@ -962,19 +1024,19 @@ export default function Composer() {
           placeholder={
             sendOnEnter === 'alternative'
               // 「怎么发送」和「怎么换行」得同时讲 —— 只说一半，想发多行的人就卡住了
-              ? '输入消息，Ctrl + Enter 发送，Enter 换行'
-              : '输入消息，Enter 发送，Alt + Enter 换行'
+              ? t('chat.composer.placeholderAlt')
+              : t('chat.composer.placeholderNormal')
           }
           className="max-h-40 min-h-8 flex-1 resize-none overflow-y-auto bg-transparent px-1 py-1 text-sm leading-relaxed text-ink outline-none [field-sizing:content]"
         />
         <button
           onClick={() => void doSend()}
           disabled={!text.trim()}
-          title="发送"
+          title={t('chat.composer.sendBtn')}
           className="flex h-8 shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover active:bg-primary-active disabled:cursor-not-allowed disabled:opacity-40"
         >
           <SendHorizontal size={15} />
-          <span>发送</span>
+          <span>{t('chat.composer.sendBtn')}</span>
         </button>
       </div>
       </div>

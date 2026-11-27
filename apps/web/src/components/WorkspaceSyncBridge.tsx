@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { t, tp } from '../i18n';
 import { loadWorkbenchConfig } from '../lib/ado';
 import {
   loadWorkspaceSource,
@@ -86,10 +87,12 @@ export default function WorkspaceSyncBridge() {
           if (pending.length === 0) return;
           toast.show({
             kind: 'info',
-            message: `团队配置有更新：${pending.length} 项变化(${result.config.name || '工作区配置'})`,
+            message: tp(pending.length, 'nav.workspaceSync.updatedOne', 'nav.workspaceSync.updatedOther', {
+              name: result.config.name || t('auth.workspace.defaultTitle'),
+            }),
             duration: 0,
             action: {
-              label: '查看',
+              label: t('nav.workspaceSync.view'),
               onClick: () => setPreview(result),
             },
           });
@@ -98,7 +101,7 @@ export default function WorkspaceSyncBridge() {
           const latest = loadWorkspaceSource();
           if (!latest || workspaceSourceSnapshotKey(latest) !== requestSnapshot) return;
           saveWorkspaceSource({ ...latest, lastCheckedAt: Date.now() });
-          toast.error(error, '团队配置自动检查失败');
+          toast.error(error, t('nav.workspaceSync.checkFailed'));
         }
       } finally {
         checking = false;

@@ -22,6 +22,7 @@ import { runButlerCommand } from './butler';
 import { handoffToCodexTask } from '../lib/codexTaskHandoff';
 import { createDefaultKernelHost } from '../lib/kernelHost';
 import type { KernelHost } from './host';
+import { t, useT } from '../i18n';
 
 export { ensureKernelStoreReady, kernelStore } from './store';
 export const permissionGate = new PermissionGate((entry) => kernelStore.audit.append(entry).then(() => {}));
@@ -110,9 +111,9 @@ async function startNativeService(app: InstalledApp): Promise<void> {
   const service = app.manifest.service;
   if (!service) return;
   if (service.platforms && !service.platforms.includes(desktopPlatform())) return;
-  if (!isTauri) throw new Error('native service 仅支持桌面客户端');
+  if (!isTauri) throw new Error(t('settings.kernel.runtime.nativeServiceDesktopOnly'));
   if (!isOfficialApp(app) || app.source.kind !== 'bundled') {
-    throw new Error('native service 只允许签名发布的内置应用启动');
+    throw new Error(t('settings.kernel.runtime.nativeServiceBundledOnly'));
   }
   await invoke('native_service_start', {
     appId: app.manifest.id,
@@ -129,7 +130,7 @@ function registerCapabilities(host: KernelHost): void {
   registerHostCapabilities(capabilityBus, host, { serverBase: getServerBase });
   capabilityBus.register('app.info', 'app:info', (_params, context) => {
     const app = installedApps.get(context.appId);
-    if (!app) throw new Error('应用未安装');
+    if (!app) throw new Error(t('settings.kernel.runtime.appNotInstalled'));
     return {
       id: app.manifest.id,
       version: app.manifest.version,
@@ -140,10 +141,10 @@ function registerCapabilities(host: KernelHost): void {
     };
   });
   capabilityBus.register('files.pick', 'files:read', async () => {
-    if (!isTauri) throw new Error('文件选择仅支持桌面客户端');
+    if (!isTauri) throw new Error(t('settings.kernel.runtime.filePickerDesktopOnly'));
     const { open } = await import('@tauri-apps/plugin-dialog');
     const selected = await open({
-      title: '选择文件',
+      title: t('settings.kernel.runtime.filePickerTitle'),
       multiple: false,
       directory: false,
     });
@@ -152,13 +153,17 @@ function registerCapabilities(host: KernelHost): void {
   capabilityBus.register('native.call', 'native:service', async (params, context) => {
     const app = installedApps.get(context.appId);
     if (!app?.manifest.service || !isOfficialApp(app) || app.source.kind !== 'bundled') {
-      throw new Error('当前应用没有可调用的签名 native service');
+      throw new Error(t('settings.kernel.runtime.noSignedNativeService'));
     }
     if (app.manifest.service.platforms && !app.manifest.service.platforms.includes(desktopPlatform())) {
-      throw new Error(`native service 暂不支持 ${desktopPlatform()}`);
+      throw new Error(
+        t('settings.kernel.runtime.nativeServiceUnsupportedPlatform', { platform: desktopPlatform() }),
+      );
     }
     const object = params as { method?: unknown; params?: unknown } | undefined;
-    if (typeof object?.method !== 'string' || !object.method) throw new Error('native.call 缺少 method');
+    if (typeof object?.method !== 'string' || !object.method) {
+      throw new Error(t('settings.kernel.runtime.nativeCallMissingMethod'));
+    }
     const start = nativeServiceStarts.get(context.appId) ?? startNativeService(app);
     nativeServiceStarts.set(context.appId, start);
     await start;
@@ -171,9 +176,9 @@ function registerCapabilities(host: KernelHost): void {
   capabilityBus.register('app.config.get', 'config:read', async (params, context) => {
     const name = stringParam(params, 'name');
     if (!name || !context.manifest.config?.env?.includes(name)) {
-      throw new Error('只能读取应用声明的普通环境变量');
+      throw new Error(t('settings.kernel.runtime.envNotDeclared'));
     }
-    if (!isTauri) throw new Error('应用环境变量仅支持桌面客户端');
+    if (!isTauri) throw new Error(t('settings.kernel.runtime.envDesktopOnly'));
     const values = await invoke<Record<string, string>>('app_env_get', { names: [name] });
     return { name, value: values[name] ?? null };
   });
@@ -182,7 +187,9 @@ function registerCapabilities(host: KernelHost): void {
   );
   capabilityBus.register('storage.set', 'storage:local', async (params, context) => {
     const object = params as { key?: unknown; value?: unknown } | undefined;
-    if (typeof object?.key !== 'string' || !object.key) throw new Error('storage.set 缺少 key');
+    if (typeof object?.key !== 'string' || !object.key) {
+      throw new Error(t('settings.kernel.runtime.storageMissingKey'));
+    }
     await kernelStore.appData.set(scopedAppId(context.appId), object.key, object.value);
     return { ok: true };
   });
@@ -197,7 +204,7 @@ function registerCapabilities(host: KernelHost): void {
     const object = params as { kind?: unknown; props?: unknown } | undefined;
     const props = object?.props as { message?: unknown; level?: unknown } | undefined;
     if (object?.kind !== 'notify' || typeof props?.message !== 'string') {
-      throw new Error('M6 的 rcx/requestUI 只支持 notify');
+      throw new Error(t('settings.kernel.runtime.requestUiNotifyOnly'));
     }
     const message = props.message.slice(0, 500);
     if (props.level === 'error') activeKernelHost.notifications.error(message);
@@ -207,11 +214,15 @@ function registerCapabilities(host: KernelHost): void {
   });
   capabilityBus.register('net.fetch', 'net:fetch', async (params, context) => {
     const object = params as { url?: unknown; method?: unknown; headers?: unknown; body?: unknown } | undefined;
-    if (typeof object?.url !== 'string') throw new Error('net.fetch 缺少 url');
+    if (typeof object?.url !== 'string') throw new Error(t('settings.kernel.runtime.netFetchMissingUrl'));
     const url = new URL(object.url);
-    if (!context.manifest.netAllow?.includes(url.origin)) throw new Error(`netAllow 未允许 ${url.origin}`);
+    if (!context.manifest.netAllow?.includes(url.origin)) {
+      throw new Error(t('settings.kernel.runtime.netAllowDenied', { origin: url.origin }));
+    }
     const method = typeof object.method === 'string' ? object.method.toUpperCase() : 'GET';
-    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) throw new Error(`不支持 method: ${method}`);
+    if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      throw new Error(t('settings.kernel.runtime.netFetchUnsupportedMethod', { method }));
+    }
     const headers = new Headers();
     if (object.headers && typeof object.headers === 'object') {
       for (const [key, value] of Object.entries(object.headers as Record<string, unknown>)) {
@@ -221,15 +232,17 @@ function registerCapabilities(host: KernelHost): void {
       }
     }
     const body = typeof object.body === 'string' ? object.body : undefined;
-    if (body && body.length > 1024 * 1024) throw new Error('net.fetch 请求体上限为 1 MB');
+    if (body && body.length > 1024 * 1024) throw new Error(t('settings.kernel.runtime.netFetchBodyLimit'));
     await ensureHttpOrigin(url);
     const response = await httpFetch(
       url,
       { method, headers, body, redirect: 'manual', maxRedirections: 0 } as RequestInit,
     );
-    if (response.status >= 300 && response.status < 400) throw new Error('net.fetch 不跟随重定向');
+    if (response.status >= 300 && response.status < 400) {
+      throw new Error(t('settings.kernel.runtime.netFetchNoRedirect'));
+    }
     const text = await response.text();
-    if (text.length > 1024 * 1024) throw new Error('net.fetch 响应体上限为 1 MB');
+    if (text.length > 1024 * 1024) throw new Error(t('settings.kernel.runtime.netFetchResponseLimit'));
     return {
       status: response.status,
       headers: Object.fromEntries(response.headers.entries()),
@@ -264,13 +277,35 @@ function emitAfterOpen(appId: string, event: string, payload: unknown): void {
   bridgeHost.emit(appId, event, payload);
 }
 
+function OpenInAppButton({ appId, appName }: { appId: string; appName: string }) {
+  const translate = useT();
+  return (
+    <button
+      onClick={() => {
+        const module = kernelRegistry
+          .get('nav.module')
+          .find((candidate) => kernelRegistry.ownerOf('nav.module', candidate) === appId);
+        if (module) activeKernelHost.navigation.setModule(module.id);
+      }}
+      className="my-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-left text-xs text-primary"
+    >
+      {translate('settings.kernel.runtime.openInApp', { name: appName })}
+    </button>
+  );
+}
+
 function activateApp(app: InstalledApp): () => void | Promise<void> {
   permissionGate.setGrant({ appId: app.manifest.id, granted: app.granted });
   const cleanups: Array<() => void | Promise<void>> = [];
   if (app.manifest.service && app.granted.includes('native:service')) {
     const start = startNativeService(app);
     nativeServiceStarts.set(app.manifest.id, start);
-    void start.catch((error) => activeKernelHost.notifications.error(error, `${app.manifest.name} 后台服务启动失败`));
+    void start.catch((error) =>
+      activeKernelHost.notifications.error(
+        error,
+        t('settings.kernel.runtime.nativeServiceStartFailed', { name: app.manifest.name }),
+      ),
+    );
     cleanups.push(async () => {
       nativeServiceStarts.delete(app.manifest.id);
       await start.catch(() => {});
@@ -308,7 +343,10 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
         cleanups.push(
           kernelRegistry.register(app.manifest.id, point, {
             id,
-            label: typeof raw.label === 'string' ? raw.label : `用 ${app.manifest.name} 打开`,
+            label:
+              typeof raw.label === 'string'
+                ? raw.label
+                : t('settings.kernel.runtime.openWithApp', { name: app.manifest.name }),
             icon: Blocks,
             run: ({ message }) => {
               emitAfterOpen(app.manifest.id, 'message.action', {
@@ -328,19 +366,7 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
             match: ({ message, attachment }) =>
               (!!messageType && message.t === messageType) ||
               (!!attachmentType && (attachment as Record<string, unknown> | undefined)?.type === attachmentType),
-            render: () => (
-              <button
-                onClick={() => {
-                  const module = kernelRegistry
-                    .get('nav.module')
-                    .find((candidate) => kernelRegistry.ownerOf('nav.module', candidate) === app.manifest.id);
-                  if (module) activeKernelHost.navigation.setModule(module.id);
-                }}
-                className="my-1 rounded-md border border-line bg-surface-2 px-3 py-2 text-left text-xs text-primary"
-              >
-                在 {app.manifest.name} 中打开
-              </button>
-            ),
+            render: () => <OpenInAppButton appId={app.manifest.id} appName={app.manifest.name} />,
           }),
         );
       } else if (point === 'composer.command' && typeof raw.name === 'string') {
@@ -426,11 +452,11 @@ function registerBuiltins(): void {
   const features = runtimeFeatures();
   const aiRuntimeProvider = getAiRuntimeProvider();
   const modules = [
-    ['workbench', '工作台', WorkbenchModule, undefined],
-    ['butler-view', '管家', ButlerPage, Bell],
-    ['todos', '待办', TodosPage, undefined],
-    ['calendar', '日历', CalendarPage, undefined],
-    ['contacts', '通讯录', ContactsPage, undefined],
+    ['workbench', t('settings.kernel.module.workbench'), WorkbenchModule, undefined],
+    ['butler-view', t('settings.kernel.module.butler'), ButlerPage, Bell],
+    ['todos', t('settings.kernel.module.todos'), TodosPage, undefined],
+    ['calendar', t('settings.kernel.module.calendar'), CalendarPage, undefined],
+    ['contacts', t('settings.kernel.module.contacts'), ContactsPage, undefined],
   ] as const;
   for (const [id, label, render, icon] of modules) {
     if (id === 'butler-view' && !features.butler) continue;
@@ -438,7 +464,7 @@ function registerBuiltins(): void {
     if (id === 'calendar' && isTauri) {
       kernelRegistry.register('core', 'nav.module', {
         id: 'downloads',
-        label: '下载',
+        label: t('settings.kernel.module.downloads'),
         render: DownloadsPage,
         icon: Download,
       });
@@ -471,7 +497,7 @@ function registerBuiltins(): void {
     kernelRegistry.register('core', 'composer.command', {
       id: 'summary',
       name: 'summary',
-      description: '用 AI 管家总结当前会话未读消息',
+      description: t('settings.kernel.command.summaryDesc'),
       run: ({ rid }) => {
         void summarizeRoom(rid);
       },
@@ -479,8 +505,8 @@ function registerBuiltins(): void {
     kernelRegistry.register('core', 'composer.command', {
       id: 'butler',
       name: 'ai',
-      description: '打开 AI 管家，可直接跟上问题',
-      params: '问题（可选）',
+      description: t('settings.kernel.command.butlerDesc'),
+      params: t('settings.kernel.command.butlerParams'),
       run: runButlerCommand,
     });
     if (aiRuntimeProvider === 'pi') kernelRegistry.register('core', 'composer.trigger', {
@@ -491,10 +517,10 @@ function registerBuiltins(): void {
         if (context.tmid) return false;
         try {
           const prompt = context.text.replace(/^\$codex(?:\s+|$)/i, '').trim();
-          if (!prompt) throw new Error('$codex 后面需要写任务');
-          await handoffToCodexTask(prompt, '来自聊天的 Codex 任务');
+          if (!prompt) throw new Error(t('settings.kernel.trigger.codexMissingPrompt'));
+          await handoffToCodexTask(prompt, t('settings.kernel.trigger.codexTitle'));
         } catch (error) {
-          activeKernelHost.notifications.error(error, 'Codex 任务创建失败');
+          activeKernelHost.notifications.error(error, t('settings.kernel.trigger.codexCreateFailed'));
         }
       },
     });
@@ -503,9 +529,9 @@ function registerBuiltins(): void {
     kernelRegistry.register('core', 'composer.command', {
       id: 'agent-exit',
       name: 'exit',
-      description: '结束当前话题的共享 Agent 会话',
+      description: t('settings.kernel.command.agentExitDesc'),
       run: async ({ tmid }) => {
-        if (!tmid) throw new Error('/exit 只能在话题中结束共享 Agent 会话');
+        if (!tmid) throw new Error(t('settings.kernel.command.agentExitThreadOnly'));
         await endSharedAgentSession(tmid);
       },
     });
@@ -559,7 +585,7 @@ export async function initializeKernel(
   if (initialized) return;
   if (initializing) return initializing;
   initializing = (async () => {
-    if (signal?.aborted) throw new Error('扩展内核启动已取消');
+    if (signal?.aborted) throw new Error(t('settings.kernel.runtime.initCancelled'));
     activeKernelHost = host;
     setActiveAppManager(installedApps);
     if (!setupComplete) {
@@ -579,7 +605,7 @@ export async function initializeKernel(
     }
     await installedApps.hydrate(BUNDLED_APPS);
     if (signal?.aborted) {
-      throw new Error('扩展内核启动已取消');
+      throw new Error(t('settings.kernel.runtime.initCancelled'));
     }
     initialized = true;
   })()

@@ -8,6 +8,7 @@ import { humanError, toast } from '../stores/toast';
 import { fmtConvTime, fmtSize } from '../lib/format';
 import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { saveFile } from '../lib/download';
+import { t as translate, useT } from '../i18n';
 import FilePreview, { filePreviewKind } from './FilePreview';
 import ImageLightbox from './ImageLightbox';
 import PanelShell from './PanelShell';
@@ -24,21 +25,22 @@ function pathOf(f: RcRoomFile): string {
  * 以前想找三周前发的那份文档，只能一路往上翻聊天记录 —— RC 原生有这个面板，我们没接。
  */
 export default function FilesPanel() {
+  const t = useT();
   const rid = useChat((s) => s.activeRid);
   const type = useChat((s) =>
     s.activeRid ? (s.subscriptions[s.activeRid]?.t ?? s.rooms[s.activeRid]?.t ?? 'c') : 'c',
   );
   const targetFileId = useChat((s) => s.rightPanel?.kind === 'files' ? s.rightPanel.fileId : undefined);
   const roomName = useChat((s) => {
-    if (!s.activeRid) return '会话';
+    if (!s.activeRid) return '';
     return s.subscriptions[s.activeRid]?.fname || s.subscriptions[s.activeRid]?.name ||
-      s.rooms[s.activeRid]?.fname || s.rooms[s.activeRid]?.name || '会话';
+      s.rooms[s.activeRid]?.fname || s.rooms[s.activeRid]?.name || '';
   });
   const indexRoom = useFileIndex((s) => s.indexRoom);
 
   const [files, setFiles] = useState<RcRoomFile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ raw: unknown } | null>(null);
   const [keyword, setKeyword] = useState('');
   const [preview, setPreview] = useState<RcRoomFile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -53,11 +55,11 @@ export default function FilesPanel() {
       .getRoomFiles(rid, type)
       .then((next) => {
         setFiles(next);
-        indexRoom(rid, roomName, next);
+        indexRoom(rid, roomName || translate('panels.files.fallbackRoomName'), next);
       })
       .catch((err: unknown) => {
         setFiles([]);
-        setError(humanError(err, '无法获取文件列表'));
+        setError({ raw: err });
       })
       .finally(() => setLoading(false));
   }, [indexRoom, rid, roomName, type]);
@@ -82,21 +84,29 @@ export default function FilesPanel() {
     try {
       await saveFile(pathOf(f), f.name);
     } catch (err) {
-      toast.error(err, '下载失败');
+      toast.error(err, t('panels.files.downloadFailed'));
     } finally {
       setBusy(null);
     }
   };
 
+  const errorMessage = error ? humanError(error.raw, t('panels.files.loadFailed')) : null;
+
   return (
-    <PanelShell title={`文件${files.length ? `（${files.length}）` : ''}`}>
+    <PanelShell
+      title={
+        files.length
+          ? t('panels.files.titleWithCount', { count: files.length })
+          : t('panels.files.title')
+      }
+    >
       <div className="p-3">
         <div className="flex h-8 items-center gap-2 rounded-md bg-fill-1 px-2.5">
           <Search size={14} className="text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索文件名"
+            placeholder={t('panels.files.searchPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
@@ -104,14 +114,14 @@ export default function FilesPanel() {
 
       <div className="flex-1 overflow-y-auto px-2 pb-2">
         {loading && <SkeletonList rows={5} avatar={32} />}
-        {!loading && error && (
+        {!loading && errorMessage && (
           <div className="flex flex-col items-center gap-2 py-10 text-center">
             <AlertCircle size={22} className="text-danger" />
-            <div className="max-w-xs text-xs break-words text-ink-3">{error}</div>
+            <div className="max-w-xs text-xs break-words text-ink-3">{errorMessage}</div>
           </div>
         )}
         {!loading &&
-          !error &&
+          !errorMessage &&
           filtered.map((f) => {
             const previewable = filePreviewKind(f.name, f.type);
             const isTarget = f._id === targetFileId;
@@ -133,7 +143,7 @@ export default function FilesPanel() {
                     {[
                       f.user?.name || f.user?.username,
                       fmtSize(f.size),
-                      !previewable && '仅支持下载',
+                      !previewable && t('panels.files.downloadOnly'),
                       f.uploadedAt ? fmtConvTime(tsMs(f.uploadedAt)) : '',
                     ]
                       .filter(Boolean)
@@ -141,7 +151,7 @@ export default function FilesPanel() {
                   </div>
                 </div>
                 <button
-                  title="下载"
+                  title={t('panels.files.downloadTitle')}
                   disabled={busy === f._id}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -154,9 +164,9 @@ export default function FilesPanel() {
               </div>
             );
           })}
-        {!loading && !error && filtered.length === 0 && (
+        {!loading && !errorMessage && filtered.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '没有匹配的文件' : '这个会话还没有人传过文件。把文件拖进下面的输入框就能发第一个。'}
+            {keyword ? t('panels.files.noMatchingFiles') : t('panels.files.empty')}
           </div>
         )}
       </div>

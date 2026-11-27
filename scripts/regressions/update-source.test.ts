@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   compareVersions,
   isNewerNativeUpdate,
@@ -102,9 +104,14 @@ test('共享目录更新：helper 接管安装、单流程并由 Rust 完成交�
   assert.doesNotMatch(updateSource, /plugin-process/);
   assert.match(nativeProcess, /app\.exit\(0\)/);
 
-  assert.match(bridge, /更新到 v\$\{probe\.version\} 并重启/);
-  assert.match(settings, /更新到 v\$\{probe\.version\} 并重启/);
+  assert.match(bridge, /t\('nav\.updater\.updateToVersionAndRestart', \{ version: probe\.version \}\)/);
+  assert.equal(zhCN['nav.updater.updateToVersionAndRestart'], '更新到 v{version} 并重启');
+  assert.ok(enUS['nav.updater.updateToVersionAndRestart'].length > 0);
+  assert.match(settings, /t\('settings\.about\.updateAndRestart', \{ version: probe\.version \}\)/);
+  assert.equal(zhCN['settings.about.updateAndRestart'], '更新到 v{version} 并重启');
+  assert.ok(enUS['settings.about.updateAndRestart'].length > 0);
   assert.doesNotMatch(`${bridge}\n${settings}`, /请按安装向导完成更新/);
+  assert.equal(Object.values(zhCN).some((value) => value.includes('请按安装向导完成更新')), false);
 });
 
 test('Windows NSIS 安装显式固定 currentUser，升级不切换到管理员用户上下文', () => {
@@ -122,8 +129,13 @@ test('共享目录更新：无 Minisign 时仍携带探测得到的 SHA-256，�
   assert.match(updateSource, /signature\?: string/);
   assert.match(updateSource, /sha256: string/);
   assert.doesNotMatch(updateSource, /更新包缺少签名或安装类型/);
-  assert.match(bridge, /未签名共享目录/);
-  assert.match(settings, /共享目录可省略 signature/);
+  assert.equal(Object.values(zhCN).some((value) => value.includes('更新包缺少签名或安装类型')), false);
+  assert.match(bridge, /'nav\.updater\.availableUnsignedDir'/);
+  assert.match(zhCN['nav.updater.availableUnsignedDir'], /未签名共享目录/);
+  assert.ok(enUS['nav.updater.availableUnsignedDir'].length > 0);
+  assert.match(settings, /t\('settings\.about\.updateHint'\)/);
+  assert.match(zhCN['settings.about.updateHint'], /共享目录可省略 signature/);
+  assert.ok(enUS['settings.about.updateHint'].length > 0);
 });
 
 test('原生更新按钮点击时重新检查，不长期持有启动检查返回的资源（issue #300）', () => {

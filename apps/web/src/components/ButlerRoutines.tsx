@@ -19,6 +19,8 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useI18n, type MessageKey, type ResolvedLocale, type TranslateFn } from '../i18n';
+import { formatDateTime } from '../i18n/format';
 import { BUTLER_ABILITY_TEMPLATES, type ButlerAbilityTemplate } from '../lib/butlerAbilityTemplates';
 import { isTauriRuntime } from '../lib/client';
 import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
@@ -30,46 +32,55 @@ import { useRoutines, type Routine, type RoutineTrigger } from '../stores/routin
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import ButlerRoutineCreateDialog from './ButlerRoutineCreateDialog';
+import { ConfirmDialog } from './Dialog';
 
 type RoutineFilter = 'all' | 'active' | 'paused';
 type DetailMode = 'details' | 'history' | 'edit' | 'create';
 
-const CODEX_CREATE_PROMPT = '我们来一起设置一个已安排任务。请逐项确认要完成什么、何时运行、运行在哪个项目，以及怎样算完成。确认后必须调用 create_scheduled_task 创建真实的 Codex automation.toml，并建议立即运行一次验证。';
-
-function triggerLabel(trigger: RoutineTrigger): string {
+function triggerLabel(trigger: RoutineTrigger, t: TranslateFn): string {
+  if (trigger.kind === 'event') {
+    const label = t(`butler.routines.event.${trigger.eventType}` as MessageKey);
+    return trigger.filter ? `${label} · ${trigger.filter}` : label;
+  }
   if (trigger.kind === 'interval') {
     return trigger.window
-      ? `每天 ${trigger.window.start}–${trigger.window.end}，每 ${trigger.everyMinutes} 分钟`
-      : `每 ${trigger.everyMinutes} 分钟`;
+      ? t('butler.routines.triggerWindowInterval', {
+          start: trigger.window.start,
+          end: trigger.window.end,
+          minutes: trigger.everyMinutes,
+        })
+      : t('butler.routines.triggerInterval', { minutes: trigger.everyMinutes });
   }
-  if (!trigger.days?.length) return `每天 ${trigger.time}`;
-  const days = trigger.days.map((day) => `周${'日一二三四五六'[day]}`).join('、');
-  return `${days} ${trigger.time}`;
+  if (!trigger.days?.length) return t('butler.routines.triggerDaily', { time: trigger.time });
+  const days = trigger.days
+    .map((day) => t(`butler.routines.weekdayCompact.${day}` as MessageKey))
+    .join(t('butler.listSeparator'));
+  return t('butler.routines.triggerDays', { days, time: trigger.time });
 }
 
-function scheduleLabel(routine: Routine): string {
+function scheduleLabel(routine: Routine, t: TranslateFn): string {
   if (routine.rrule) return describeRrule(routine.rrule);
-  return routine.trigger ? triggerLabel(routine.trigger) : '未设置运行时间';
+  return routine.trigger ? triggerLabel(routine.trigger, t) : t('butler.routines.scheduleNotSet');
 }
 
-function runTime(at: number): string {
-  return new Intl.DateTimeFormat('zh-CN', {
+function runTime(at: number, locale: ResolvedLocale): string {
+  return formatDateTime(at, {
     month: 'numeric',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(at);
+  }, locale);
 }
 
-function projectName(path?: string): string {
-  if (!path || path === '~') return '临时工作区';
+function projectName(path: string | undefined, t: TranslateFn): string {
+  if (!path || path === '~') return t('butler.routines.tempWorkspace');
   return path.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || path;
 }
 
-function templateDraft(template: ButlerAbilityTemplate, workspaceRoot: string): Partial<Routine> {
+function templateDraft(template: ButlerAbilityTemplate, workspaceRoot: string, t: TranslateFn): Partial<Routine> {
   return {
-    name: template.title,
-    prompt: template.prompt,
+    name: t(template.titleKey),
+    prompt: template.promptKey ? t(template.promptKey) : undefined,
     skillName: template.skillName,
     templateId: template.id,
     precheck: template.precheck,
@@ -80,6 +91,7 @@ function templateDraft(template: ButlerAbilityTemplate, workspaceRoot: string): 
 }
 
 export default function ButlerRoutines() {
+  const { t, tp, locale } = useI18n();
   const setButlerView = useUI((state) => state.setButlerView);
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
@@ -97,6 +109,7 @@ export default function ButlerRoutines() {
   const syncNative = useRoutines((state) => state.syncNative);
   const deleteNative = useRoutines((state) => state.deleteNative);
   const runScheduledRoutine = useRoutines((state) => state.runNow);
+  const dryRunRoutine = useRoutines((state) => state.dryRunRoutine);
   const markRunRead = useRoutines((state) => state.markRunRead);
   const archiveRuns = useRoutines((state) => state.archiveRuns);
   const removeRoutine = useRoutines((state) => state.removeRoutine);
@@ -105,6 +118,7 @@ export default function ButlerRoutines() {
   const [draft, setDraft] = useState<Partial<Routine> | undefined>();
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const [pendingDeleteRoutine, setPendingDeleteRoutine] = useState<Routine | null>(null);
   const [filter, setFilter] = useState<RoutineFilter>('all');
   usePinyinReady();
   const [query, setQuery] = useState('');
@@ -149,18 +163,18 @@ export default function ButlerRoutines() {
   const createWithCodex = async (): Promise<void> => {
     setCreateMenuOpen(false);
     try {
-      if (!desktopRuntime) throw new Error('网页版没有本地 Codex 执行面，请使用 RocketX 桌面端');
+      if (!desktopRuntime) throw new Error(t('butler.routines.desktopOnlyCodex'));
       if (!workspaceRoot) {
-        const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择 Codex 工作区' });
+        const path = await openDesktopDialog({ directory: true, multiple: false, title: t('butler.routines.chooseCodexWorkspace') });
         if (typeof path !== 'string') return;
         await setWorkspaceRoot(path);
         await connect();
       }
-      await startThread('创建已安排任务');
+      await startThread(t('butler.routines.startCreateThreadTitle'));
       setButlerView('conversation');
-      await send(CODEX_CREATE_PROMPT);
+      await send(t('butler.routines.codexCreatePrompt'));
     } catch (reason) {
-      toast.error(reason, '无法使用 Codex 创建安排');
+      toast.error(reason, t('butler.routines.createWithCodexFailed'));
     }
   };
 
@@ -190,20 +204,26 @@ export default function ButlerRoutines() {
       setEnabled(routine.id, !routine.enabled);
       await syncNative(routine.id, routine);
     } catch (error) {
-      toast.error(error, '无法同步 Codex 已安排任务');
+      toast.error(error, t('butler.routines.syncFailed'));
     }
   };
 
-  const deleteRoutine = async (routine: Routine): Promise<void> => {
+  const requestDeleteRoutine = (routine: Routine): void => {
     setActionMenuOpen(false);
-    if (!window.confirm(`删除“${routine.name}”？运行历史也会一并删除。`)) return;
+    setPendingDeleteRoutine(routine);
+  };
+
+  const confirmDeleteRoutine = async (): Promise<void> => {
+    const routine = pendingDeleteRoutine;
+    if (!routine) return;
+    setPendingDeleteRoutine(null);
     try {
       await deleteNative(routine.id);
       removeRoutine(routine.id);
       closePanel();
-      toast.success('已删除任务');
+      toast.success(t('butler.routines.deletedToast'));
     } catch (error) {
-      toast.error(error, '无法删除任务');
+      toast.error(error, t('butler.routines.deleteFailed'));
     }
   };
 
@@ -213,7 +233,7 @@ export default function ButlerRoutines() {
     try {
       await runScheduledRoutine(routine.id, { triggerReason: 'manual' });
     } catch (error) {
-      toast.error(error, '任务运行失败');
+      toast.error(error, t('butler.routines.runFailed'));
     }
   };
 
@@ -222,7 +242,7 @@ export default function ButlerRoutines() {
     const latest = routine.runs.find((run) => !run.archived);
     const threadId = routine.kind === 'heartbeat' ? routine.targetThreadId : latest?.threadId;
     if (!threadId) {
-      toast.error('这个任务还没有可打开的 Codex 对话');
+      toast.error(t('butler.routines.noThreadToOpen'));
       return;
     }
     setButlerView('conversation');
@@ -235,45 +255,45 @@ export default function ButlerRoutines() {
     if (filter === 'active' && !routine.enabled) return false;
     if (filter === 'paused' && routine.enabled) return false;
     if (!normalizedQuery) return true;
-    return pinyinMatch(normalizedQuery, routine.name, routine.prompt, scheduleLabel(routine));
+    return pinyinMatch(normalizedQuery, routine.name, routine.prompt, scheduleLabel(routine, t));
   });
   const suggestedTemplates = BUTLER_ABILITY_TEMPLATES.filter((template) => (
-    !!template.prompt && !template.params && !routines.some((routine) => routine.templateId === template.id)
+    !!template.promptKey && !template.params && !routines.some((routine) => routine.templateId === template.id)
   ));
   const unreadRuns = routines.flatMap((routine) => routine.runs
     .filter((run) => !run.archived && !run.readAt)
     .map((run) => ({ routineId: routine.id, runId: run.id })));
 
   return (
-    <section aria-label="已安排" className={`butler-scheduled-workbench${panelOpen ? ' has-detail' : ''}`}>
-      <h1 className="sr-only">已安排的任务</h1>
+    <section aria-label={t('butler.routines.sectionAria')} className={`butler-scheduled-workbench${panelOpen ? ' has-detail' : ''}`}>
+      <h1 className="sr-only">{t('butler.routines.pageHeading')}</h1>
       <div className="butler-scheduled-master">
         <header className="butler-scheduled-master-toolbar">
-          <div role="tablist" aria-label="已安排任务状态">
+          <div role="tablist" aria-label={t('butler.routines.filterAria')}>
             {([
-              ['all', '全部'],
-              ['active', '已开启'],
-              ['paused', '已暂停'],
-            ] as const).map(([value, label]) => (
+              ['all', 'butler.routines.filterAll'],
+              ['active', 'butler.routines.filterActive'],
+              ['paused', 'butler.routines.filterPaused'],
+            ] as const).map(([value, labelKey]) => (
               <button key={value} type="button" role="tab" aria-selected={filter === value} onClick={() => setFilter(value)}>
-                {label}
+                {t(labelKey)}
               </button>
             ))}
           </div>
           <div ref={createMenuRef} className="butler-create-split">
-            <button type="button" aria-label="使用 Codex 创建已安排任务" onClick={() => void createWithCodex()}>
-              创建
+            <button type="button" aria-label={t('butler.routines.createWithCodexAria')} onClick={() => void createWithCodex()}>
+              {t('butler.routines.createSubmit')}
             </button>
-            <button type="button" aria-label="选择创建方式" aria-haspopup="menu" aria-expanded={createMenuOpen} onClick={() => setCreateMenuOpen((open) => !open)}>
+            <button type="button" aria-label={t('butler.routines.chooseCreateModeAria')} aria-haspopup="menu" aria-expanded={createMenuOpen} onClick={() => setCreateMenuOpen((open) => !open)}>
               <ChevronDown size={16} aria-hidden="true" />
             </button>
             {createMenuOpen ? (
-              <div role="menu" aria-label="创建方式" className="butler-create-menu">
+              <div role="menu" aria-label={t('butler.routines.createMenuAria')} className="butler-create-menu">
                 <button type="button" role="menuitem" onClick={() => void createWithCodex()}>
-                  <MessageCircle size={17} aria-hidden="true" />使用 Codex 创建
+                  <MessageCircle size={17} aria-hidden="true" />{t('butler.routines.createWithCodex')}
                 </button>
                 <button type="button" role="menuitem" onClick={() => openManualCreate()}>
-                  <Pencil size={17} aria-hidden="true" />手动设置
+                  <Pencil size={17} aria-hidden="true" />{t('butler.routines.manualSetup')}
                 </button>
               </div>
             ) : null}
@@ -282,22 +302,22 @@ export default function ButlerRoutines() {
 
         <label className="butler-scheduled-search">
           <Search size={18} aria-hidden="true" />
-          <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} aria-label="搜索已安排任务" placeholder="搜索已安排任务" />
+          <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t('butler.routines.searchAria')} placeholder={t('butler.routines.searchAria')} />
         </label>
 
         {nativeStatus === 'loading' ? (
-          <p className="butler-scheduled-native-status"><Loader2 size={13} className="animate-spin motion-reduce:animate-none" />正在读取 Codex 计划文件…</p>
+          <p className="butler-scheduled-native-status"><Loader2 size={13} className="animate-spin motion-reduce:animate-none" />{t('butler.routines.loadingNative')}</p>
         ) : null}
         {nativeError ? (
-          <p role="alert" className="butler-scheduled-native-error"><AlertCircle size={14} />Codex 计划文件读取失败：{nativeError}</p>
+          <p role="alert" className="butler-scheduled-native-error"><AlertCircle size={14} />{t('butler.routines.nativeError', { error: nativeError })}</p>
         ) : null}
 
         <div className="butler-scheduled-definition-list">
           {visibleRoutines.length === 0 ? (
             <div className="butler-scheduled-empty">
               <CirclePlay size={24} aria-hidden="true" />
-              <strong>{routines.length === 0 ? '还没有已安排任务' : '没有匹配的任务'}</strong>
-              <span>{routines.length === 0 ? '使用 Codex 创建，或从下面的建议开始。' : '换个关键词或状态试试。'}</span>
+              <strong>{routines.length === 0 ? t('butler.routines.emptyTitle') : t('butler.routines.noMatchesTitle')}</strong>
+              <span>{routines.length === 0 ? t('butler.routines.emptyDesc') : t('butler.routines.noMatchesDesc')}</span>
             </div>
           ) : visibleRoutines.map((routine) => {
             const running = runningIds.includes(routine.id);
@@ -306,7 +326,7 @@ export default function ButlerRoutines() {
               <button
                 key={routine.id}
                 type="button"
-                aria-label={`打开${routine.name}详情`}
+                aria-label={t('butler.routines.openDetailAria', { name: routine.name })}
                 aria-current={selectedId === routine.id ? 'true' : undefined}
                 onClick={() => selectRoutine(routine)}
                 className="butler-scheduled-definition"
@@ -316,24 +336,24 @@ export default function ButlerRoutines() {
                   : <CirclePlay size={18} aria-hidden="true" />}
                 <span>
                   <strong>{routine.name}</strong>
-                  <small>{scheduleLabel(routine)}</small>
+                  <small>{scheduleLabel(routine, t)}</small>
                 </span>
-                {unread ? <i aria-label="有未读结果" /> : null}
+                {unread ? <i aria-label={t('butler.routines.unreadResultAria')} /> : null}
               </button>
             );
           })}
         </div>
 
         {!normalizedQuery && filter === 'all' && suggestedTemplates.length > 0 ? (
-          <section aria-label="建议" className="butler-scheduled-suggestions">
-            <h2>建议</h2>
+          <section aria-label={t('butler.routines.suggestionsTitle')} className="butler-scheduled-suggestions">
+            <h2>{t('butler.routines.suggestionsTitle')}</h2>
             {suggestedTemplates.map((template) => (
-              <button key={template.id} type="button" onClick={() => openManualCreate(templateDraft(template, workspaceRoot))}>
+              <button key={template.id} type="button" onClick={() => openManualCreate(templateDraft(template, workspaceRoot, t))}>
                 <span className={`butler-suggestion-icon is-${template.category}`}><Bell size={18} aria-hidden="true" /></span>
                 <span>
-                  <strong>{template.title}</strong>
-                  <small>{triggerLabel(template.defaultTrigger)}</small>
-                  <p>{template.description}</p>
+                  <strong>{t(template.titleKey)}</strong>
+                  <small>{triggerLabel(template.defaultTrigger, t)}</small>
+                  <p>{t(template.descriptionKey)}</p>
                 </span>
                 <Plus size={17} aria-hidden="true" />
               </button>
@@ -343,7 +363,7 @@ export default function ButlerRoutines() {
       </div>
 
       {panelOpen ? (
-        <aside aria-label="已安排任务详情" className="butler-scheduled-detail-pane">
+        <aside aria-label={t('butler.routines.detailPaneAria')} className="butler-scheduled-detail-pane">
           {detailMode === 'create' ? (
             <ButlerRoutineCreateDialog key={draft?.templateId ?? 'manual'} draft={draft} embedded onClose={closePanel} />
           ) : selected && detailMode === 'edit' ? (
@@ -351,56 +371,77 @@ export default function ButlerRoutines() {
           ) : selected ? (
             <>
               <header className="butler-scheduled-detail-header">
-                <span>{selected.enabled ? '已开启' : '已暂停'}</span>
+                <span>{selected.enabled ? t('butler.routines.statusActive') : t('butler.routines.statusPaused')}</span>
                 <div>
                   <div ref={actionMenuRef} className="butler-scheduled-detail-menu">
-                    <button type="button" aria-label={`管理${selected.name}`} aria-haspopup="menu" aria-expanded={actionMenuOpen} onClick={() => setActionMenuOpen((open) => !open)}>
+                    <button type="button" aria-label={t('butler.routines.manageAria', { name: selected.name })} aria-haspopup="menu" aria-expanded={actionMenuOpen} onClick={() => setActionMenuOpen((open) => !open)}>
                       <MoreHorizontal size={18} aria-hidden="true" />
                     </button>
                     {actionMenuOpen ? (
                       <div role="menu">
-                        <button type="button" role="menuitem" onClick={() => { setActionMenuOpen(false); setDetailMode('edit'); }}><Pencil size={15} />编辑</button>
-                        <button type="button" role="menuitem" onClick={() => void toggleRoutine(selected)}>{selected.enabled ? <Pause size={15} /> : <Play size={15} />}{selected.enabled ? '暂停' : '恢复'}</button>
+                        <button type="button" role="menuitem" onClick={() => { setActionMenuOpen(false); setDetailMode('edit'); }}><Pencil size={15} />{t('common.edit')}</button>
+                        <button type="button" role="menuitem" onClick={() => void toggleRoutine(selected)}>{selected.enabled ? <Pause size={15} /> : <Play size={15} />}{selected.enabled ? t('butler.routines.pause') : t('butler.routines.resume')}</button>
                         {(selected.targetThreadId || selected.runs.some((run) => run.threadId)) ? (
-                          <button type="button" role="menuitem" onClick={() => void openRoutineThread(selected)}><ExternalLink size={15} />打开对话</button>
+                          <button type="button" role="menuitem" onClick={() => void openRoutineThread(selected)}><ExternalLink size={15} />{t('butler.routines.openConversation')}</button>
                         ) : null}
-                        <button type="button" role="menuitem" onClick={() => void deleteRoutine(selected)}><Trash2 size={15} />删除</button>
+                        <button type="button" role="menuitem" onClick={() => requestDeleteRoutine(selected)}><Trash2 size={15} />{t('common.delete')}</button>
                       </div>
                     ) : null}
                   </div>
-                  <button type="button" aria-label={`立即运行${selected.name}`} disabled={runningIds.includes(selected.id)} onClick={() => void runNow(selected)}>
+                  <button
+                    type="button"
+                    aria-label={t('butler.routines.dryRunAria', { name: selected.name })}
+                    title={t('butler.routines.dryRunTitle')}
+                    onClick={() => {
+                      const preview = dryRunRoutine(selected.id);
+                      toast.info(
+                        t('butler.routines.dryRunSummary', {
+                          status: preview.wouldRun ? t('butler.routines.dryRunReady') : preview.reason,
+                          policy: preview.notificationPreview.reason,
+                        }),
+                      );
+                    }}
+                  >
+                    <Bell size={16} aria-hidden="true" />
+                  </button>
+                  <button type="button" aria-label={t('butler.routines.runNowAria', { name: selected.name })} disabled={runningIds.includes(selected.id)} onClick={() => void runNow(selected)}>
                     {runningIds.includes(selected.id) ? <Loader2 size={18} className="animate-spin" /> : <CirclePlay size={18} />}
                   </button>
-                  <button type="button" aria-label="关闭已安排任务详情" onClick={closePanel}><X size={18} /></button>
+                  <button type="button" aria-label={t('butler.routines.closeDetailAria')} onClick={closePanel}><X size={18} /></button>
                 </div>
               </header>
               <h2>{selected.name}</h2>
-              <nav aria-label="已安排任务详情视图">
-                <button type="button" aria-current={detailMode === 'details' ? 'page' : undefined} onClick={() => setDetailMode('details')}>详情</button>
-                <button type="button" aria-current={detailMode === 'history' ? 'page' : undefined} onClick={() => setDetailMode('history')}>运行历史记录</button>
+              <nav aria-label={t('butler.routines.detailTabsAria')}>
+                <button type="button" aria-current={detailMode === 'details' ? 'page' : undefined} onClick={() => setDetailMode('details')}>{t('butler.routines.tabDetails')}</button>
+                <button type="button" aria-current={detailMode === 'history' ? 'page' : undefined} onClick={() => setDetailMode('history')}>{t('butler.routines.tabHistory')}</button>
               </nav>
 
               {detailMode === 'history' ? (
-                <section aria-label="运行历史记录" className="butler-scheduled-run-history">
+                <section aria-label={t('butler.routines.runHistoryAria')} className="butler-scheduled-run-history">
                   <header>
-                    <span>{selected.runs.filter((run) => !run.archived).length} 次运行</span>
+                    <span>{tp(selected.runs.filter((run) => !run.archived).length, 'butler.routines.runCountOne', 'butler.routines.runCountOther')}</span>
                     <div>
                       <button type="button" disabled={!unreadRuns.some((run) => run.routineId === selected.id)} onClick={() => selected.runs.forEach((run) => markRunRead(selected.id, run.id, true))}>
-                        <Check size={14} />全部标为已读
+                        <Check size={14} />{t('butler.routines.markAllRead')}
                       </button>
-                      <button type="button" onClick={() => archiveRuns(selected.id)}>归档</button>
+                      <button type="button" onClick={() => archiveRuns(selected.id)}>{t('butler.history.archive')}</button>
                     </div>
                   </header>
                   {selected.runs.filter((run) => !run.archived).length === 0 ? (
-                    <div className="butler-scheduled-history-empty"><History size={22} /><span>还没有运行记录</span></div>
+                    <div className="butler-scheduled-history-empty"><History size={22} /><span>{t('butler.routines.emptyHistory')}</span></div>
                   ) : selected.runs.filter((run) => !run.archived).map((run) => (
                     <details key={run.id} onToggle={(event) => { if (event.currentTarget.open) markRunRead(selected.id, run.id, true); }}>
                       <summary>
                         {run.status === 'ok' ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
                         <strong>{selected.name}</strong>
-                        <small>{projectName(selected.workspaceRoot)}</small>
-                        <time>{runTime(run.at)}</time>
-                        {!run.readAt ? <i aria-label="未读" /> : null}
+                        <small>{projectName(selected.workspaceRoot, t)}</small>
+                        {run.triggerReason ? (
+                          <span className="rounded-full bg-fill-1 px-2 py-0.5 text-2xs text-ink-2">
+                            {t(`butler.routines.triggerReason.${run.triggerReason}` as MessageKey)}
+                          </span>
+                        ) : null}
+                        <time>{runTime(run.at, locale)}</time>
+                        {!run.readAt ? <i aria-label={t('butler.routines.unreadAria')} /> : null}
                       </summary>
                       <div className="butler-routine-result butler-conversation-markdown">{renderMarkdownDoc(run.text)}</div>
                     </details>
@@ -408,22 +449,32 @@ export default function ButlerRoutines() {
                 </section>
               ) : (
                 <div className="butler-scheduled-detail-content">
-                  <section className="butler-scheduled-prompt"><p>{selected.prompt || (selected.skillName ? `使用 $${selected.skillName} 执行。` : '未提供任务说明。')}</p></section>
-                  <h3>详情</h3>
+                  <section className="butler-scheduled-prompt"><p>{selected.prompt || (selected.skillName ? t('butler.routines.skillPromptFallback', { skillName: selected.skillName }) : t('butler.routines.noPromptFallback'))}</p></section>
+                  <h3>{t('butler.routines.tabDetails')}</h3>
                   <dl>
-                    <div><dt>运行于</dt><dd>{selected.kind === 'heartbeat' ? '现有会话' : '新聊天'}</dd></div>
-                    <div><dt>项目</dt><dd>{projectName(selected.workspaceRoot)}</dd></div>
-                    <div><dt>模型</dt><dd>{selected.model || '跟随当前设置'}</dd></div>
-                    <div><dt>推理</dt><dd>{selected.reasoningEffort || '跟随当前设置'}</dd></div>
+                    <div><dt>{t('butler.routines.runTargetLabel')}</dt><dd>{selected.kind === 'heartbeat' ? t('butler.routines.kindHeartbeat') : t('butler.routines.runTargetNewChat')}</dd></div>
+                    <div><dt>{t('butler.routines.fieldProject')}</dt><dd>{projectName(selected.workspaceRoot, t)}</dd></div>
+                    <div><dt>{t('butler.routines.fieldModel')}</dt><dd>{selected.model || t('butler.routines.followCurrentSetting')}</dd></div>
+                    <div><dt>{t('butler.routines.fieldReasoning')}</dt><dd>{selected.reasoningEffort || t('butler.routines.followCurrentSetting')}</dd></div>
                   </dl>
-                  <h3>频率</h3>
-                  <dl><div><dt>重复</dt><dd>{scheduleLabel(selected)}</dd></div><div><dt>通知</dt><dd>{selected.notificationPolicy === 'failed_runs_only' ? '仅失败' : selected.notificationPolicy === 'important_updates' ? '仅重要更新' : '所有运行'}</dd></div></dl>
-                  <p className="butler-scheduled-file-note">任务定义来自 Codex 原生 automation.toml。</p>
+                  <h3>{t('butler.routines.frequencyHeading')}</h3>
+                  <dl><div><dt>{t('butler.routines.fieldRepeat')}</dt><dd>{scheduleLabel(selected, t)}</dd></div><div><dt>{t('butler.routines.fieldNotification')}</dt><dd>{selected.notificationPolicy === 'failed_runs_only' ? t('butler.routines.notifyFailedOnly') : selected.notificationPolicy === 'important_updates' ? t('butler.routines.notifyImportant') : selected.notificationPolicy === 'silent' ? t('butler.routines.notifySilent') : selected.notificationPolicy === 'digest_only' ? t('butler.routines.notifyDigestOnly') : t('butler.routines.notifyAllRuns')}{selected.quietHours ? ` (${selected.quietHours.start}–${selected.quietHours.end})` : ''}</dd></div></dl>
+                  <p className="butler-scheduled-file-note">{t('butler.routines.nativeFileNote')}</p>
                 </div>
               )}
             </>
           ) : null}
         </aside>
+      ) : null}
+      {pendingDeleteRoutine ? (
+        <ConfirmDialog
+          title={t('butler.routines.deleteDialogTitle')}
+          message={t('butler.routines.deleteConfirm', { name: pendingDeleteRoutine.name })}
+          confirmLabel={t('common.delete')}
+          danger
+          onConfirm={() => void confirmDeleteRoutine()}
+          onClose={() => setPendingDeleteRoutine(null)}
+        />
       ) : null}
     </section>
   );

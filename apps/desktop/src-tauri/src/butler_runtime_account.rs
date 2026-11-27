@@ -59,6 +59,14 @@ impl ButlerDb {
         Ok(context.clone())
     }
 
+    pub(super) fn ready_connection(&self) -> Result<Arc<Mutex<Connection>>, String> {
+        let selection = self.selection.lock().map_err(|_| "无法读取账号选择状态")?;
+        if selection.account_scope.is_some() && !selection.ready {
+            return Err("账号正在切换，请稍后重试".into());
+        }
+        Ok(self.connection())
+    }
+
     pub fn runtime_account_context(&self) -> Result<RuntimeAccountContext, String> {
         let selection = self.selection.lock().map_err(|_| "无法读取账号选择状态")?;
         if !selection.ready {

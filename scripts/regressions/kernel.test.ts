@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { KernelRegistry, kernelRegistry } from '../../apps/web/src/kernel/registry';
 import { parseManifest, type AppPermission } from '../../apps/web/src/kernel/manifest';
 import { PermissionGate } from '../../apps/web/src/kernel/permission';
@@ -170,7 +172,9 @@ test('/ai 命令注册到统一派发器，并把任务交给当前 AI 运行时
 
   assert.equal(typeof runButlerCommand, 'function');
   assert.match(runtime, /name: 'ai'/);
-  assert.match(runtime, /description: '打开 AI 管家，可直接跟上问题'/);
+  assert.match(runtime, /description: t\('settings\.kernel\.command\.butlerDesc'\)/);
+  assert.equal(zhCN['settings.kernel.command.butlerDesc'], '打开 AI 管家，可直接跟上问题');
+  assert.ok(enUS['settings.kernel.command.butlerDesc'].length > 0);
   assert.match(runtime, /run: runButlerCommand/);
   assert.match(butler, /import \{ handoffToButlerTask \} from '\.\.\/lib\/butlerTaskHandoff';/);
   assert.match(butler, /useUI\.getState\(\)\.openButlerConversation\(\);/);

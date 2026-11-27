@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
 use super::migrate;
@@ -23,112 +23,13 @@ pub(super) fn validate_account_scope(scope: &str) -> Result<(), String> {
 
 pub(super) fn open_account_database(directory: &Path, scope: &str) -> Result<Connection, String> {
     validate_account_scope(scope)?;
-    let legacy_path = directory.join("butler.db");
-    if !legacy_path
-        .try_exists()
-        .map_err(|error| error.to_string())?
-    {
-        return select_home_database(directory, scope);
-    }
-
-    // v0.44.18 used one database for every account. Keep it read-only until
-    // the database itself identifies an owner. Browser sign-in history is not row ownership.
-    let legacy = Connection::open_with_flags(&legacy_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| format!("无法核对旧待办库：{error}"))?;
-    let has_owner: bool = legacy.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='database_account_owner')",
-        [], |row| row.get(0),
-    ).map_err(|error| error.to_string())?;
-    if has_owner {
-        let owner: Option<String> = legacy
-            .query_row(
-                "SELECT scope FROM database_account_owner WHERE id=1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        if let Some(owner) = owner {
-            drop(legacy);
-            return if owner == scope {
-                open(&legacy_path)
-            } else {
-                select_home_database(directory, scope)
-            };
-        }
-    }
-    let mut selected = select_home_database(directory, scope)?;
-    restore_owned_todos(&legacy, &mut selected, scope)?;
-    Ok(selected)
-}
-
-fn restore_owned_todos(
-    legacy: &Connection,
-    selected: &mut Connection,
-    scope: &str,
-) -> Result<(), String> {
-    let Some((user, server)) = scope.split_once('@') else {
-        return Ok(());
-    };
-    if scope == "local-user@local"
-        || user.is_empty()
-        || server.is_empty()
-        || user == "legacy-unassigned"
-        || server == "legacy-unassigned"
-    {
-        return Ok(());
-    }
-    let version: i64 = legacy
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(|error| error.to_string())?;
-    if !(1..=super::MAX_COMPATIBLE_SCHEMA_VERSION).contains(&version) {
-        return Ok(());
-    }
-    let has_row_owners: bool = legacy.query_row(
-        "SELECT COUNT(*)=2 FROM pragma_table_info('todos') WHERE name IN ('user_id','server_id')",
-        [], |row| row.get(0),
-    ).map_err(|error| error.to_string())?;
-    if !has_row_owners {
-        return Ok(());
-    }
-
-    let sql = format!(
-        "SELECT {} FROM todos WHERE user_id=?1 AND server_id=?2",
-        super::TODO_COLUMNS
-    );
-    let mut statement = legacy.prepare(&sql).map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map(params![user, server], super::row_to_todo)
-        .map_err(|error| error.to_string())?;
-    let transaction = selected
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute_batch("CREATE TABLE IF NOT EXISTS restored_legacy_todos(id TEXT PRIMARY KEY)")
-        .map_err(|error| error.to_string())?;
-    for row in rows {
-        let todo = row.map_err(|error| error.to_string())?;
-        let fresh = transaction
-            .execute(
-                "INSERT OR IGNORE INTO restored_legacy_todos(id) VALUES (?1)",
-                [&todo.id],
-            )
-            .map_err(|error| error.to_string())?;
-        if fresh != 0 && super::get_todo(&transaction, &todo.id)?.is_none() {
-            super::insert_todo(&transaction, &todo, "无法恢复旧账号待办")?;
-        }
-    }
-    transaction.commit().map_err(|error| error.to_string())
-}
-
-fn select_home_database(directory: &Path, scope: &str) -> Result<Connection, String> {
     let scoped_path = directory.join(format!("butler-{:x}.db", Sha256::digest(scope.as_bytes())));
-    let mut home = open(&directory.join("butler-home.db"))?;
-    home
+    let mut legacy = open(&directory.join("butler.db"))?;
+    legacy
         .execute_batch("CREATE TABLE IF NOT EXISTS database_account_owner (id INTEGER PRIMARY KEY CHECK(id = 1), scope TEXT NOT NULL);")
         .map_err(|e| format!("无法读取数据库归属：{e}"))?;
-    let transaction = home
-        .transaction_with_behavior(TransactionBehavior::Immediate)
+    let transaction = legacy
+        .transaction()
         .map_err(|e| format!("无法核对数据库归属：{e}"))?;
     let owner: Option<String> = transaction
         .query_row(
@@ -157,14 +58,14 @@ fn select_home_database(directory: &Path, scope: &str) -> Result<Connection, Str
                 |row| row.get::<_, bool>(0),
             )
             .map_err(|error| format!("无法核对原生创建归属：{error}"))?;
-    let use_home = owner.as_deref() == Some(scope)
-        || (owner.is_none() && !scoped_path.exists())
+    let use_legacy = owner.as_deref() == Some(scope)
+        || owner.is_none()
         || (owner.as_deref() == Some("local-user@local")
             && !native_owned
             && !native_start_owned
             && scope != "local-user@local"
             && !scoped_path.exists());
-    if use_home {
+    if use_legacy {
         transaction
             .execute("INSERT INTO database_account_owner (id, scope) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET scope = excluded.scope", params![scope])
             .map_err(|e| format!("无法记录数据库归属：{e}"))?;
@@ -172,8 +73,8 @@ fn select_home_database(directory: &Path, scope: &str) -> Result<Connection, Str
     transaction
         .commit()
         .map_err(|e| format!("无法保存数据库归属：{e}"))?;
-    if use_home {
-        Ok(home)
+    if use_legacy {
+        Ok(legacy)
     } else {
         open(&scoped_path)
     }
@@ -182,115 +83,6 @@ fn select_home_database(directory: &Path, scope: &str) -> Result<Connection, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn upgrade_preserves_unassigned_v1_todos_and_separates_new_work() {
-        let directory =
-            std::env::temp_dir().join(format!("rocketx-v1-account-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("butler.db");
-        let legacy = Connection::open(&path).unwrap();
-        legacy.execute_batch(super::super::SCHEMA_V1).unwrap();
-        legacy.execute_batch("PRAGMA user_version=1; INSERT INTO todos(id,title,created_at,updated_at) VALUES('old','fixture',1,1)").unwrap();
-        drop(legacy);
-        let original = std::fs::read(&path).unwrap();
-        let db = super::super::init_db(directory.clone()).unwrap();
-        assert!(
-            super::super::get_todo(&db.connection().lock().unwrap(), "old")
-                .unwrap()
-                .is_none()
-        );
-        for scope in [
-            "local-user@local",
-            "A@https://chat",
-            "B@https://chat",
-            "A@https://chat",
-        ] {
-            let active = open_account_database(&directory, scope).unwrap();
-            assert!(super::super::get_todo(&active, "old").unwrap().is_none());
-        }
-        drop(db);
-        assert_eq!(std::fs::read(&path).unwrap(), original);
-        assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn existing_database_owner_keeps_the_original_v1_database() {
-        let directory =
-            std::env::temp_dir().join(format!("rocketx-marked-v1-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let path = directory.join("butler.db");
-        let legacy = Connection::open(&path).unwrap();
-        legacy.execute_batch(super::super::SCHEMA_V1).unwrap();
-        legacy
-            .execute_batch(
-                "PRAGMA user_version=1;
-            CREATE TABLE database_account_owner(id INTEGER PRIMARY KEY,scope TEXT NOT NULL);
-            INSERT INTO database_account_owner VALUES(1,'A@chat');
-            INSERT INTO todos(id,title,created_at,updated_at) VALUES('known','fixture',1,2)",
-            )
-            .unwrap();
-        drop(legacy);
-        for scope in [
-            "local-user@local",
-            "B@chat",
-            "A@chat",
-            "A@elsewhere",
-            "A@chat",
-        ] {
-            let active = open_account_database(&directory, scope).unwrap();
-            assert_eq!(
-                super::super::get_todo(&active, "known").unwrap().is_some(),
-                scope == "A@chat"
-            );
-        }
-        assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn upgrade_restores_only_explicitly_owned_rows_and_never_resurrects_deletions() {
-        let directory =
-            std::env::temp_dir().join(format!("rocketx-v2-account-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
-        let legacy = Connection::open(directory.join("butler.db")).unwrap();
-        legacy.execute_batch(super::super::SCHEMA_V1).unwrap();
-        legacy.execute_batch("PRAGMA user_version=2;
-            ALTER TABLE todos ADD COLUMN server_id TEXT NOT NULL DEFAULT 'legacy-unassigned';
-            ALTER TABLE todos ADD COLUMN user_id TEXT NOT NULL DEFAULT 'legacy-unassigned';
-            INSERT INTO todos(id,title,created_at,updated_at,user_id,server_id) VALUES
-            ('tagged','mine',1,2,'A','https://chat'),('other','other server',1,2,'A','https://elsewhere'),
-            ('other-user','other user',1,2,'B','https://chat'),
-            ('none','unknown',1,2,'legacy-unassigned','legacy-unassigned')").unwrap();
-        drop(legacy);
-        let local = open_account_database(&directory, "local-user@local").unwrap();
-        assert!(super::super::get_todo(&local, "tagged").unwrap().is_none());
-        drop(local);
-        let a = open_account_database(&directory, "A@https://chat").unwrap();
-        assert_eq!(
-            super::super::get_todo(&a, "tagged")
-                .unwrap()
-                .unwrap()
-                .updated_at,
-            2
-        );
-        assert!(super::super::get_todo(&a, "other").unwrap().is_none());
-        assert!(super::super::get_todo(&a, "other-user").unwrap().is_none());
-        assert!(super::super::get_todo(&a, "none").unwrap().is_none());
-        a.execute("DELETE FROM todos WHERE id='tagged'", [])
-            .unwrap();
-        drop(a);
-        let again = open_account_database(&directory, "A@https://chat").unwrap();
-        assert!(super::super::get_todo(&again, "tagged").unwrap().is_none());
-        drop(again);
-        let b = open_account_database(&directory, "A@https://elsewhere").unwrap();
-        assert!(super::super::get_todo(&b, "other").unwrap().is_some());
-        assert!(super::super::get_todo(&b, "tagged").unwrap().is_none());
-        drop(b);
-        assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
-        std::fs::remove_dir_all(directory).unwrap();
-    }
 
     #[test]
     fn pending_native_start_without_session_keeps_original_local_account_database() {

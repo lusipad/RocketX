@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   ensureAccountScope,
   LOCAL_ACCOUNT_OWNER,
@@ -36,25 +38,6 @@ class MemoryLocalStorage {
     this.map.clear();
   }
 }
-
-test('升级保留无归属旧待办，已按账号归档的旧待办仍可恢复', () => {
-  const previous = globalThis.localStorage;
-  const storage = new MemoryLocalStorage();
-  (globalThis as { localStorage?: unknown }).localStorage = storage;
-  try {
-    storage.setItem('rcx-todos', '[{"id":"unassigned"}]');
-    storage.setItem('rcx-unassigned-todos', 'earlier-backup');
-    storage.setItem('rcx-todos#A@same-origin', '[{"id":"owned"}]');
-    assert.equal(ensureAccountScope(LOCAL_MODE_USER_ID), 'switched');
-    assert.equal(storage.getItem('rcx-todos'), null);
-    assert.equal(storage.getItem('rcx-unassigned-todos'), 'earlier-backup');
-    assert.equal(storage.getItem('rcx-unassigned-todos-1'), '[{"id":"unassigned"}]');
-    assert.equal(ensureAccountScope('A'), 'switched');
-    assert.equal(storage.getItem('rcx-todos'), '[{"id":"owned"}]');
-  } finally {
-    (globalThis as { localStorage?: unknown }).localStorage = previous;
-  }
-});
 
 test('未登录 Rocket.Chat 时 resume 默认直通进入本地工作区，且首次登录真实账号时无损继承本地项目数据', async () => {
   const prevStorage = (globalThis as { localStorage?: unknown }).localStorage;
@@ -114,15 +97,23 @@ test('主工作区默认免登录直开：仅消息/通讯录按需引导连接 
   assert.match(main, /!hasPersistedModuleSelection\(\)/);
   assert.match(mainPage, /localMode \? <LoginPage embedded \/>/);
   assert.match(login, /embedded = false/);
-  assert.match(login, /使用 AI 管家/);
-  assert.match(login, /暂不连接 Rocket\.Chat，本地使用/);
-  assert.match(firstRun, /暂不连接，直接本地使用/);
+  assert.match(login, /t\('auth\.login\.useButler'\)/);
+  assert.equal(zhCN['auth.login.useButler'], '使用 AI 管家');
+  assert.ok(enUS['auth.login.useButler'].length > 0);
+  assert.match(login, /t\('auth\.login\.useLocally'\)/);
+  assert.equal(zhCN['auth.login.useLocally'], '暂不连接 Rocket.Chat，本地使用');
+  assert.ok(enUS['auth.login.useLocally'].length > 0);
+  assert.match(firstRun, /t\('auth\.firstRun\.useLocally'\)/);
+  assert.equal(zhCN['auth.firstRun.useLocally'], '暂不连接，直接本地使用');
+  assert.ok(enUS['auth.firstRun.useLocally'].length > 0);
   assert.match(auth, /activateLocalWorkspace/);
   assert.match(auth, /enterLocalMode:/);
   assert.match(auth, /exitLocalMode:/);
   assert.match(chat, /if \(useAuth\.getState\(\)\.localMode\)/);
   assert.match(prefs, /if \(useAuth\.getState\(\)\.localMode\)/);
-  assert.match(navRail, /连接 Rocket\.Chat/);
+  assert.match(navRail, /t\('nav\.rail\.connectRocketChat'\)/);
+  assert.equal(zhCN['nav.rail.connectRocketChat'], '连接 Rocket.Chat');
+  assert.ok(enUS['nav.rail.connectRocketChat'].length > 0);
 });
 
 test('AI 管家内置统一看板入口与右侧 LobeHub 式任务工作台 Portal 抽屉，且看板不依赖特定 AI 引擎', () => {
@@ -134,9 +125,13 @@ test('AI 管家内置统一看板入口与右侧 LobeHub 式任务工作台 Port
   assert.match(butlerPage, /\{activeView === 'kanban' \? \(/);
   assert.match(butlerPage, /<WorkKanbanBoard initialWork=/);
   assert.match(butlerHistory, /setButlerView\('kanban'\)/);
-  assert.match(butlerHistory, /我的工作/);
+  assert.match(butlerHistory, /t\('butler\.history\.myWork'\)/);
+  assert.equal(zhCN['butler.history.myWork'], '我的工作');
+  assert.ok(enUS['butler.history.myWork'].length > 0);
   assert.match(butlerConv, /<ButlerWorkPortalDock/);
-  assert.match(butlerConv, /打开任务工作台/);
+  assert.match(butlerConv, /butler\.conversation\.openPortalAria/);
+  assert.equal(zhCN['butler.conversation.openPortalAria'], '打开任务工作台');
+  assert.ok(enUS['butler.conversation.openPortalAria'].length > 0);
   assert.match(portalDock, /<WorkCardPortal/);
 });
 
@@ -176,7 +171,11 @@ test('现代 Butler 4 栏布局与统一工作台 Portal（380px/340-560px 拖�
   assert.match(butlerConv, /GPT-6\.1 Sol/);
   assert.match(butlerConv, /Gemini 4 Argon/);
   assert.match(butlerConv, /Qwen 3 Coder/);
-  assert.match(butlerConv, /'极简'/);
-  assert.match(butlerConv, /'极致'/);
+  assert.match(butlerConv, /minimal: 'butler\.conversation\.effort\.minimal'/);
+  assert.equal(zhCN['butler.conversation.effort.minimal'], '极简');
+  assert.ok(enUS['butler.conversation.effort.minimal'].length > 0);
+  assert.match(butlerConv, /ultra: 'butler\.conversation\.effort\.ultra'/);
+  assert.equal(zhCN['butler.conversation.effort.ultra'], '极致');
+  assert.ok(enUS['butler.conversation.effort.ultra'].length > 0);
   assert.match(onboarding, /gemini-4-argon/);
 });

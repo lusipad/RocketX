@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { EXTENSION_POINTS, type ContributionFor, type ExtensionPoint } from './types';
+import { t } from '../i18n';
 
 type Listener = () => void;
 
@@ -38,13 +39,15 @@ export class KernelRegistry {
     point: P,
     contribution: ContributionFor<P>,
   ): () => void {
-    if (!appId.trim()) throw new Error('appId 不能为空');
-    if (!contribution.id?.trim()) throw new Error(`${point} contribution.id 不能为空`);
+    if (!appId.trim()) throw new Error(t('settings.kernel.registry.appIdRequired'));
+    if (!contribution.id?.trim()) {
+      throw new Error(t('settings.kernel.registry.contributionIdRequired', { point }));
+    }
     const bucket = this.entries.get(point)!;
     const key = contributionKey(point, contribution);
     const existing = bucket.get(key);
     if (existing) {
-      throw new Error(`${key} 已由 ${existing.appId} 注册`);
+      throw new Error(t('settings.kernel.registry.alreadyRegistered', { key, appId: existing.appId }));
     }
     bucket.set(key, { appId, contribution });
     this.changed();

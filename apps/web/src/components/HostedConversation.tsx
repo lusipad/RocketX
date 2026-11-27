@@ -6,6 +6,7 @@ import { useStickToBottom } from '../lib/stickToBottom';
 import type { CodexWorkspaceMessage } from '../stores/codexWorkspace';
 import { useSharedAgent } from '../stores/sharedAgent';
 import ButlerSources from './ButlerSources';
+import { useT } from '../i18n';
 import { CodexGeneratedImages, CodexImageAttachments } from './CodexImagePicker';
 
 export type HostedTranscriptStatus = 'idle' | 'loading' | 'ready' | 'remote' | 'error';
@@ -135,6 +136,7 @@ export function HostedConversationTranscript({
   onRefresh: () => void;
   onOpenRoom?: () => void;
 }) {
+  const t = useT();
   const backendName = session.backend === 'deepseek' ? 'DeepSeek' : 'Codex';
   const active = ['starting', 'running', 'waiting-approval'].includes(session.status);
   const { scrollRef, onScroll } = useStickToBottom([session.key, messages]);
@@ -146,34 +148,34 @@ export function HostedConversationTranscript({
           <div className="codex-native-landing" role="status">
             <Loader2 size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
             <p>{session.status === 'starting'
-              ? `正在启动 ${backendName} Harness 会话…`
-              : `正在读取 ${backendName} Harness 会话…`}</p>
+              ? t('agent.hostedConv.startingSession', { backend: backendName })
+              : t('agent.hostedConv.loadingSession', { backend: backendName })}</p>
           </div>
         ) : status === 'remote' ? (
           <div className="codex-native-landing">
             <Bot size={22} aria-hidden="true" />
-            <h2>{session.status === 'interrupted' ? '宿主会话当前不可用' : '会话在宿主设备上运行'}</h2>
+            <h2>{session.status === 'interrupted' ? t('agent.hostedConv.unavailableTitle') : t('agent.hostedConv.runningOnHostTitle')}</h2>
             <p>{session.status === 'interrupted'
-              ? `@${session.remote?.hostUsername} 的宿主租约已中断或过期；打开房间可查看已共享结果，并在托管设置中接管。`
-              : `当前设备不能直接读取 @${session.remote?.hostUsername} 本机的 Harness 历史；打开房间可以查看已经共享的结果。`}</p>
+              ? t('agent.hostedConv.interruptedDesc', { username: session.remote?.hostUsername ?? '' })
+              : t('agent.hostedConv.otherDeviceDesc', { username: session.remote?.hostUsername ?? '' })}</p>
             {onOpenRoom ? (
               <button type="button" onClick={onOpenRoom}>
-                <ExternalLink size={14} aria-hidden="true" /> 打开房间
+                <ExternalLink size={14} aria-hidden="true" /> {t('agent.hostedConv.openRoom')}
               </button>
             ) : null}
           </div>
         ) : status === 'error' ? (
           <div className="codex-native-landing is-error" role="alert">
             <Bot size={22} aria-hidden="true" />
-            <h2>Harness 历史读取失败</h2>
+            <h2>{t('agent.hostedConv.readFailedTitle')}</h2>
             <p>{error}</p>
             <div>
               <button type="button" onClick={onRefresh}>
-                <RefreshCw size={14} aria-hidden="true" /> 重试
+                <RefreshCw size={14} aria-hidden="true" /> {t('common.retry')}
               </button>
               {onOpenRoom ? (
                 <button type="button" onClick={onOpenRoom}>
-                  <ExternalLink size={14} aria-hidden="true" /> 打开房间
+                  <ExternalLink size={14} aria-hidden="true" /> {t('agent.hostedConv.openRoom')}
                 </button>
               ) : null}
             </div>
@@ -181,8 +183,8 @@ export function HostedConversationTranscript({
         ) : messages.length === 0 ? (
           <div className="codex-native-landing">
             <Bot size={22} aria-hidden="true" />
-            <h2>Harness 会话还没有对话内容</h2>
-            <p>房间中的下一条 @ai 指令会继续写入这条托管 session。</p>
+            <h2>{t('agent.hostedConv.emptyTitle')}</h2>
+            <p>{t('agent.hostedConv.emptyDesc')}</p>
           </div>
         ) : (
           <>
@@ -192,7 +194,7 @@ export function HostedConversationTranscript({
                 data-speaker={entry.role}
                 className={`codex-native-message${entry.pending ? ' is-streaming' : ''}`}
               >
-                <span>{entry.role === 'assistant' ? backendName : entry.speaker || '房间成员'}</span>
+                <span>{entry.role === 'assistant' ? backendName : entry.speaker || t('agent.hostedConv.memberSpeaker')}</span>
                 <div className="butler-conversation-markdown">
                   {entry.text
                     ? entry.role === 'assistant' && !entry.pending
@@ -213,7 +215,7 @@ export function HostedConversationTranscript({
                 <span>{backendName}</span>
                 <div className="flex items-center gap-2 text-ink-3">
                   <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  正在处理房间任务…
+                  {t('agent.hostedConv.workingOnRoom')}
                 </div>
               </article>
             ) : null}

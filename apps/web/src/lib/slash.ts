@@ -1,4 +1,5 @@
 import type { RcSlashCommand } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { COMMAND_INFO, clientCommandInfo } from './clientCommands';
 
 /**
@@ -45,8 +46,6 @@ export function findCommand(
  * 说明文案统一在 lib/clientCommands.ts 的 COMMAND_INFO 里维护；服务端列表里出现
  * 词典没覆盖的命令时，先挡掉 i18n 键名，可读的英文描述原样兜底，其余标为服务器命令。
  */
-const FALLBACK_DESC = '服务器提供的命令';
-
 /** 看着像 i18n 键名吗（Slash_Shrug_Description / Remove_someone_from_room） */
 function looksLikeI18nKey(s: string): boolean {
   return /^[A-Za-z][A-Za-z0-9]*(_[A-Za-z0-9]+)+$/.test(s);
@@ -56,7 +55,7 @@ export function commandDesc(cmd: RcSlashCommand): string {
   const info = clientCommandInfo(cmd.command);
   if (info) return info.desc;
   const raw = cmd.description ?? '';
-  if (!raw || looksLikeI18nKey(raw)) return FALLBACK_DESC;
+  if (!raw || looksLikeI18nKey(raw)) return t('chat.command.serverProvidedFallback');
   return raw;
 }
 

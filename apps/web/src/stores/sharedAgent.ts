@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, isTauriRuntime, rest } from '../lib/client';
 import { toSendableMessageChunks } from '../lib/messageChunks';
@@ -186,7 +187,7 @@ function controllerIdentity(session: AgentSession): string {
 
 function hostedUserTurn(text: string): { text: string; speaker?: string } {
   const request = text.match(/<rocket_chat_user_request>\s*([\s\S]*?)\s*<\/rocket_chat_user_request>/u)?.[1]?.trim();
-  const speaker = text.match(/^触发者:\s*(.+?)\s+\([^)]+\)\s*$/mu)?.[1]?.trim();
+  const speaker = text.match(/^(?:触发者|Triggered by):\s*(.+?)\s+\([^)]+\)\s*$/mu)?.[1]?.trim();
   return { text: request || text, ...(speaker ? { speaker } : {}) };
 }
 
@@ -269,7 +270,7 @@ function id(prefix: string): string {
 
 function actor() {
   const user = useAuth.getState().user;
-  if (!user) throw new Error('需要先登录 Rocket.Chat');
+  if (!user) throw new Error(t('agent.shared.loginRequired'));
   return { userId: user._id, deviceId: agentDeviceId() };
 }
 
@@ -338,7 +339,7 @@ function runtimeSelection(
   )
     ?? catalog.models.find((item) => item.isDefault)
     ?? catalog.models[0];
-  if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
+  if (!model) throw new Error(t('agent.codexAutomation.noModels'));
   const requestedEffort = session?.runtimeEffort;
   const effort = requestedEffort
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
@@ -452,12 +453,12 @@ async function sendAgentReply(session: AgentSession, text: string): Promise<void
           botDelivered = true;
           continue;
         }
-        if (botDelivered) throw new Error('Bot 发送在分段中途失败，已停止本轮回复');
+        if (botDelivered) throw new Error(t('agent.shared.botChunkFailed'));
         useHostFallback = true;
       } catch (error) {
         if (botDelivered) throw error;
         useHostFallback = true;
-        trace(session.tmid, 'warning', `Bot 发送失败，已由宿主代发：${error instanceof Error ? error.message : String(error)}`);
+        trace(session.tmid, 'warning', t('agent.shared.botFallbackSent', { error: error instanceof Error ? error.message : String(error) }));
       }
     }
     const sent = await useChat.getState().send(chunk, {
@@ -476,7 +477,7 @@ async function sendAgentReply(session: AgentSession, text: string): Promise<void
         typeof sent === 'object' &&
         'reason' in sent &&
         typeof sent.reason === 'string'
-      ) ? sent.reason : '消息发送失败';
+      ) ? sent.reason : t('agent.shared.sendFailed');
       throw new Error(detail);
     }
   }
@@ -505,7 +506,7 @@ function nameCodexThread(appServer: SharedAgentController, session: AgentSession
     ? `#${session.workItem.id} ${session.workItem.title}`
     : room?.fname || room?.name || session.environmentName;
   void appServer
-    .renameThread(session.codexThreadId, rocketxThreadName('托管', detail))
+    .renameThread(session.codexThreadId, rocketxThreadName(t('agent.shared.threadScopeHosted'), detail))
     .catch(() => undefined);
 }
 
@@ -603,11 +604,11 @@ async function onServerRequest(tmid: string, request: {
   policy: ServerRequestPolicy | 'unknown';
 }): Promise<unknown> {
   const session = useSharedAgent.getState().sessions[tmid];
-  if (!session) throw new Error('请求不属于活跃的 RocketX Agent 会话');
+  if (!session) throw new Error(t('agent.shared.notActiveSession'));
   const params = recordParams(request.params);
-  if (request.policy === 'unknown') throw new Error('未知服务端请求已被安全拒绝');
+  if (request.policy === 'unknown') throw new Error(t('agent.shared.unknownRequestRejected'));
   if (request.policy === 'safe-reject' || request.policy === 'dynamic-tool') {
-    throw new Error('该服务端请求在 RocketX 共享会话中默认禁用');
+    throw new Error(t('agent.shared.requestDisabledInShared'));
   }
   if (request.policy === 'host-input' && isButlerErrandInputMethod(request.method)) {
     const inputId = id('input');
@@ -621,7 +622,7 @@ async function onServerRequest(tmid: string, request: {
     };
     useSharedAgent.setState((state) => ({ inputs: [...state.inputs, input] }));
     updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
-    trace(session.tmid, 'tool', `等待宿主输入：${request.method}`);
+    trace(session.tmid, 'tool', t('agent.shared.waitingHostInput', { method: request.method }));
     return new Promise((resolve, reject) => {
       inputWaiters.set(scopedInputKey(session.tmid, inputId), { tmid: session.tmid, resolve, reject });
     });
@@ -633,7 +634,7 @@ async function onServerRequest(tmid: string, request: {
     'execCommandApproval',
     'applyPatchApproval',
   ]);
-  if (!actionable.has(request.method)) throw new Error('该请求类型尚无安全的共享审批表单');
+  if (!actionable.has(request.method)) throw new Error(t('agent.shared.noApprovalForm'));
   const approvalId = id('approval');
   const trackedFileChanges =
     request.method === 'item/fileChange/requestApproval' && typeof params.itemId === 'string'
@@ -647,7 +648,7 @@ async function onServerRequest(tmid: string, request: {
     !fileChanges &&
     typeof params.grantRoot !== 'string'
   ) {
-    throw new Error('文件变更请求缺少可供宿主核验的路径');
+    throw new Error(t('agent.shared.missingFilePaths'));
   }
   const approval: AgentApproval = {
     id: approvalId,
@@ -658,7 +659,7 @@ async function onServerRequest(tmid: string, request: {
   };
   useSharedAgent.setState((state) => ({ approvals: [...state.approvals, approval] }));
   updateSession({ ...session, status: 'waiting-approval', updatedAt: Date.now() });
-  trace(session.tmid, 'tool', `等待宿主审批：${request.method}`);
+  trace(session.tmid, 'tool', t('agent.shared.waitingHostApproval', { method: request.method }));
   return new Promise((resolve, reject) =>
     approvalWaiters.set(scopedApprovalKey(session.tmid, approvalId), { tmid: session.tmid, resolve, reject }),
   );
@@ -677,7 +678,7 @@ function onNotification(tmid: string, method: string, paramsValue: unknown): voi
     const turn = recordParams(params.turn);
     const turnId = typeof turn.id === 'string' ? turn.id : undefined;
     updateSession({ ...session, status: 'running', activeTurnId: turnId, updatedAt: Date.now() });
-    trace(session.tmid, 'status', 'Codex 正在处理指令');
+    trace(session.tmid, 'status', t('agent.shared.codexProcessing'));
   } else if (method === 'turn/completed') {
     const turn = recordParams(params.turn);
     const turnId = typeof turn.id === 'string' ? turn.id : '';
@@ -697,7 +698,7 @@ function onNotification(tmid: string, method: string, paramsValue: unknown): voi
         fileChangePaths.delete(scopedFileChangeKey(tmid, item.id));
       }
     }
-    trace(session.tmid, 'tool', `${method === 'item/started' ? '开始' : '完成'}：${type}`);
+    trace(session.tmid, 'tool', t('agent.shared.stepTrace', { verb: method === 'item/started' ? t('agent.shared.stepStarted') : t('agent.shared.stepCompleted'), type }));
   } else if (method === 'warning' || method === 'error') {
     trace(session.tmid, method === 'error' ? 'error' : 'warning', JSON.stringify(params).slice(0, 1_000));
   }
@@ -711,10 +712,10 @@ async function completeTurn(session: AgentSession, turnId: string, status: strin
   try {
     if (text) {
       const output = redactAgentOutput(text);
-      const prefix = output.redacted > 0 ? `🤖 Codex（已脱敏 ${output.redacted} 处）\n` : '🤖 Codex\n';
+      const prefix = output.redacted > 0 ? t('agent.shared.codexRedactedPrefix', { count: output.redacted }) : '🤖 Codex\n';
       await sendAgentReply(session, `${prefix}${output.text}`);
     } else if (status !== 'completed') {
-      await sendAgentReply(session, `🤖 Codex 本轮未完成（${status}）`);
+      await sendAgentReply(session, t('agent.shared.codexIncomplete', { status }));
     }
     const current = useSharedAgent.getState().sessions[session.tmid] ?? session;
     if (current.status !== 'ended') {
@@ -726,7 +727,7 @@ async function completeTurn(session: AgentSession, turnId: string, status: strin
         updatedAt: Date.now(),
       });
     }
-    trace(session.tmid, 'status', `本轮结束：${status}`);
+    trace(session.tmid, 'status', t('agent.shared.turnEnded', { status }));
     turnWaiters.get(turnKey)?.resolve();
   } catch (error) {
     turnWaiters.get(turnKey)?.reject(error instanceof Error ? error : new Error(String(error)));
@@ -791,7 +792,7 @@ function onInterrupted(tmid: string, error: Error): void {
 async function ensureController(
   session: AgentSession,
 ): Promise<{ controller: SharedAgentController; catalog: CodexCatalog }> {
-  if (!isTauriRuntime()) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
+  if (!isTauriRuntime()) throw new Error(t('agent.shared.desktopOnly'));
   const identity = controllerIdentity(session);
   const current = controllers.get(session.tmid);
   if (current && controllerIdentities.get(session.tmid) === identity) {
@@ -872,7 +873,7 @@ async function loadContextMessages(session: AgentSession, command: RcMessage): P
     try {
       for (const message of await rest.getHistory(command.rid, type, 100)) messages.set(message._id, message);
     } catch (error) {
-      trace(session.tmid, 'warning', `讨论上下文加载不完整：${error instanceof Error ? error.message : String(error)}`);
+      trace(session.tmid, 'warning', t('agent.shared.discussionContextIncomplete', { error: error instanceof Error ? error.message : String(error) }));
     }
     return [...messages.values()].sort((left, right) => tsMs(left.ts) - tsMs(right.ts));
   }
@@ -890,7 +891,7 @@ async function loadContextMessages(session: AgentSession, command: RcMessage): P
       trace(
         command.tmid ?? command._id,
         'warning',
-        `话题上下文加载不完整：${error instanceof Error ? error.message : String(error)}`,
+        t('agent.shared.threadContextIncomplete', { error: error instanceof Error ? error.message : String(error) }),
       );
     }
   }
@@ -937,7 +938,7 @@ async function executeCommand(session: AgentSession, message: RcMessage): Promis
   let current = useSharedAgent.getState().sessions[session.tmid] ?? session;
   const selectedProvider = getAiRuntimeProvider();
   if (selectedProvider === 'none' || agentBackend(current) !== 'codex') {
-    throw new Error('该托管会话使用了另一套 AI 运行时，请结束会话并重新开启');
+    throw new Error(t('agent.shared.runtimeMismatch'));
   }
   current = withSessionRuntimeSnapshot(current);
   updateSession(current);
@@ -996,8 +997,8 @@ async function queueCommand(session: AgentSession, message: RcMessage): Promise<
     }
     try {
       const name = agentName(session);
-      await sendAgentReply(session, `🤖 ${name} 已收到，正在思考…`).catch((error) => {
-        trace(session.tmid, 'warning', `思考反馈发送失败：${error instanceof Error ? error.message : String(error)}`);
+      await sendAgentReply(session, t('agent.shared.receivedThinking', { name })).catch((error) => {
+        trace(session.tmid, 'warning', t('agent.shared.thinkingFeedbackFailed', { error: error instanceof Error ? error.message : String(error) }));
       });
       await executeCommand(useSharedAgent.getState().sessions[session.tmid] ?? session, message);
     } catch (error) {
@@ -1013,7 +1014,7 @@ async function queueCommand(session: AgentSession, message: RcMessage): Promise<
         lastError: detail,
         updatedAt: Date.now(),
       });
-      await sendAgentReply(session, `🤖 ${agentName(session)} 执行失败：${redactAgentOutput(detail).text}`);
+      await sendAgentReply(session, t('agent.shared.executionFailed', { name: agentName(session), error: redactAgentOutput(detail).text }));
     }
   });
 }
@@ -1044,15 +1045,15 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
 
   readTranscript: async (tmid) => {
     const session = get().sessions[tmid];
-    if (!session) throw new Error('托管会话不在当前设备');
+    if (!session) throw new Error(t('agent.shared.sessionNotOnDevice'));
     const releaseAfterRead = session.status === 'ended';
     try {
       if (agentBackend(session) === 'deepseek') {
-        throw new Error('历史 DSH 托管会话已退役，请查看房间消息记录');
+        throw new Error(t('agent.shared.legacyDshRetired'));
       }
       if (!session.codexThreadId) {
         if (session.status === 'starting') return [];
-        throw new Error('Codex 托管会话缺少 threadId');
+        throw new Error(t('agent.shared.missingThreadId'));
       }
       const { controller } = await ensureController(session);
       const loaded = await controller.readThread(session.codexThreadId);
@@ -1119,10 +1120,10 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
   },
 
   startSession: async (rid, tmid, options = {}) => {
-    if (!isTauriRuntime()) throw new Error('共享 Agent 仅支持 RocketX 桌面端');
+    if (!isTauriRuntime()) throw new Error(t('agent.shared.desktopOnly'));
     const authoritativeRemote = remoteSessionControls(tmid);
     if (authoritativeRemote) {
-      throw new Error(`该话题由 @${authoritativeRemote.hostUsername} 的另一台设备托管，请等待租约超时`);
+      throw new Error(t('agent.shared.hostedOnOtherDevice', { username: authoritativeRemote.hostUsername }));
     }
     const pending = startingSessions.get(tmid);
     if (pending) return pending;
@@ -1142,14 +1143,14 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       const butlerWorkspaceRoot = useCodexWorkspace.getState().butlerWorkspaceRoot;
       const root = options.workspaceRoot?.trim();
       if (!root || isSystemCodexWorkspace(root, defaultWorkspaceRoot, butlerWorkspaceRoot)) {
-        throw new Error('AI 托管必须选择在 AI 管家中添加的专用工作项目');
+        throw new Error(t('agent.shared.needDedicatedProject'));
       }
       assertAllowedWorkspacePath(root, [root]);
       const selectedProvider = getAiRuntimeProvider();
-      if (selectedProvider === 'none') throw new Error('当前未启用 AI');
+      if (selectedProvider === 'none') throw new Error(t('agent.hosting.aiDisabled'));
       const effectiveBackend: AgentBackend = 'codex';
       if (options.backend && options.backend !== effectiveBackend) {
-        throw new Error('AI 托管必须使用当前启动的 AI 运行时');
+        throw new Error(t('agent.shared.mustUseActiveRuntime'));
       }
       const backend: AgentBackend = effectiveBackend;
       const initialSession: AgentSession = {
@@ -1198,7 +1199,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       };
       nameCodexThread(appServer, session);
       updateSession(session);
-      trace(tmid, 'status', `${agentName(session)} 会话已启动`);
+      trace(tmid, 'status', t('agent.shared.sessionStarted', { name: agentName(session) }));
       const leaseMessage = await sendLeaseCard(session);
       session = { ...session, leaseMessageId: leaseMessage._id, updatedAt: Date.now() };
       updateSession(session);
@@ -1250,7 +1251,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       }
       if (session.status === 'starting') {
         const start = startingSessions.get(session.tmid);
-        if (!start) throw new Error('Agent 启动未完成，请重试');
+        if (!start) throw new Error(t('agent.shared.startIncomplete'));
         session = await start;
       }
       if (session.status === 'interrupted') {
@@ -1275,7 +1276,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
           },
         };
         set((state) => ({ memberRequests: [...state.memberRequests, request] }));
-        trace(session.tmid, 'status', `等待宿主放行 @${message.u.username}`);
+        trace(session.tmid, 'status', t('agent.shared.waitingHostGrant', { username: message.u.username }));
         return;
       }
       await queueCommand(session, message);
@@ -1297,7 +1298,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     assertHost(session, actor());
     set((state) => ({ memberRequests: state.memberRequests.filter((item) => item.id !== requestId) }));
     if (!allowed) {
-      await useChat.getState().send(`🤖 @${request.command.username}，宿主未放行本次指令。`, {
+      await useChat.getState().send(t('agent.shared.commandDeniedByHost', { username: request.command.username }), {
         rid: session.rid,
         tmid: replyTmid(session),
       });
@@ -1329,7 +1330,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     }
     if (safeApproval && commandRequestMentionsSensitivePath(params.command)) {
       safeApproval = false;
-      trace(session.tmid, 'warning', '命令涉及敏感路径，已强制拒绝');
+      trace(session.tmid, 'warning', t('agent.shared.sensitivePathRejected'));
     }
     let permissions = {};
     if (safeApproval && (params.permissions || params.additionalPermissions)) {
@@ -1352,7 +1353,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     approvalWaiters.delete(scopedApprovalKey(session.tmid, approvalId));
     set((state) => ({ approvals: state.approvals.filter((item) => item.id !== approvalId) }));
     updateSession({ ...session, status: 'running', updatedAt: Date.now() });
-    trace(session.tmid, 'status', safeApproval ? '宿主已允许请求' : '宿主已拒绝请求');
+    trace(session.tmid, 'status', safeApproval ? t('agent.shared.hostAllowed') : t('agent.shared.hostDeclined'));
   },
 
   resolveInput: async (inputId, response) => {
@@ -1366,7 +1367,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     inputWaiters.delete(scopedInputKey(session.tmid, inputId));
     set((state) => ({ inputs: state.inputs.filter((item) => item.id !== inputId) }));
     updateSession({ ...session, status: 'running', updatedAt: Date.now() });
-    trace(session.tmid, 'status', '宿主已提交所需输入');
+    trace(session.tmid, 'status', t('agent.shared.hostSubmittedInput'));
   },
 
   setAccess: async (tmid, access) => {
@@ -1379,7 +1380,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       approvedMemberIds: access === 'host-only' ? [] : session.approvedMemberIds,
       updatedAt: Date.now(),
     });
-    trace(tmid, 'status', access === 'host-only' ? 'Agent 已切换为仅宿主可指挥' : 'Agent 已允许房间成员申请指挥');
+    trace(tmid, 'status', access === 'host-only' ? t('agent.shared.accessHostOnly') : t('agent.shared.accessMemberRequest'));
   },
 
   resumeSession: async (tmid) => {
@@ -1387,11 +1388,11 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
     if (!existing) return;
     const authoritativeRemote = remoteSessionControls(tmid);
     if (authoritativeRemote) {
-      throw new Error(`该会话由 @${authoritativeRemote.hostUsername} 的另一台设备托管，请在宿主设备恢复`);
+      throw new Error(t('agent.shared.resumeOnOtherDevice', { username: authoritativeRemote.hostUsername }));
     }
     const selectedProvider = getAiRuntimeProvider();
     if (selectedProvider === 'none' || agentBackend(existing) !== 'codex') {
-      throw new Error('该托管会话使用了另一套 AI 运行时，请结束会话并重新开启');
+      throw new Error(t('agent.shared.runtimeMismatch'));
     }
     const host = actor();
     const now = Date.now();
@@ -1419,12 +1420,12 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       };
       nameCodexThread(appServer, resumed); // 旧线程也补上名字
       updateSession(resumed);
-      trace(tmid, 'status', `已恢复 ${agentName(resumed)} 会话`);
+      trace(tmid, 'status', t('agent.shared.resumedSession', { name: agentName(resumed) }));
       try {
         await updateLeaseCard(get().sessions[tmid]);
       } catch (error) {
         const detail = redactAgentOutput(error instanceof Error ? error.message : String(error)).text;
-        trace(tmid, 'warning', `已恢复 ${agentName(resumed)} 会话，但同步租约卡片失败：${detail}`);
+        trace(tmid, 'warning', t('agent.shared.resumedCardSyncFailed', { name: agentName(resumed), error: detail }));
       }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
@@ -1436,7 +1437,7 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
 
   transferToCodexApp: async (tmid) => {
     const session = get().sessions[tmid];
-    if (!session || session.status === 'ended') throw new Error('托管会话未在运行');
+    if (!session || session.status === 'ended') throw new Error(t('agent.shared.sessionNotRunning'));
     const messages = await sessionConversationMessages(session);
     const lines = agentConversationLines(
       messages
@@ -1453,15 +1454,15 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
         }),
     );
     const result = await openCodexNewThread(
-      transferTranscript('托管对话', lines),
+      transferTranscript(t('agent.codexTransfer.kindHosted'), lines),
       session.workspaceRoots[0],
     );
     if (result === 'opened' || result === 'opened-with-copy') {
-      trace(tmid, 'status', '已在 Codex App 打开新对话，等待确认后发送');
+      trace(tmid, 'status', t('agent.shared.openedCodexApp'));
     } else if (result === 'copied') {
-      trace(tmid, 'status', 'Codex App 打开失败，完整记录已复制');
+      trace(tmid, 'status', t('agent.shared.openFailedCopied'));
     } else {
-      trace(tmid, 'error', '无法打开 Codex App，也无法复制完整记录');
+      trace(tmid, 'error', t('agent.shared.openAndCopyFailed'));
     }
     return result;
   },
@@ -1477,16 +1478,16 @@ export const useSharedAgent = create<SharedAgentState>((set, get) => ({
       await appServer.interruptTurn(session.codexThreadId, session.activeTurnId).catch(() => undefined);
     }
     await stopController(tmid).catch(() => undefined);
-    const endedError = new Error('Agent 会话已结束');
+    const endedError = new Error(t('agent.shared.sessionEnded'));
     clearSessionTransientState(tmid);
     rejectSessionWaiters(tmid, turnWaiters, endedError);
     rejectSessionWaiters(tmid, approvalWaiters, endedError);
     rejectSessionWaiters(tmid, inputWaiters, endedError);
     clearPendingSessionRequests(tmid);
-    trace(tmid, 'status', 'Agent 会话已结束');
+    trace(tmid, 'status', t('agent.shared.sessionEnded'));
     await updateLeaseCard(ended).catch(() => undefined);
     if (!replyTmid(session)) useAgentEnvironments.getState().endBinding(session.rid);
-    await useChat.getState().send(`🤖 ${agentName(session)} 共享会话已结束。`, { rid: session.rid, tmid: replyTmid(session) });
+    await useChat.getState().send(t('agent.shared.sessionEndedNotice', { name: agentName(session) }), { rid: session.rid, tmid: replyTmid(session) });
   },
 }));
 

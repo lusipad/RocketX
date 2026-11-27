@@ -1,3 +1,5 @@
+import { tp } from '../i18n';
+
 export interface ButlerEventCard {
   id: string;
   kind: 'mention-stale';
@@ -50,8 +52,13 @@ export function checkWatchers(snapshot: ButlerWatcherSnapshot, now: number): But
       dedupeKey,
       rid: subscription.rid,
       kind: 'mention-stale',
-      title: `@我未回应：${subscription.name}（${hours}小时前）`,
-      detail: `当前仍有 ${subscription.userMentions} 条 @我 未处理。`,
+      title: tp(hours, 'butler.watcher.staleMentionTitleOne', 'butler.watcher.staleMentionTitleOther', {
+        name: subscription.name,
+        hours,
+      }),
+      detail: tp(subscription.userMentions, 'butler.watcher.staleMentionDetailOne', 'butler.watcher.staleMentionDetailOther', {
+        count: subscription.userMentions,
+      }),
       at: now,
     });
   }

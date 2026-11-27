@@ -4,8 +4,9 @@ import {
   type CodexPermissionPreset,
   type CodexRuntimeSelection,
 } from './AppServerController';
+import { t } from '../i18n';
 import type { Turn } from './protocol/generated/v2/Turn';
-import { runExistingThreadAutomation } from '../stores/codexWorkspace';
+import { runExistingThreadAutomation, useCodexWorkspace } from '../stores/codexWorkspace';
 
 export interface CodexAutomationOptions {
   workspaceRoot: string;
@@ -23,6 +24,11 @@ export interface CodexAutomationOptions {
 type ControllerFactory = (options: AppServerControllerOptions) => AppServerController;
 
 let controllerFactory: ControllerFactory = (options) => new AppServerController(options);
+let customControllerFactoryDepth = 0;
+
+export function hasCustomAutomationControllerFactory(): boolean {
+  return customControllerFactoryDepth > 0;
+}
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -48,7 +54,7 @@ function selection(
   const model = models.find((item) => item.model === requestedModel || item.id === requestedModel)
     ?? models.find((item) => item.isDefault)
     ?? models[0];
-  if (!model) throw new Error('当前 Codex Runtime 没有可用模型');
+  if (!model) throw new Error(t('agent.codexAutomation.noModels'));
   const effort = requestedEffort
     && model.supportedReasoningEfforts.some((item) => item.reasoningEffort === requestedEffort)
     ? requestedEffort
@@ -60,10 +66,19 @@ function selection(
 export async function runCodexAutomation(options: CodexAutomationOptions): Promise<{ text: string; threadId: string }> {
   const workspaceRoot = options.workspaceRoot.trim();
   const text = options.text.trim();
-  if (!workspaceRoot) throw new Error('请先在“任务”中选择工作区');
-  if (!text) throw new Error('已安排任务缺少执行内容');
-  if (options.signal?.aborted) throw options.signal.reason ?? new Error('任务已取消');
+  if (!workspaceRoot) throw new Error(t('agent.codexAutomation.noWorkspace'));
+  if (!text) throw new Error(t('agent.codexAutomation.emptyPrompt'));
+  if (options.signal?.aborted) throw options.signal.reason ?? new Error(t('agent.codexAutomation.canceled'));
   if (options.targetThreadId) {
+    const wsState = useCodexWorkspace.getState();
+    const ownsLiveGuiThread =
+      wsState.workspaceRoot.trim() === workspaceRoot
+      && (wsState.status === 'ready' || wsState.status === 'running' || wsState.status === 'waiting-input')
+      && (
+        wsState.activeThreadId === options.targetThreadId
+        || wsState.threads.some((th) => th.id === options.targetThreadId)
+      );
+    if (ownsLiveGuiThread) {
     return runExistingThreadAutomation({
       threadId: options.targetThreadId,
       workspaceRoot,
@@ -73,6 +88,8 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
       permissionPreset: options.permissionPreset,
       signal: options.signal,
     });
+  }
+
   }
 
   let threadId = '';
@@ -90,27 +107,27 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
       if (method === 'turn/completed') complete?.(record(params.turn));
     },
     onServerRequest: async ({ method, policy }) => {
-      if (policy === 'host-input') throw new Error('该已安排任务需要用户输入，请手动运行后回答');
+      if (policy === 'host-input') throw new Error(t('agent.codexAutomation.needsUserInput'));
       if (method === 'item/permissions/requestApproval') {
         if (options.permissionPreset === 'ask') {
-          throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+          throw new Error(t('agent.codexAutomation.needsApproval'));
         }
         return { permissions: {}, scope: 'turn', strictAutoReview: true };
       }
       if (policy === 'host-approval') {
         if (options.permissionPreset === 'ask') {
-          throw new Error('该已安排任务需要审批，请打开对话后手动运行');
+          throw new Error(t('agent.codexAutomation.needsApproval'));
         }
         return { decision: 'decline' };
       }
-      throw new Error(`无人值守任务不能处理 ${method}`);
+      throw new Error(t('agent.codexAutomation.unattendedUnsupported', { method }));
     },
     onInterrupted: (error) => fail?.(error),
   });
 
   const interrupt = (): void => {
     if (threadId && turnId) void controller.interruptTurn(threadId, turnId).catch(() => undefined);
-    fail?.(options.signal?.reason instanceof Error ? options.signal.reason : new Error('任务已取消'));
+    fail?.(options.signal?.reason instanceof Error ? options.signal.reason : new Error(t('agent.codexAutomation.canceled')));
   };
   options.signal?.addEventListener('abort', interrupt, { once: true });
 
@@ -118,8 +135,8 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
     const catalog = await controller.connect(`automation-${crypto.randomUUID()}`, workspaceRoot);
     if (options.skillName) {
       const skill = catalog.skills.find((item) => item.name === options.skillName);
-      if (!skill) throw new Error(`Codex 没有找到 Skill「${options.skillName}」`);
-      if (!skill.enabled) throw new Error(`Skill「${options.skillName}」已停用`);
+      if (!skill) throw new Error(t('agent.codexAutomation.skillNotFound', { name: options.skillName }));
+      if (!skill.enabled) throw new Error(t('agent.codexAutomation.skillDisabled', { name: options.skillName }));
     }
     const runtimeSelection = selection(
       catalog.models,
@@ -127,7 +144,9 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
       options.effort,
       options.permissionPreset,
     );
-    const thread = await controller.startThread(runtimeSelection, options.name);
+    const thread = options.targetThreadId
+      ? await controller.resumeThread(options.targetThreadId, runtimeSelection, workspaceRoot)
+      : await controller.startThread(runtimeSelection, options.name);
     threadId = thread.id;
     options.onAdmitted?.();
     turnId = await controller.startTurn(
@@ -140,12 +159,12 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
     if (status === 'failed') {
       throw new Error(typeof record(result.error).message === 'string'
         ? String(record(result.error).message)
-        : 'Codex 未完成该已安排任务');
+        : t('agent.codexAutomation.failed'));
     }
-    if (status === 'interrupted') throw new Error('Codex 已中断该已安排任务');
+    if (status === 'interrupted') throw new Error(t('agent.codexAutomation.interrupted'));
     const loaded = await controller.readThread(threadId);
     const output = finalText(loaded.turns);
-    if (!output) throw new Error('Codex 已完成，但没有返回可展示的结果');
+    if (!output) throw new Error(t('agent.codexAutomation.noOutput'));
     return { text: output, threadId };
   } finally {
     options.signal?.removeEventListener('abort', interrupt);
@@ -155,8 +174,13 @@ export async function runCodexAutomation(options: CodexAutomationOptions): Promi
 
 export function setCodexAutomationControllerFactory(factory: ControllerFactory): () => void {
   const previous = controllerFactory;
+  let restored = false;
   controllerFactory = factory;
+  customControllerFactoryDepth += 1;
   return () => {
+    if (restored) return;
+    restored = true;
     controllerFactory = previous;
+    customControllerFactoryDepth = Math.max(0, customControllerFactoryDepth - 1);
   };
 }

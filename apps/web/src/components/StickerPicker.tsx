@@ -16,6 +16,7 @@ import {
 import { isTauri } from '../lib/client';
 import { usePinyinReady } from '../lib/pinyin';
 import { toast } from '../stores/toast';
+import { useT } from '../i18n';
 
 const RECENT_KEY = 'rcx-recent-stickers';
 
@@ -55,7 +56,10 @@ export default function StickerPicker({
   onClose: () => void;
   className?: string;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
+  const groupTitle = (group: { id: string; title: string }) =>
+    group.id === 'my-stickers' ? t('chat.sticker.personalGroupTitle') : group.title;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [catalog, setCatalog] = useState<StickerCatalog>({ groups: [], entries: [] });
   const [keyword, setKeyword] = useState('');
@@ -85,7 +89,7 @@ export default function StickerPicker({
       .catch((error) => {
         if (!alive) return;
         setCatalog({ groups: [], entries: [] });
-        setLoadError(error instanceof Error ? error.message : '加载贴纸失败');
+        setLoadError(error instanceof Error ? error.message : t('chat.sticker.loadFailed'));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -138,7 +142,10 @@ export default function StickerPicker({
         toast.success(describeStickerImport(report));
       }
     } catch (error) {
-      toast.error(error, kind === 'files' ? '导入图片失败' : '导入目录失败');
+      toast.error(
+        error,
+        kind === 'files' ? t('chat.sticker.importFilesFailed') : t('chat.sticker.importDirFailed'),
+      );
     } finally {
       setImporting(null);
     }
@@ -155,7 +162,7 @@ export default function StickerPicker({
           autoFocus
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
-          placeholder="搜索贴纸"
+          placeholder={t('chat.sticker.searchPlaceholder')}
           className="w-full bg-transparent text-xs outline-none placeholder:text-ink-3"
         />
       </div>
@@ -163,33 +170,33 @@ export default function StickerPicker({
         <div className="mb-2 flex gap-1.5">
           <button
             type="button"
-            aria-label="导入图片"
+            aria-label={t('chat.sticker.importImages')}
             disabled={importing !== null}
             onClick={() => void importFromDialog('files')}
             className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
           >
-            {importing === 'files' ? '导入中…' : '导入图片'}
+            {importing === 'files' ? t('chat.sticker.importing') : t('chat.sticker.importImages')}
           </button>
           <button
             type="button"
-            aria-label="导入目录"
+            aria-label={t('chat.sticker.importDir')}
             disabled={importing !== null}
             onClick={() => void importFromDialog('directory')}
             className="flex-1 rounded bg-fill-1 px-2 py-1.5 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
           >
-            {importing === 'directory' ? '导入中…' : '导入目录'}
+            {importing === 'directory' ? t('chat.sticker.importing') : t('chat.sticker.importDir')}
           </button>
         </div>
       )}
 
       {!keyword && recent.length > 0 && (
         <>
-          <div className="px-1 pb-1 text-xs text-ink-3">最近使用</div>
+          <div className="px-1 pb-1 text-xs text-ink-3">{t('chat.emoji.recent')}</div>
           <div className="mb-1.5 grid grid-cols-3 gap-2 border-b border-line pb-2">
             {recent.map((sticker) => (
               <button
                 key={`recent-${sticker.id}`}
-                aria-label={`发送贴纸 ${sticker.title}`}
+                aria-label={t('chat.sticker.sendAria', { title: sticker.title })}
                 title={sticker.title}
                 onClick={() => pick(sticker)}
                 className="flex h-16 items-center justify-center rounded-md bg-fill-1 p-1.5 transition hover:bg-fill-hover"
@@ -203,7 +210,7 @@ export default function StickerPicker({
 
       <div ref={scrollRef} className="max-h-72 overflow-y-auto">
         {loading ? (
-          <div className="py-8 text-center text-xs text-ink-3">正在加载贴纸…</div>
+          <div className="py-8 text-center text-xs text-ink-3">{t('chat.sticker.loading')}</div>
         ) : loadError ? (
           <div className="py-8 text-center text-xs text-danger">{loadError}</div>
         ) : results ? (
@@ -212,7 +219,7 @@ export default function StickerPicker({
               {results.map((sticker) => (
                 <button
                   key={sticker.id}
-                  aria-label={`发送贴纸 ${sticker.title}`}
+                  aria-label={t('chat.sticker.sendAria', { title: sticker.title })}
                   title={sticker.title}
                   onClick={() => pick(sticker)}
                   className="flex h-16 items-center justify-center rounded-md bg-fill-1 p-1.5 transition hover:bg-fill-hover"
@@ -222,19 +229,19 @@ export default function StickerPicker({
               ))}
             </div>
           ) : (
-            <div className="py-8 text-center text-xs text-ink-3">没有匹配的贴纸</div>
+            <div className="py-8 text-center text-xs text-ink-3">{t('chat.sticker.noMatches')}</div>
           )
         ) : catalog.groups.length > 0 ? (
           catalog.groups.map((group) => (
             <div key={`${group.packageId}:${group.id}`} data-sticker-group={group.title}>
               <div className="sticky top-0 bg-surface-4 px-1 py-1 text-xs text-ink-3">
-                {group.title}
+                {groupTitle(group)}
               </div>
               <div className="grid grid-cols-3 gap-2 pb-2">
                 {group.items.map((sticker) => (
                   <button
                     key={sticker.id}
-                    aria-label={`发送贴纸 ${sticker.title}`}
+                    aria-label={t('chat.sticker.sendAria', { title: sticker.title })}
                     title={sticker.title}
                     onClick={() => pick(sticker)}
                     className="flex h-16 items-center justify-center rounded-md bg-fill-1 p-1.5 transition hover:bg-fill-hover"
@@ -246,7 +253,7 @@ export default function StickerPicker({
             </div>
           ))
         ) : (
-          <div className="py-8 text-center text-xs text-ink-3">暂无可用贴纸</div>
+          <div className="py-8 text-center text-xs text-ink-3">{t('chat.sticker.empty')}</div>
         )}
       </div>
 
@@ -262,7 +269,7 @@ export default function StickerPicker({
               }}
               className="rounded bg-fill-1 px-2 py-1 text-xs text-ink-2 transition hover:bg-fill-hover"
             >
-              {group.title}
+              {groupTitle(group)}
             </button>
           ))}
         </div>

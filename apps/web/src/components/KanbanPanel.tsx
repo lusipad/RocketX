@@ -12,7 +12,14 @@ import {
   type KanbanCard,
   type KanbanColumn,
 } from '../lib/kanban';
+import { useT, type MessageKey } from '../i18n';
 import PanelShell from './PanelShell';
+
+const KANBAN_COLUMN_KEYS: Record<KanbanColumn, MessageKey> = {
+  todo: 'panels.kanban.col.todo',
+  doing: 'panels.kanban.col.doing',
+  done: 'panels.kanban.col.done',
+};
 
 /**
  * 频道消息看板面板。
@@ -28,6 +35,7 @@ function roomTypeOf(rid: string): RoomType {
 }
 
 export default function KanbanPanel() {
+  const t = useT();
   const rid = useChat((s) => s.activeRid);
   const roomMessages = useChat((s) => (s.activeRid ? s.messages[s.activeRid] : undefined));
   const aliases = useAliases((s) => s.aliases);
@@ -35,7 +43,7 @@ export default function KanbanPanel() {
   const [boardRoot, setBoardRoot] = useState<RcMessage | null>(null);
   const [scanning, setScanning] = useState(true);
   const [threadLoaded, setThreadLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<KanbanColumn | null>(null);
   const [inputFor, setInputFor] = useState<KanbanColumn | null>(null);
@@ -52,7 +60,7 @@ export default function KanbanPanel() {
     setScanning(true);
     setError(null);
     const cached = (() => {
-      const list = useChat.getState().messages[rid];
+      const list = useChat.getState().messages[rid] ?? [];
       for (let i = list.length - 1; i >= 0; i--) {
         if (list[i].attachments?.some((a) => a.type === 'rcx-kanban-board')) return list[i];
       }
@@ -124,9 +132,9 @@ export default function KanbanPanel() {
     try {
       const root = await useChat.getState().ensureKanbanBoard(rid);
       setBoardRoot(root);
-      toast.success('看板已创建');
+      toast.success(t('panels.kanban.created'));
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建看板失败');
+      setError(err instanceof Error ? { message: err.message } : {});
     } finally {
       setCreatingBoard(false);
     }
@@ -161,31 +169,33 @@ export default function KanbanPanel() {
     if (card) void moveCard(card, column);
   };
 
+  const errorMessage = error ? (error.message ?? t('panels.kanban.createFailed')) : null;
+
   return (
-    <PanelShell title={<span className="flex items-center gap-1.5"><LayoutGrid size={14} /> 消息看板</span>}>
-      {scanning && <div className="p-4 text-sm text-ink-3">正在查找频道看板…</div>}
+    <PanelShell title={<span className="flex items-center gap-1.5"><LayoutGrid size={14} /> {t('panels.kanban.title')}</span>}>
+      {scanning && <div className="p-4 text-sm text-ink-3">{t('panels.kanban.scanning')}</div>}
 
       {!scanning && !boardRoot && (
         <div className="flex flex-col items-center gap-3 px-6 py-12 text-center">
           <LayoutGrid size={28} className="text-ink-3" />
-          <div className="text-sm text-ink-2">这个频道还没有看板</div>
+          <div className="text-sm text-ink-2">{t('panels.kanban.emptyBoard')}</div>
           <div className="max-w-[220px] text-xs leading-relaxed text-ink-3">
-            看板归这个频道所有：卡片作为话题消息保存在服务端，成员实时共享，也可以把聊天里的消息一键收进来。
+            {t('panels.kanban.emptyBoardDesc')}
           </div>
           <button
             onClick={() => void createBoard()}
             disabled={creatingBoard}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-40"
           >
-            {creatingBoard ? '创建中…' : '创建看板'}
+            {creatingBoard ? t('panels.kanban.creating') : t('panels.kanban.createBoard')}
           </button>
-          {error && <div className="text-xs text-danger">{error}</div>}
+          {errorMessage && <div className="text-xs text-danger">{errorMessage}</div>}
         </div>
       )}
 
       {boardRoot && (
         <div className="flex flex-1 flex-col overflow-hidden">
-          {!threadLoaded && <div className="px-4 py-2 text-xs text-ink-3">看板事件加载中…</div>}
+          {!threadLoaded && <div className="px-4 py-2 text-xs text-ink-3">{t('panels.kanban.loadingEvents')}</div>}
           <div className="flex flex-1 gap-2 overflow-x-auto px-3 pb-3">
             {KANBAN_COLUMNS.map((column) => {
               const list = cards.filter((c) => c.column === column.key);
@@ -203,7 +213,7 @@ export default function KanbanPanel() {
                   }`}
                 >
                   <div className="flex items-center justify-between px-2.5 py-2">
-                    <span className="text-xs font-medium text-ink-2">{column.name}</span>
+                    <span className="text-xs font-medium text-ink-2">{t(KANBAN_COLUMN_KEYS[column.key])}</span>
                     <span className="text-xs text-ink-3">{list.length}</span>
                   </div>
                   <div className="flex min-h-16 flex-1 flex-col gap-1.5 overflow-y-auto px-2 pb-2">
@@ -221,7 +231,7 @@ export default function KanbanPanel() {
                         <div className="flex items-start gap-1">
                           {card.sourceMid ? (
                             <button
-                              title="跳到原消息"
+                              title={t('panels.kanban.jumpToSource')}
                               onClick={() => void useChat.getState().jumpToMessage(card.sourceMid!, rid)}
                               className="min-w-0 flex-1 text-left text-xs leading-relaxed text-ink transition hover:text-primary"
                             >
@@ -233,7 +243,7 @@ export default function KanbanPanel() {
                             </span>
                           )}
                           <button
-                            title="删除卡片"
+                            title={t('panels.kanban.deleteCard')}
                             onClick={() => void useChat.getState().removeKanbanCard(rid, card.id, card.title)}
                             className="shrink-0 rounded text-ink-3 opacity-0 transition hover:text-danger group-hover:opacity-100"
                           >
@@ -248,7 +258,7 @@ export default function KanbanPanel() {
                             {KANBAN_COLUMNS.filter((c) => c.key !== column.key).map((c) => (
                               <button
                                 key={c.key}
-                                title={`移到 ${c.name}`}
+                                title={t('panels.kanban.moveTo', { column: t(KANBAN_COLUMN_KEYS[c.key]) })}
                                 onClick={() => void moveCard(card, c.key)}
                                 className="rounded p-0.5 text-ink-3 transition hover:bg-fill-hover hover:text-ink"
                               >
@@ -280,7 +290,7 @@ export default function KanbanPanel() {
                               setInputValue('');
                             }
                           }}
-                          placeholder="卡片标题，Enter 确认"
+                          placeholder={t('panels.kanban.cardPlaceholder')}
                           className="w-full bg-transparent text-xs outline-none placeholder:text-ink-3"
                         />
                       </div>
@@ -293,7 +303,7 @@ export default function KanbanPanel() {
                         className="flex items-center gap-1 rounded-lg border border-dashed border-line px-2 py-1.5 text-xs text-ink-3 transition hover:border-primary hover:text-primary"
                       >
                         <Plus size={11} />
-                        新建卡片
+                        {t('panels.kanban.newCard')}
                       </button>
                     )}
                   </div>
@@ -303,7 +313,7 @@ export default function KanbanPanel() {
           </div>
           <div className="flex items-center gap-1.5 border-t border-line px-4 py-2 text-xs text-ink-3">
             <RotateCcw size={11} />
-            卡片改动会作为话题消息同步给所有成员
+            {t('panels.kanban.syncNote')}
           </div>
         </div>
       )}

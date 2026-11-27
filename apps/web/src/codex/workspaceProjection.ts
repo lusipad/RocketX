@@ -1,5 +1,6 @@
 import type { ThreadItem } from '../agent/protocol/generated/v2/ThreadItem';
 import type { Turn } from '../agent/protocol/generated/v2/Turn';
+import { t } from '../i18n';
 import {
   extractButlerSources,
   mergeButlerSources,
@@ -51,7 +52,7 @@ function attachmentFromUserInput(input: unknown): CodexImageAttachment | null {
     : typeof value.url === 'string'
       ? value.url
       : '';
-  const name = source.split(/[\\/]/).filter(Boolean).at(-1) ?? '图片';
+  const name = source.split(/[\\/]/).filter(Boolean).at(-1) ?? t('butler.projection.imageFallback');
   return { name, type: 'image' };
 }
 
@@ -65,14 +66,14 @@ function generatedImageFromItem(
     name,
     dataUrl: item.result.startsWith('data:') ? item.result : `data:image/png;base64,${item.result}`,
     savedPath: item.savedPath,
-    alt: item.revisedPrompt?.trim() || 'Codex 生成的图片',
+    alt: item.revisedPrompt?.trim() || t('butler.projection.generatedImageAlt'),
   };
 }
 
 export function boundedDetail(value: string): string {
   return value.length <= MAX_EVENT_DETAIL
     ? value
-    : `${value.slice(value.length - MAX_EVENT_DETAIL)}\n… 输出过长，仅显示最后 64 KiB`;
+    : `${value.slice(value.length - MAX_EVENT_DETAIL)}\n${t('butler.projection.outputTruncatedSuffix')}`;
 }
 
 function jsonDetail(value: unknown): string {
@@ -166,20 +167,20 @@ export function messagesFromTurns(turns: readonly Turn[]): CodexWorkspaceMessage
 export function eventFromItem(item: ThreadItem, status: CodexWorkspaceEvent['status']): CodexWorkspaceEvent | null {
   if (item.type === 'commandExecution') {
     const metadata = [
-      item.exitCode === null ? null : `退出码 ${item.exitCode}`,
+      item.exitCode === null ? null : t('butler.projection.exitCode', { code: item.exitCode }),
       durationSummary(item.durationMs),
     ].filter(Boolean).join(' · ');
     return {
       id: item.id,
       type: item.type,
-      title: '运行命令',
+      title: t('butler.projection.event.commandExecution'),
       summary: item.command,
       detail: boundedDetail([item.aggregatedOutput, metadata].filter(Boolean).join('\n\n')) || undefined,
       status: completedStatus(item.status, status),
     };
   }
   if (item.type === 'fileChange') {
-    return { id: item.id, type: item.type, title: '修改文件', summary: item.changes.map((change) => change.path).join('、'), status: completedStatus(item.status, status) };
+    return { id: item.id, type: item.type, title: t('butler.projection.event.fileChange'), summary: item.changes.map((change) => change.path).join(t('butler.listSeparator')), status: completedStatus(item.status, status) };
   }
   if (item.type === 'mcpToolCall') {
     return { id: item.id, type: item.type, title: item.tool, summary: item.server, detail: item.error?.message ?? (item.result ? jsonDetail(item.result) : undefined), status: completedStatus(item.status, status) };
@@ -187,18 +188,18 @@ export function eventFromItem(item: ThreadItem, status: CodexWorkspaceEvent['sta
   if (item.type === 'dynamicToolCall') {
     return { id: item.id, type: item.type, title: item.tool, summary: item.namespace ?? undefined, detail: item.contentItems ? jsonDetail(item.contentItems) : undefined, status: completedStatus(item.status, status) };
   }
-  if (item.type === 'plan') return { id: item.id, type: item.type, title: '更新计划', detail: item.text, status };
-  if (item.type === 'reasoning') return { id: item.id, type: item.type, title: '思考', detail: boundedDetail([...item.summary, ...item.content].join('\n')) || undefined, status };
-  if (item.type === 'collabAgentToolCall') return { id: item.id, type: item.type, title: '协作代理', summary: item.tool, detail: item.prompt ?? (item.receiverThreadIds.join('、') || undefined), status: completedStatus(item.status, status) };
-  if (item.type === 'subAgentActivity') return { id: item.id, type: item.type, title: '协作代理', summary: item.agentPath, detail: item.kind, status };
+  if (item.type === 'plan') return { id: item.id, type: item.type, title: t('butler.projection.event.plan'), detail: item.text, status };
+  if (item.type === 'reasoning') return { id: item.id, type: item.type, title: t('butler.projection.event.reasoning'), detail: boundedDetail([...item.summary, ...item.content].join('\n')) || undefined, status };
+  if (item.type === 'collabAgentToolCall') return { id: item.id, type: item.type, title: t('butler.projection.event.collabAgent'), summary: item.tool, detail: item.prompt ?? (item.receiverThreadIds.join(t('butler.listSeparator')) || undefined), status: completedStatus(item.status, status) };
+  if (item.type === 'subAgentActivity') return { id: item.id, type: item.type, title: t('butler.projection.event.collabAgent'), summary: item.agentPath, detail: item.kind, status };
   if (item.type === 'webSearch') {
     const value = record(item);
-    return { id: item.id, type: item.type, title: '搜索网络', summary: typeof value.query === 'string' ? value.query : undefined, status };
+    return { id: item.id, type: item.type, title: t('butler.projection.event.webSearch'), summary: typeof value.query === 'string' ? value.query : undefined, status };
   }
-  if (item.type === 'imageView') return { id: item.id, type: item.type, title: '查看图片', summary: item.path, status };
-  if (item.type === 'imageGeneration') return { id: item.id, type: item.type, title: '生成图片', status };
-  if (item.type === 'sleep') return { id: item.id, type: item.type, title: '等待', summary: durationSummary(item.durationMs) ?? undefined, status };
-  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') return { id: item.id, type: item.type, title: item.type === 'enteredReviewMode' ? '进入审查' : '完成审查', detail: item.review, status };
-  if (item.type === 'contextCompaction') return { id: item.id, type: item.type, title: '压缩上下文', status };
+  if (item.type === 'imageView') return { id: item.id, type: item.type, title: t('butler.projection.event.imageView'), summary: item.path, status };
+  if (item.type === 'imageGeneration') return { id: item.id, type: item.type, title: t('butler.projection.event.imageGeneration'), status };
+  if (item.type === 'sleep') return { id: item.id, type: item.type, title: t('butler.projection.event.sleep'), summary: durationSummary(item.durationMs) ?? undefined, status };
+  if (item.type === 'enteredReviewMode' || item.type === 'exitedReviewMode') return { id: item.id, type: item.type, title: item.type === 'enteredReviewMode' ? t('butler.projection.event.enteredReviewMode') : t('butler.projection.event.exitedReviewMode'), detail: item.review, status };
+  if (item.type === 'contextCompaction') return { id: item.id, type: item.type, title: t('butler.projection.event.contextCompaction'), status };
   return null;
 }

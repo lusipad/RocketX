@@ -1,3 +1,4 @@
+import { getLocale, t } from '../i18n';
 import { isTauri } from './http';
 import { hasUnreadAttention, type UnreadSubscription } from './unread';
 
@@ -28,15 +29,16 @@ export function formatTrayTooltip(conversations: readonly TrayConversation[]): s
   const unread = conversations.filter(
     (conversation) => !conversation.muted && (conversation.unread > 0 || conversation.alert),
   );
-  if (unread.length === 0) return 'RocketX';
+  if (unread.length === 0) return t('app.name');
 
   const total = unread.reduce((sum, conversation) => sum + conversation.unread, 0);
-  const header = `RocketX｜${unread.length} 个会话，${total} 条未读`;
+  const header = t('tray.tooltip.header', { conversations: unread.length, total });
+  const separator = getLocale() === 'zh-CN' ? '，' : ', ';
   const details = unread
     .slice(0, 5)
-    .map((conversation) => `${conversation.name} ${conversation.unread || '有新消息'}`)
-    .join('，');
-  const remaining = unread.length > 5 ? `，另有 ${unread.length - 5} 个会话` : '';
+    .map((conversation) => `${conversation.name} ${conversation.unread || t('tray.tooltip.newMessages')}`)
+    .join(separator);
+  const remaining = unread.length > 5 ? t('tray.tooltip.more', { count: unread.length - 5 }) : '';
   return `${header}\n${details}${remaining}`.slice(0, 127);
 }
 
@@ -118,6 +120,17 @@ export async function setTrayTooltip(tooltip: string): Promise<void> {
     await invoke('set_tray_tooltip', { tooltip });
   } catch {
     /* tooltip 更新失败不应打断聊天 */
+  }
+}
+
+/** 更新系统托盘右键菜单文案；非桌面环境忽略。 */
+export async function syncTrayMenuLabels(showLabel: string, quitLabel: string): Promise<void> {
+  if (!isTauri) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('set_tray_menu_labels', { showLabel, quitLabel });
+  } catch {
+    /* 菜单文案同步失败不应阻塞界面初始化 */
   }
 }
 

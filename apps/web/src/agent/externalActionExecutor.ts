@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { DispatchActionState, NativeDispatchActionRecord } from '../platform/desktopCommands';
 
 export interface ExternalActionActor {
@@ -26,6 +27,14 @@ export interface AdoStateActionSpec extends ExternalActionBase {
   targetState: string;
 }
 
+export interface AdoCommentActionSpec extends ExternalActionBase {
+  kind: 'ado_comment';
+  adoBase: string;
+  workItemId: number;
+  expectedRevision?: number;
+  commentText: string;
+}
+
 export interface ReportActionSpec extends ExternalActionBase {
   kind: 'rc_report';
   rid: string;
@@ -36,7 +45,7 @@ export interface ReportActionSpec extends ExternalActionBase {
   sharedContentReviewed?: boolean;
 }
 
-export type ExternalActionSpec = AdoStateActionSpec | ReportActionSpec;
+export type ExternalActionSpec = AdoStateActionSpec | AdoCommentActionSpec | ReportActionSpec;
 export interface ExternalActionReceipt {
   observedAt: number;
   revision?: number;
@@ -50,7 +59,8 @@ export interface ExternalActionDriver {
   transition(action: NativeDispatchActionRecord, state: DispatchActionState, receipt?: ExternalActionReceipt, error?: string): Promise<NativeDispatchActionRecord>;
   validate(spec: ExternalActionSpec, mode?: 'send' | 'read'): Promise<void>;
   writeAdo(spec: AdoStateActionSpec): Promise<{ revision: number; state: string }>;
-  readAdo(spec: AdoStateActionSpec): Promise<{ revision: number; state: string }>;
+  writeAdoComment?(spec: AdoCommentActionSpec): Promise<{ revision: number; state: string }>;
+  readAdo(spec: AdoStateActionSpec | AdoCommentActionSpec): Promise<{ revision: number; state: string }>;
   sendMessage(spec: ReportActionSpec, part: ReportActionSpec['parts'][number]): Promise<{ id: string; rid: string; text: string }>;
   readMessage(spec: ReportActionSpec, id: string): Promise<{ id: string; rid: string; text: string } | null>;
   isUnknownAdoError(error: unknown): boolean;
@@ -70,7 +80,7 @@ function isFirstDelivery(action: NativeDispatchActionRecord): boolean {
 }
 
 export function readExternalActionSpec(action: NativeDispatchActionRecord): ExternalActionSpec | null {
-  if (action.actionKind !== 'ado_state_write' && action.actionKind !== 'rc_report') return null;
+  if (action.actionKind !== 'ado_state_write' && action.actionKind !== 'ado_comment' && action.actionKind !== 'rc_report') return null;
   try {
     const spec = JSON.parse(action.specJson) as ExternalActionSpec;
     if (spec.version !== 1 || spec.kind !== action.actionKind || spec.workId !== action.todoId ||
@@ -79,6 +89,10 @@ export function readExternalActionSpec(action: NativeDispatchActionRecord): Exte
     if (spec.kind === 'ado_state_write') {
       if (!spec.adoBase || !Number.isInteger(spec.workItemId) || spec.workItemId <= 0 || !Number.isInteger(spec.expectedRevision) || spec.expectedRevision <= 0 ||
         !spec.expectedState || !spec.targetState) return null;
+    } else if (spec.kind === 'ado_comment') {
+      if (!spec.adoBase || !Number.isInteger(spec.workItemId) || spec.workItemId <= 0 ||
+        typeof spec.commentText !== 'string' || !spec.commentText.trim() ||
+        (spec.expectedRevision !== undefined && (!Number.isInteger(spec.expectedRevision) || spec.expectedRevision <= 0))) return null;
     } else if (!spec.rid || !spec.reportId || !Array.isArray(spec.parts) || !spec.parts.length ||
       spec.parts.some((part) => !part.id || typeof part.text !== 'string' || !part.text.trim())) return null;
     return spec;
@@ -100,22 +114,27 @@ export function createExternalActionExecutor(driver: ExternalActionDriver) {
           return driver.transition(action, 'acknowledged', { ...item, observedAt: Date.now(), delivery: 'confirmed' });
         }
         return driver.transition(action, 'verifying_delivery', { ...item, observedAt: Date.now(), delivery: 'unknown' },
-          '先前写入结果尚未确认；未重新写入 ADO，请核对远端历史');
+          t('agent.externalAction.adoOutcomeUnknown'));
+      }
+      if (spec.kind === 'ado_comment') {
+        const item = await driver.readAdo(spec);
+        return driver.transition(action, 'verifying_delivery', { ...item, observedAt: Date.now(), delivery: 'unknown' },
+          t('agent.externalAction.adoOutcomeUnknown'));
       }
       const confirmed: string[] = [];
       for (const part of spec.parts) {
         const message = await driver.readMessage(spec, part.id);
         if (!message) continue;
         if (message.id !== part.id || message.rid !== spec.rid || message.text !== part.text) {
-          return driver.transition(action, 'failed', { observedAt: Date.now(), messageIds: confirmed, delivery: 'conflict' }, '汇报消息 ID 已存在其他内容或属于其他讨论室');
+          return driver.transition(action, 'failed', { observedAt: Date.now(), messageIds: confirmed, delivery: 'conflict' }, t('agent.externalAction.reportConflict'));
         }
         confirmed.push(part.id);
       }
       return driver.transition(action, confirmed.length === spec.parts.length ? 'acknowledged' : 'verifying_delivery',
         { observedAt: Date.now(), messageIds: confirmed, delivery: confirmed.length === spec.parts.length ? 'confirmed' : 'unknown' },
-        confirmed.length === spec.parts.length ? undefined : '汇报尚未全部确认送达；保留原消息 ID，未自动重发');
+        confirmed.length === spec.parts.length ? undefined : t('agent.externalAction.reportPartial'));
     } catch (error) {
-      return driver.transition(action, 'verifying_delivery', { observedAt: Date.now(), delivery: 'unknown' }, `回读暂时失败：${errorText(error)}`);
+      return driver.transition(action, 'verifying_delivery', { observedAt: Date.now(), delivery: 'unknown' }, t('agent.externalAction.readbackFailed', { error: errorText(error) }));
     }
   }
 
@@ -124,7 +143,7 @@ export function createExternalActionExecutor(driver: ExternalActionDriver) {
     const frozen = readExternalActionSpec(action);
     if (!frozen || frozen.kind !== spec.kind || frozen.workId !== spec.workId ||
       frozen.actor.userId !== spec.actor.userId || frozen.actor.server !== spec.actor.server) {
-      throw new Error('外部操作身份不一致，拒绝覆盖已冻结的动作');
+      throw new Error(t('agent.externalAction.identityMismatch'));
     }
     // 同一操作始终使用首次持久化的事实快照；重试不接受新内容。
     spec = frozen;
@@ -144,9 +163,23 @@ export function createExternalActionExecutor(driver: ExternalActionDriver) {
       } catch (error) {
         const unknown = driver.isUnknownAdoError(error);
         return driver.transition(action, unknown ? 'verifying_delivery' : 'failed',
-          { observedAt: Date.now(), delivery: unknown ? 'unknown' : /冲突|已被其他人|状态已从/.test(errorText(error)) ? 'conflict' : 'failed' }, errorText(error));
+          { observedAt: Date.now(), delivery: unknown ? 'unknown' : /冲突|已被其他人|状态已从|conflict|updated by another|state changed from/i.test(errorText(error)) ? 'conflict' : 'failed' }, errorText(error));
       }
       // 回执持久化失败不能把成功写入误记为确定失败；保留发送态等待回读。
+      return driver.transition(action, 'acknowledged', { ...item, observedAt: Date.now(), delivery: 'confirmed' });
+    }
+    if (spec.kind === 'ado_comment') {
+      if (!driver.writeAdoComment) {
+        return driver.transition(action, 'failed', { observedAt: Date.now(), delivery: 'failed' }, 'ADO comment driver unavailable');
+      }
+      let item: { revision: number; state: string };
+      try {
+        item = await driver.writeAdoComment(spec);
+      } catch (error) {
+        const unknown = driver.isUnknownAdoError(error);
+        return driver.transition(action, unknown ? 'verifying_delivery' : 'failed',
+          { observedAt: Date.now(), delivery: unknown ? 'unknown' : /冲突|已被其他人|conflict|updated by another/i.test(errorText(error)) ? 'conflict' : 'failed' }, errorText(error));
+      }
       return driver.transition(action, 'acknowledged', { ...item, observedAt: Date.now(), delivery: 'confirmed' });
     }
     const confirmed: string[] = [];
@@ -157,11 +190,11 @@ export function createExternalActionExecutor(driver: ExternalActionDriver) {
         // 可能只返回 bare 400，不能用它作为首次发送的必要前置条件。
         const existing = firstDelivery ? null : await driver.readMessage(spec, part.id);
         if (existing && (existing.id !== part.id || existing.rid !== spec.rid || existing.text !== part.text)) {
-          return driver.transition(action, 'failed', { observedAt: Date.now(), messageIds: confirmed, delivery: 'conflict' }, '汇报消息 ID 已存在其他内容或属于其他讨论室');
+          return driver.transition(action, 'failed', { observedAt: Date.now(), messageIds: confirmed, delivery: 'conflict' }, t('agent.externalAction.reportConflict'));
         }
         const message = existing ?? await driver.sendMessage(spec, part);
         if (message.id !== part.id || message.rid !== spec.rid || message.text !== part.text) {
-          return driver.transition(action, 'failed', { observedAt: Date.now(), messageIds: confirmed, delivery: 'conflict' }, '服务端回执与冻结汇报的消息 ID、讨论室或内容不一致');
+          return driver.transition(action, 'failed', { observedAt: Date.now(), messageIds: confirmed, delivery: 'conflict' }, t('agent.externalAction.receiptMismatch'));
         }
         confirmed.push(part.id);
         action = await driver.transition(action, 'dispatched', { observedAt: Date.now(), messageIds: [...confirmed], delivery: 'unknown' });
@@ -169,7 +202,7 @@ export function createExternalActionExecutor(driver: ExternalActionDriver) {
       return await driver.transition(action, 'acknowledged', { observedAt: Date.now(), messageIds: confirmed, delivery: 'confirmed' });
     } catch (error) {
       return driver.transition(action, 'verifying_delivery', { observedAt: Date.now(), messageIds: confirmed, delivery: 'unknown' },
-        `汇报送达待确认：${errorText(error)}`);
+        t('agent.externalAction.deliveryPending', { error: errorText(error) }));
     }
   }
 

@@ -1,4 +1,5 @@
 import { tsMs, type RcMessage, type RcMessageAttachment } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { stripQuotePrefix } from './messageText';
 import { stripAgentSessionMarker } from '../agent/card';
 
@@ -8,15 +9,15 @@ function escapeLabel(value: string): string {
 
 function attachmentMarkdown(attachment: RcMessageAttachment): string[] {
   if (attachment.message_link) return [];
-  const label = escapeLabel(attachment.title || attachment.description || '附件');
+  const label = escapeLabel(attachment.title || attachment.description || t('chat.common.attachment'));
   const lines: string[] = [];
   if (attachment.text) lines.push(attachment.text);
   if (attachment.image_url) lines.push(`![${label}](${attachment.image_url})`);
   else if (attachment.title_link) lines.push(`[${label}](${attachment.title_link})`);
-  else if (attachment.title && !attachment.text) lines.push(`[附件：${attachment.title}]`);
+  else if (attachment.title && !attachment.text) lines.push(t('chat.output.attachmentTitle', { title: attachment.title }));
   for (const field of attachment.fields ?? []) {
     if (field.title || field.value) {
-      lines.push([field.title, field.value].filter(Boolean).join('：'));
+      lines.push([field.title, field.value].filter(Boolean).join(t('chat.common.colonSep')));
     }
   }
   return lines;
@@ -27,7 +28,7 @@ export function messageToMarkdown(message: RcMessage): string {
     stripQuotePrefix(stripAgentSessionMarker(message.msg ?? '')).trim(),
     ...(message.attachments ?? []).flatMap(attachmentMarkdown),
   ].filter(Boolean);
-  return lines.join('\n\n') || '[空消息]';
+  return lines.join('\n\n') || t('chat.forward.emptyMessage');
 }
 
 /** 复制、导出共用：按时间排序，不包含发送人、用户名或用户 ID。 */

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   getAiRuntimeStartupResolution,
   initializeStartupAiRuntimeProvider,
@@ -201,6 +203,10 @@ test('启动探测不阻塞首屏，在内核初始化前完成，且修改设�
   assert.ok(selection >= 0 && rootRender > selection);
   assert.doesNotMatch(settings, /setAiRuntimeProvider/);
   assert.match(settings, /const selectAiRuntime = \(provider: AiRuntimeProvider\): void => \{\s*setSelectedAiRuntime\(persistAiRuntimeProvider\(provider\)\);\s*\}/);
-  assert.match(settings, /Pi（内建通用引擎）/);
-  assert.match(settings, /无 AI/);
+  assert.match(settings, /label: t\('settings\.ai\.runtimePiOptionLabel'\)/);
+  assert.match(zhCN['settings.ai.runtimePiOptionLabel'], /Pi（内建通用引擎）/);
+  assert.ok(enUS['settings.ai.runtimePiOptionLabel'].trim());
+  assert.match(settings, /label: t\('settings\.ai\.runtimeNoneName'\)/);
+  assert.match(zhCN['settings.ai.runtimeNoneName'], /无 AI/);
+  assert.ok(enUS['settings.ai.runtimeNoneName'].trim());
 });

@@ -5,6 +5,8 @@ import {
   handoffToButlerTaskWith,
   type ButlerTaskHandoffDependencies,
 } from '../../apps/web/src/lib/butlerTaskHandoff';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 function createDeps(
   overrides: Partial<ButlerTaskHandoffDependencies> = {},
@@ -54,13 +56,23 @@ test('消息入口文案改为通用的 AI 管家，而不是硬编码 Codex 任
   const item = readFileSync('apps/web/src/components/MessageItem.tsx', 'utf8');
   const list = readFileSync('apps/web/src/components/MessageList.tsx', 'utf8');
 
-  assert.match(item, /label: '交给 AI 管家'/);
+  assert.match(item, /label: t\('chat\.message\.handOverToButler'\)/);
+  assert.match(zhCN['chat.message.handOverToButler'], /^交给 AI 管家$/);
+  assert.ok(enUS['chat.message.handOverToButler'].trim());
   assert.doesNotMatch(item, /创建 Codex 任务/);
+  assert.doesNotMatch(zhCN['chat.message.handOverToButler'], /创建 Codex 任务/);
 
-  assert.match(list, /已交给 AI 管家：/);
-  assert.match(list, /让 AI 管家从这些消息里提取承诺/);
-  assert.match(list, /让 AI 管家总结这段对话/);
+  assert.match(list, /t\('chat\.messageList\.handedOverToButler'/);
+  assert.match(zhCN['chat.messageList.handedOverToButler'], /已交给 AI 管家：/);
+  assert.ok(enUS['chat.messageList.handedOverToButler'].trim());
+  assert.match(list, /title=\{t\('chat\.messageList\.extractCommitmentsTooltip'\)\}/);
+  assert.match(zhCN['chat.messageList.extractCommitmentsTooltip'], /让 AI 管家从这些消息里提取承诺/);
+  assert.ok(enUS['chat.messageList.extractCommitmentsTooltip'].trim());
+  assert.match(list, /title=\{t\('chat\.messageList\.summarizeSelectedTooltip'\)\}/);
+  assert.match(zhCN['chat.messageList.summarizeSelectedTooltip'], /让 AI 管家总结这段对话/);
+  assert.ok(enUS['chat.messageList.summarizeSelectedTooltip'].trim());
   assert.doesNotMatch(list, /已创建 Codex 任务：/);
+  assert.doesNotMatch(zhCN['chat.messageList.handedOverToButler'], /已创建 Codex 任务：/);
 });
 
 test('房间交接只预填 canonical 托管指令，不创建 provider 专用会话', () => {

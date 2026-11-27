@@ -1,4 +1,5 @@
 import { createDefaultKernelChatPostPort } from '../lib/kernelChatPostMessage';
+import { t } from '../i18n';
 
 export interface KernelChatPostPort {
   isMember(rid: string): boolean;
@@ -18,8 +19,8 @@ export async function postBridgeMessageForPort(
   text: string,
   tmid?: string,
 ): Promise<{ ok: true }> {
-  if (!rid || !port.isMember(rid)) throw new Error('只能向已加入的会话发送消息');
-  if (!text.trim()) throw new Error('消息不能为空');
+  if (!rid || !port.isMember(rid)) throw new Error(t('settings.kernel.host.mustBeMemberToSend'));
+  if (!text.trim()) throw new Error(t('settings.kernel.host.emptyMessage'));
   await port.send(rid, text, tmid);
   return { ok: true };
 }

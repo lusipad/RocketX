@@ -1,5 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
-import { beginButlerAccountSelection, captureButlerRuntimeAccountContext, isButlerAccountReady, runWithButlerAccount } from './butlerAccountReady';
+import { t } from '../i18n';
+import {
+  beginButlerAccountSelection,
+  captureButlerRuntimeAccountContext,
+  isButlerAccountReady,
+  runWithButlerAccount,
+  runWithButlerAccountIfManaged,
+} from './butlerAccountReady';
 import type { RuntimeAccountContext } from './butlerAccountReady';
 import type { WorkRuntimeEventsPage } from './workRuntimeEvents';
 import type { NativeWorkSnapshot, NativeWorkSnapshotInput, NativeWorkStartInput, NativeWorkResumeInput, NativeWorkSubmitInput, NativeWorkAnswerInput, NativeWorkCancelQueuedInput } from './nativeWorkRuntime';
@@ -156,7 +163,7 @@ export async function readWorkRuntimeEvents(query: {
 }): Promise<WorkRuntimeEventsPage> {
   if (!Number.isSafeInteger(query.afterSequence) || query.afterSequence < 0
     || !Number.isInteger(query.limit ?? 100) || (query.limit ?? 100) < 1 || (query.limit ?? 100) > 500) {
-    throw new Error('事件游标必须非负，每页范围为 1–500');
+    throw new Error(t('nav.desktopCommands.invalidEventCursor'));
   }
   const account = captureButlerRuntimeAccountContext();
   return runWithButlerAccount(() => invoke<WorkRuntimeEventsPage>('butler_work_runtime_events', {
@@ -521,6 +528,251 @@ export async function removeNativeWorktree(
   await invoke('butler_worktree_remove', { repoRoot, worktreePath });
 }
 
+export interface GitDiffFileSummary {
+  path: string;
+  status: string;
+  staged: boolean;
+  unstaged: boolean;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  patch: string;
+  truncated: boolean;
+}
+
+export interface GitWorkspaceDiff {
+  workspaceRoot: string;
+  repoTopLevel: string;
+  branch: string | null;
+  headSha: string | null;
+  baseRef: string | null;
+  compareRef: string | null;
+  ahead: number;
+  behind: number;
+  totalAdditions: number;
+  totalDeletions: number;
+  files: GitDiffFileSummary[];
+  truncatedTotal: boolean;
+}
+
+export interface GitCheckpointRecord {
+  id: string;
+  refName: string;
+  commitSha: string;
+  treeSha: string;
+  label: string;
+  turnId: string | null;
+  createdAt: number;
+  changedFiles: number;
+}
+
+export interface GitCommitResult {
+  commitSha: string;
+  branch: string | null;
+  summary: string;
+}
+
+export interface GitPushResult {
+  remote: string;
+  branch: string;
+  output: string;
+}
+
+export interface GitCreatePrResult {
+  created: boolean;
+  url: string | null;
+  fallbackCompareUrl: string | null;
+  message: string;
+}
+
+export interface GitWorktreeItem {
+  path: string;
+  headSha: string | null;
+  branch: string | null;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+  isCurrent: boolean;
+  isManaged: boolean;
+}
+
+export interface GitBranchItem {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+}
+
+export async function diffWorkspaceGit(
+  workspaceRoot: string,
+  baseRef?: string | null,
+): Promise<GitWorkspaceDiff> {
+  return invoke<GitWorkspaceDiff>('butler_git_diff_workspace', {
+    workspaceRoot,
+    baseRef: baseRef ?? null,
+  });
+}
+
+export async function createGitCheckpoint(
+  workspaceRoot: string,
+  label: string,
+  turnId?: string | null,
+): Promise<GitCheckpointRecord> {
+  return invoke<GitCheckpointRecord>('butler_git_checkpoint_create', {
+    workspaceRoot,
+    label,
+    turnId: turnId ?? null,
+  });
+}
+
+export async function listGitCheckpoints(
+  workspaceRoot: string,
+): Promise<GitCheckpointRecord[]> {
+  const res = await invoke<GitCheckpointRecord[] | null>('butler_git_checkpoint_list', { workspaceRoot });
+  return Array.isArray(res) ? res : [];
+}
+
+export async function diffGitCheckpoints(
+  workspaceRoot: string,
+  fromRef: string,
+  toRef?: string | null,
+): Promise<GitWorkspaceDiff> {
+  return invoke<GitWorkspaceDiff>('butler_git_checkpoint_diff', {
+    workspaceRoot,
+    fromRef,
+    toRef: toRef ?? null,
+  });
+}
+
+export async function revertGitCheckpoint(
+  workspaceRoot: string,
+  checkpointId: string,
+  mode: 'working_tree' = 'working_tree',
+): Promise<GitCheckpointRecord> {
+  return invoke<GitCheckpointRecord>('butler_git_checkpoint_revert', {
+    workspaceRoot,
+    checkpointId,
+    mode,
+  });
+}
+
+export async function stageGitFile(workspaceRoot: string, path: string): Promise<void> {
+  await invoke('butler_git_stage_file', { workspaceRoot, path });
+}
+
+export async function unstageGitFile(workspaceRoot: string, path: string): Promise<void> {
+  await invoke('butler_git_unstage_file', { workspaceRoot, path });
+}
+
+export async function discardGitFile(workspaceRoot: string, path: string): Promise<void> {
+  await invoke('butler_git_discard_file', { workspaceRoot, path });
+}
+
+export async function commitGitChanges(
+  workspaceRoot: string,
+  message: string,
+  stageAll = false,
+): Promise<GitCommitResult> {
+  return invoke<GitCommitResult>('butler_git_commit', { workspaceRoot, message, stageAll });
+}
+
+export async function pushGitBranch(input: {
+  workspaceRoot: string;
+  remote?: string | null;
+  branch?: string | null;
+  setUpstream?: boolean;
+}): Promise<GitPushResult> {
+  return invoke<GitPushResult>('butler_git_push', {
+    workspaceRoot: input.workspaceRoot,
+    remote: input.remote ?? null,
+    branch: input.branch ?? null,
+    setUpstream: input.setUpstream ?? true,
+  });
+}
+
+export async function createGitPullRequest(input: {
+  workspaceRoot: string;
+  title: string;
+  body?: string | null;
+  base?: string | null;
+  draft?: boolean;
+}): Promise<GitCreatePrResult> {
+  return invoke<GitCreatePrResult>('butler_git_create_pr', {
+    workspaceRoot: input.workspaceRoot,
+    title: input.title,
+    body: input.body ?? null,
+    base: input.base ?? null,
+    draft: input.draft ?? false,
+  });
+}
+
+export async function listGitWorktrees(workspaceRoot: string): Promise<GitWorktreeItem[]> {
+  const res = await invoke<GitWorktreeItem[] | null>('butler_worktree_list', { workspaceRoot });
+  return Array.isArray(res) ? res : [];
+}
+
+export async function listGitBranches(workspaceRoot: string): Promise<GitBranchItem[]> {
+  const res = await invoke<GitBranchItem[] | null>('butler_git_branch_list', { workspaceRoot });
+  return Array.isArray(res) ? res : [];
+}
+
+export async function checkoutGitBranch(
+  workspaceRoot: string,
+  branch: string,
+  create = false,
+): Promise<void> {
+  await invoke('butler_git_branch_checkout', { workspaceRoot, branch, create });
+}
+
+export interface ButlerTerminalOutputSnapshot {
+  output: string;
+  truncated: boolean;
+  exitStatus: { exitCode: number | null; signal: string | null } | null;
+}
+
+export async function startButlerTerminal(input: {
+  workspaceRoot: string;
+  shell?: string | null;
+  cwd?: string | null;
+}): Promise<string> {
+  return invoke<string>('butler_terminal_start', {
+    workspaceRoot: input.workspaceRoot,
+    shell: input.shell ?? null,
+    cwd: input.cwd ?? null,
+  });
+}
+
+export async function writeButlerTerminal(terminalId: string, data: string): Promise<void> {
+  await invoke('butler_terminal_write', { terminalId, data });
+}
+
+export async function readButlerTerminalOutput(
+  terminalId: string,
+): Promise<ButlerTerminalOutputSnapshot> {
+  return invoke<ButlerTerminalOutputSnapshot>('butler_terminal_output', { terminalId });
+}
+
+export async function killButlerTerminal(terminalId: string): Promise<void> {
+  await invoke('butler_terminal_kill', { terminalId });
+}
+
+export async function releaseButlerTerminal(terminalId: string): Promise<void> {
+  await invoke('butler_terminal_release', { terminalId });
+}
+
+export async function listWorkspaceFiles(
+  workspaceRoot: string,
+  query?: string,
+  limit = 60,
+): Promise<string[]> {
+  const res = await invoke<string[] | null>('butler_workspace_list_files', {
+    workspaceRoot,
+    query: query ?? null,
+    limit,
+  });
+  return Array.isArray(res) ? res : [];
+}
+
 export type PiProviderPreset =
   | 'deepseek'
   | 'custom-openai'
@@ -530,8 +782,19 @@ export type PiProviderPreset =
   | 'google'
   | 'openrouter';
 
+export type PiApiProtocol =
+  | 'auto'
+  | 'openai-responses'
+  | 'openai-completions'
+  | 'anthropic-messages'
+  | 'google-generative-ai'
+  | 'azure-openai-responses'
+  | 'mistral-conversations'
+  | 'bedrock-converse-stream';
+
 export interface PiConfigView {
   provider: PiProviderPreset;
+  apiProtocol?: PiApiProtocol;
   baseUrl: string;
   hasApiKey: boolean;
   apiKeyHint?: string | null;
@@ -542,11 +805,48 @@ export interface PiConfigView {
 
 export interface PiConfigWriteInput {
   provider?: PiProviderPreset;
+  apiProtocol?: PiApiProtocol;
   baseUrl?: string;
   apiKey?: string;
   defaultModel?: string;
   extraModels?: string[];
   manualPath?: string;
+}
+
+export interface PiEndpointProbeInput {
+  baseUrl: string;
+  apiKey?: string;
+  provider?: PiProviderPreset;
+  apiProtocol?: PiApiProtocol;
+  preferredModel?: string;
+}
+
+export interface PiProtocolProbeDetail {
+  protocol: string;
+  status: 'verified' | 'detected' | 'unsupported' | 'error' | string;
+  httpStatus?: number | null;
+  message?: string | null;
+}
+
+export interface PiEndpointProbeResult {
+  ok: boolean;
+  normalizedBaseUrl: string;
+  detectedProtocol: PiApiProtocol;
+  supportedProtocols: PiApiProtocol[];
+  probeDetails: PiProtocolProbeDetail[];
+  discoveredModels: string[];
+  suggestedModel?: string | null;
+  latencyMs: number;
+  summary: string;
+}
+
+export interface PiLocalGatewayCandidate {
+  id: string;
+  label: string;
+  baseUrl: string;
+  protocol: PiApiProtocol;
+  models: string[];
+  latencyMs: number;
 }
 
 export interface PiRuntimeProbe {
@@ -572,6 +872,15 @@ export async function readPiConfig(): Promise<PiConfigView> {
 
 export async function writePiConfig(input: PiConfigWriteInput): Promise<PiConfigView> {
   return invoke<PiConfigView>('pi_config_write', { input });
+}
+
+export async function probePiEndpoint(input: PiEndpointProbeInput): Promise<PiEndpointProbeResult> {
+  return invoke<PiEndpointProbeResult>('pi_endpoint_probe', { input });
+}
+
+export async function scanLocalPiGateways(): Promise<PiLocalGatewayCandidate[]> {
+  const res = await invoke<PiLocalGatewayCandidate[] | null>('pi_local_gateways_scan');
+  return Array.isArray(res) ? res : [];
 }
 
 // ============================================================================
@@ -690,11 +999,13 @@ export interface AcpTerminalOutputSnapshot {
 }
 
 export async function acpAgentList(): Promise<AcpAgentProfile[]> {
-  return invoke<AcpAgentProfile[]>('acp_agent_list');
+  const res = await invoke<AcpAgentProfile[] | null>('acp_agent_list');
+  return Array.isArray(res) ? res : [];
 }
 
 export async function acpAgentDiscover(): Promise<AcpDiscoveredCandidate[]> {
-  return invoke<AcpDiscoveredCandidate[]>('acp_agent_discover');
+  const res = await invoke<AcpDiscoveredCandidate[] | null>('acp_agent_discover');
+  return Array.isArray(res) ? res : [];
 }
 
 export async function acpAgentUpsert(input: AcpAgentUpsertInput): Promise<AcpAgentProfile> {
@@ -732,13 +1043,15 @@ export async function acpProcessStop(processId: string): Promise<void> {
 }
 
 export async function acpProcessList(): Promise<AcpProcessInfo[]> {
-  return invoke<AcpProcessInfo[]>('acp_process_list');
+  const res = await invoke<AcpProcessInfo[] | null>('acp_process_list');
+  return Array.isArray(res) ? res : [];
 }
 
 export async function acpLocalSessionsDiscover(
   limit = 120,
 ): Promise<DiscoveredLocalSession[]> {
-  return invoke<DiscoveredLocalSession[]>('acp_local_sessions_discover', { limit });
+  const res = await invoke<DiscoveredLocalSession[] | null>('acp_local_sessions_discover', { limit });
+  return Array.isArray(res) ? res : [];
 }
 
 export async function acpLocalSessionMessages(input: {
@@ -748,13 +1061,14 @@ export async function acpLocalSessionMessages(input: {
   sourceScope?: string;
   limit?: number;
 }): Promise<LocalSessionMessage[]> {
-  return invoke<LocalSessionMessage[]>('acp_local_session_messages', {
+  const res = await invoke<LocalSessionMessage[] | null>('acp_local_session_messages', {
     provider: input.provider,
     sessionId: input.sessionId,
     sourcePath: input.sourcePath ?? null,
     sourceScope: input.sourceScope ?? null,
     limit: input.limit ?? 24,
   });
+  return Array.isArray(res) ? res : [];
 }
 
 export async function acpFsReadTextFile(
@@ -920,31 +1234,48 @@ export interface ButlerAssistantDigestInput {
 export async function butlerMemoryList(
   filter: ButlerMemoryFilter,
 ): Promise<ButlerMemoryEntry[]> {
-  return invoke<ButlerMemoryEntry[]>('butler_memory_list', {
-    accountScope: filter.accountScope,
-    category: filter.category ?? null,
-    workspaceRoot: filter.workspaceRoot ?? null,
-    query: filter.query ?? null,
-    enabledOnly: filter.enabledOnly ?? null,
-  });
+  const res = await runWithButlerAccountIfManaged(() =>
+    invoke<ButlerMemoryEntry[] | null>('butler_memory_list', {
+      accountScope: filter.accountScope,
+      category: filter.category ?? null,
+      workspaceRoot: filter.workspaceRoot ?? null,
+      query: filter.query ?? null,
+      enabledOnly: filter.enabledOnly ?? null,
+    }),
+  );
+  return Array.isArray(res) ? res : [];
 }
 
 export async function butlerMemoryUpsert(
   input: ButlerMemoryUpsertInput,
 ): Promise<ButlerMemoryEntry> {
-  return invoke<ButlerMemoryEntry>('butler_memory_upsert', { input });
+  return runWithButlerAccountIfManaged(() =>
+    invoke<ButlerMemoryEntry>('butler_memory_upsert', { input }),
+  );
 }
 
-export async function butlerMemoryDelete(id: string): Promise<boolean> {
-  return invoke<boolean>('butler_memory_delete', { id });
+export async function butlerMemoryDelete(
+  id: string,
+  accountScope?: string,
+): Promise<boolean> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<boolean>('butler_memory_delete', { id, accountScope: accountScope ?? null }),
+  );
 }
 
-export async function butlerMemoryMarkRecalled(ids: string[]): Promise<number> {
-  return invoke<number>('butler_memory_mark_recalled', { ids });
+export async function butlerMemoryMarkRecalled(
+  ids: string[],
+  accountScope?: string,
+): Promise<number> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<number>('butler_memory_mark_recalled', { ids, accountScope: accountScope ?? null }),
+  );
 }
 
 export async function butlerMemoryClearScope(accountScope: string): Promise<number> {
-  return invoke<number>('butler_memory_clear_scope', { accountScope });
+  return runWithButlerAccountIfManaged(() =>
+    invoke<number>('butler_memory_clear_scope', { accountScope }),
+  );
 }
 
 export async function butlerAssistantDigestList(input: {
@@ -952,19 +1283,429 @@ export async function butlerAssistantDigestList(input: {
   kind?: ButlerAssistantDigestKind | null;
   limit?: number | null;
 }): Promise<ButlerAssistantDigest[]> {
-  return invoke<ButlerAssistantDigest[]>('butler_assistant_digest_list', {
-    accountScope: input.accountScope,
-    kind: input.kind ?? null,
-    limit: input.limit ?? null,
-  });
+  const res = await runWithButlerAccountIfManaged(() =>
+    invoke<ButlerAssistantDigest[] | null>('butler_assistant_digest_list', {
+      accountScope: input.accountScope,
+      kind: input.kind ?? null,
+      limit: input.limit ?? null,
+    }),
+  );
+  return Array.isArray(res) ? res : [];
 }
 
 export async function butlerAssistantDigestSave(
   input: ButlerAssistantDigestInput,
 ): Promise<ButlerAssistantDigest> {
-  return invoke<ButlerAssistantDigest>('butler_assistant_digest_save', { input });
+  return runWithButlerAccountIfManaged(() =>
+    invoke<ButlerAssistantDigest>('butler_assistant_digest_save', { input }),
+  );
 }
 
-export async function butlerAssistantDigestDelete(id: string): Promise<boolean> {
-  return invoke<boolean>('butler_assistant_digest_delete', { id });
+export async function butlerAssistantDigestDelete(
+  id: string,
+  accountScope?: string,
+): Promise<boolean> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<boolean>('butler_assistant_digest_delete', { id, accountScope: accountScope ?? null }),
+  );
+}
+
+export type ButlerSkillApprovalPolicy = 'auto' | 'confirm_write' | 'confirm_all';
+
+export interface ButlerSkillEntry {
+  id: string;
+  accountScope: string;
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  instructionsMd: string;
+  triggers: string[];
+  allowedTools: string[];
+  approvalPolicy: ButlerSkillApprovalPolicy | string;
+  workspaceRoot: string | null;
+  enabled: boolean;
+  pinned: boolean;
+  runCount: number;
+  lastRunAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ButlerSkillUpsertInput {
+  id?: string | null;
+  accountScope: string;
+  slug?: string | null;
+  name: string;
+  description?: string | null;
+  category?: string | null;
+  instructionsMd: string;
+  triggers?: string[];
+  allowedTools?: string[];
+  approvalPolicy?: ButlerSkillApprovalPolicy | string;
+  workspaceRoot?: string | null;
+  enabled?: boolean;
+  pinned?: boolean;
+}
+
+export async function butlerSkillList(input: {
+  accountScope: string;
+  workspaceRoot?: string | null;
+  includeDisabled?: boolean;
+}): Promise<ButlerSkillEntry[]> {
+  const res = await runWithButlerAccountIfManaged(() =>
+    invoke<ButlerSkillEntry[] | null>('butler_skill_list', {
+      accountScope: input.accountScope,
+      workspaceRoot: input.workspaceRoot ?? null,
+      includeDisabled: input.includeDisabled ?? true,
+    }),
+  );
+  return Array.isArray(res) ? res : [];
+}
+
+export async function butlerSkillUpsert(
+  input: ButlerSkillUpsertInput,
+): Promise<ButlerSkillEntry> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<ButlerSkillEntry>('butler_skill_upsert', { input }),
+  );
+}
+
+export async function butlerSkillDelete(
+  id: string,
+  accountScope?: string,
+): Promise<boolean> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<boolean>('butler_skill_delete', { id, accountScope: accountScope ?? null }),
+  );
+}
+
+export async function butlerSkillRecordRun(
+  id: string,
+  accountScope?: string,
+): Promise<ButlerSkillEntry> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<ButlerSkillEntry>('butler_skill_record_run', { id, accountScope: accountScope ?? null }),
+  );
+}
+
+export async function butlerSkillImportMarkdown(input: {
+  accountScope: string;
+  markdown: string;
+  workspaceRoot?: string | null;
+}): Promise<ButlerSkillEntry> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<ButlerSkillEntry>('butler_skill_import_markdown', {
+      accountScope: input.accountScope,
+      markdown: input.markdown,
+      workspaceRoot: input.workspaceRoot ?? null,
+    }),
+  );
+}
+
+export async function butlerSkillExportMarkdown(
+  id: string,
+  accountScope?: string,
+): Promise<string> {
+  return runWithButlerAccountIfManaged(() =>
+    invoke<string>('butler_skill_export_markdown', { id, accountScope: accountScope ?? null }),
+  );
+}
+
+export interface ProjectPolicyConfig {
+  version: number;
+  allowedCommands: string[];
+  deniedCommands: string[];
+  allowedPaths: string[];
+  deniedPaths: string[];
+  requireApprovalForExternal: boolean;
+  maxAutonomyMode: 'readonly' | 'confirm' | 'autonomous' | string;
+  allowNetworkTools: boolean;
+}
+
+export interface ProjectPolicyDecision {
+  verdict: 'allow' | 'confirm' | 'deny' | string;
+  reason: string;
+  matchedRule: string | null;
+}
+
+export async function butlerPolicyGet(workspaceRoot: string): Promise<ProjectPolicyConfig> {
+  return invoke<ProjectPolicyConfig>('butler_policy_get', { workspaceRoot });
+}
+
+export async function butlerPolicySave(
+  workspaceRoot: string,
+  policy: ProjectPolicyConfig,
+): Promise<ProjectPolicyConfig> {
+  return invoke<ProjectPolicyConfig>('butler_policy_save', { workspaceRoot, policy });
+}
+
+export async function butlerPolicyEvaluate(input: {
+  workspaceRoot: string;
+  actionKind: string;
+  target: string;
+}): Promise<ProjectPolicyDecision> {
+  return invoke<ProjectPolicyDecision>('butler_policy_evaluate', input);
+}
+
+export interface ButlerMcpServerView {
+  id: string;
+  name: string;
+  transport: string;
+  command: string;
+  args: string[];
+  publicEnv: Record<string, string>;
+  secretEnvKeys: string[];
+  hasSecrets: boolean;
+  enabled: boolean;
+  scope: string;
+  workspaceRoot: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ButlerMcpServerUpsertInput {
+  id?: string | null;
+  name: string;
+  command: string;
+  args?: string[];
+  publicEnv?: Record<string, string>;
+  secretEnv?: Record<string, string>;
+  clearSecretKeys?: string[];
+  enabled?: boolean;
+  scope?: 'global' | 'workspace';
+  workspaceRoot?: string | null;
+}
+
+export interface ButlerMcpHealthCheckResult {
+  ok: boolean;
+  latencyMs: number;
+  toolCount: number;
+  tools: string[];
+  error: string | null;
+}
+
+export interface ButlerMcpLaunchConfig {
+  id: string;
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
+export async function butlerMcpList(workspaceRoot?: string | null): Promise<ButlerMcpServerView[]> {
+  const res = await invoke<ButlerMcpServerView[] | null>('butler_mcp_list', { workspaceRoot: workspaceRoot ?? null });
+  return Array.isArray(res) ? res : [];
+}
+
+export async function butlerMcpUpsert(input: ButlerMcpServerUpsertInput): Promise<ButlerMcpServerView> {
+  return invoke<ButlerMcpServerView>('butler_mcp_upsert', { input });
+}
+
+export async function butlerMcpDelete(id: string): Promise<boolean> {
+  return invoke<boolean>('butler_mcp_delete', { id });
+}
+
+export async function butlerMcpHealthCheck(id: string): Promise<ButlerMcpHealthCheckResult> {
+  return invoke<ButlerMcpHealthCheckResult>('butler_mcp_health_check', { id });
+}
+
+export async function butlerMcpLaunchConfigs(
+  workspaceRoot?: string | null,
+): Promise<ButlerMcpLaunchConfig[]> {
+  const res = await invoke<ButlerMcpLaunchConfig[] | null>('butler_mcp_launch_configs', {
+    workspaceRoot: workspaceRoot ?? null,
+  });
+  return Array.isArray(res) ? res : [];
+}
+
+export interface GitHubConnectorStatus {
+  configured: boolean;
+  apiBaseUrl: string;
+  hasToken: boolean;
+  tokenHint: string | null;
+  ghCliAvailable: boolean;
+  ghCliAuthenticated?: boolean;
+}
+
+export interface GitHubRepoIdentity {
+  owner: string;
+  repo: string;
+  remoteUrl: string;
+}
+
+export interface GitHubIssueComment {
+  id: number;
+  author: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  htmlUrl: string;
+}
+
+export interface GitHubIssueDetail {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  body: string;
+  bodyTruncated: boolean;
+  state: string;
+  author: string;
+  labels: string[];
+  assignees: string[];
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  comments: GitHubIssueComment[];
+}
+
+export interface GitHubPullSummary {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  headRef: string;
+  baseRef: string;
+  draft: boolean;
+  htmlUrl: string;
+  updatedAt: string;
+}
+
+export interface GitHubIssueSummary {
+  number: number;
+  title: string;
+  state: string;
+  author: string;
+  labels: string[];
+  htmlUrl: string;
+  updatedAt: string;
+}
+
+export interface GitHubPrDiffResult {
+  owner: string;
+  repo: string;
+  number: number;
+  diff: string;
+  truncated: boolean;
+}
+
+export async function butlerGithubStatus(): Promise<GitHubConnectorStatus> {
+  return invoke<GitHubConnectorStatus>('butler_github_status');
+}
+
+export async function butlerGithubSaveConfig(input: {
+  apiBaseUrl?: string | null;
+  token?: string | null;
+}): Promise<GitHubConnectorStatus> {
+  return invoke<GitHubConnectorStatus>('butler_github_save_config', {
+    apiBaseUrl: input.apiBaseUrl ?? null,
+    token: input.token ?? null,
+  });
+}
+
+export async function butlerGithubClearConfig(): Promise<void> {
+  return invoke<void>('butler_github_clear_config');
+}
+
+export async function butlerGithubTestConnection(): Promise<{
+  ok: boolean;
+  login: string;
+  name: string;
+  apiBaseUrl: string;
+}> {
+  return invoke('butler_github_test_connection');
+}
+
+export async function butlerGithubListPrs(input: {
+  owner: string;
+  repo: string;
+  state?: 'open' | 'closed' | 'all';
+  limit?: number;
+}): Promise<GitHubPullSummary[]> {
+  const res = await invoke<GitHubPullSummary[] | null>('butler_github_list_prs', {
+    owner: input.owner,
+    repo: input.repo,
+    state: input.state ?? 'open',
+    limit: input.limit ?? 20,
+  });
+  return Array.isArray(res) ? res : [];
+}
+
+export async function butlerGithubListIssues(input: {
+  owner: string;
+  repo: string;
+  state?: 'open' | 'closed' | 'all';
+  limit?: number;
+}): Promise<GitHubIssueSummary[]> {
+  const res = await invoke<GitHubIssueSummary[] | null>('butler_github_list_issues', {
+    owner: input.owner,
+    repo: input.repo,
+    state: input.state ?? 'open',
+    limit: input.limit ?? 20,
+  });
+  return Array.isArray(res) ? res : [];
+}
+
+export async function butlerGithubGetPrDiff(input: {
+  owner: string;
+  repo: string;
+  number: number;
+}): Promise<GitHubPrDiffResult> {
+  return invoke<GitHubPrDiffResult>('butler_github_get_pr_diff', input);
+}
+
+export async function butlerGithubCreateComment(input: {
+  owner: string;
+  repo: string;
+  number: number;
+  body: string;
+}): Promise<unknown> {
+  return invoke('butler_github_create_comment', input);
+}
+
+export async function butlerGithubDetectWorkspaceRepo(
+  workspaceRoot: string,
+): Promise<GitHubRepoIdentity | null> {
+  return invoke<GitHubRepoIdentity | null>('butler_github_detect_workspace_repo', {
+    workspaceRoot,
+  });
+}
+
+export async function butlerGithubGetIssueDetail(input: {
+  owner: string;
+  repo: string;
+  number: number;
+  commentLimit?: number;
+}): Promise<GitHubIssueDetail> {
+  return invoke<GitHubIssueDetail>('butler_github_get_issue_detail', {
+    owner: input.owner,
+    repo: input.repo,
+    number: input.number,
+    commentLimit: input.commentLimit ?? 20,
+  });
+}
+
+export interface BrowserInspectResult {
+  url: string;
+  finalUrl: string;
+  status: number;
+  contentType: string | null;
+  title: string | null;
+  headings: string[];
+  textExcerpt: string;
+  links: Array<{ text: string; href: string }>;
+  durationMs: number;
+}
+
+export async function butlerBrowserInspect(input: {
+  url: string;
+  maxChars?: number;
+  allowInsecureLan?: boolean;
+}): Promise<BrowserInspectResult> {
+  return invoke<BrowserInspectResult>('butler_browser_inspect', {
+    url: input.url,
+    maxChars: input.maxChars ?? null,
+    allowInsecureLan: input.allowInsecureLan ?? false,
+  });
 }

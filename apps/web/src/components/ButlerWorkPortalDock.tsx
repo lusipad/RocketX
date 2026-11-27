@@ -17,6 +17,7 @@ import {
 import { generatePersonalAssistantBrief } from '../agent/personalAssistant';
 import { syncLiveSessionsIntoLedger } from '../agent/superAgentBridge';
 import { buildWorkflowExecutionReport } from '../agent/workflowReport';
+import { useI18n, type MessageKey } from '../i18n';
 import type { CodexArtifact } from '../lib/codexArtifacts';
 import type { WorkCardStage } from '../platform/desktopCommands';
 import { resolvePortalWorkContext, workContextPathKey } from '../lib/workContext';
@@ -28,11 +29,14 @@ import { toast } from '../stores/toast';
 import CodexArtifactPanel from './CodexArtifactPanel';
 import WorkCardPortal from './WorkCardPortal';
 import WorkflowReportCard from './WorkflowReportCard';
-import { WORK_KANBAN_STAGES } from './WorkKanbanBoard';
 
-const STAGE_LABEL_MAP: Record<WorkCardStage, string> = Object.fromEntries(
-  WORK_KANBAN_STAGES.map((item) => [item.key, item.label]),
-) as Record<WorkCardStage, string>;
+const STAGE_LABEL_KEYS: Record<WorkCardStage, MessageKey> = {
+  triage: 'butler.portal.stage.triage',
+  ready: 'butler.portal.stage.ready',
+  in_progress: 'butler.portal.stage.inProgress',
+  verifying: 'butler.portal.stage.verifying',
+  done: 'butler.portal.stage.done',
+};
 
 export type PortalTab = 'workcard' | 'artifact' | 'activity' | 'report' | 'assistant';
 
@@ -61,6 +65,7 @@ export default function ButlerWorkPortalDock({
   artifactThreadId,
   currentRuntime = 'pi',
 }: ButlerWorkPortalDockProps) {
+  const { t, tp } = useI18n();
   const createCard = useWorkLedger((state) => state.createCard);
   const cards = useWorkLedger((state) => state.cards);
   const workSessions = useWorkLedger((state) => state.sessions);
@@ -200,29 +205,29 @@ export default function ButlerWorkPortalDock({
       setCreating(false);
       setSelection({ cardId: created.id, contextKey });
     } catch (error) {
-      toast.error(error, '创建任务失败');
+      toast.error(error, t('butler.portal.createTaskFailed'));
     } finally {
       creatingCardRef.current = false;
     }
   };
 
   return (
-    <aside className="butler-portal-drawer-container" aria-label="统一工作台容器">
+    <aside className="butler-portal-drawer-container" aria-label={t('butler.portal.containerAria')}>
       <div
         className="butler-portal-backdrop"
         onClick={onClose}
         aria-hidden="true"
-        title="点击关闭工作台抽屉"
+        title={t('butler.portal.backdropTitle')}
       />
       <div
-        aria-label="任务工作台面板"
+        aria-label={t('butler.portal.panelAria')}
         style={{ width: `${width}px` }}
         className="butler-work-portal-dock relative flex h-full shrink-0 flex-col border-l border-line bg-surface select-auto shadow-sm"
       >
       {/* 拖拽把手 (Left Edge Resize Handle) */}
       <div
         onMouseDown={handleMouseDown}
-        title="拖拽调整工作台宽度 (340px ~ 560px)"
+        title={t('butler.portal.resizeTitle')}
         className="group absolute -left-1.5 top-0 bottom-0 z-30 flex w-3 cursor-col-resize items-center justify-center transition-colors hover:bg-primary/20"
       >
         <div className="h-8 w-0.5 rounded bg-line-strong transition-colors group-hover:bg-primary" />
@@ -243,7 +248,7 @@ export default function ButlerWorkPortalDock({
               }`}
             >
               <ListOrdered size={12} />
-              <span>任务卡</span>
+              <span>{t('butler.portal.tabWorkcard')}</span>
             </button>
             <button
               type="button"
@@ -255,7 +260,7 @@ export default function ButlerWorkPortalDock({
               }`}
             >
               <FileCode2 size={12} />
-              <span>产物</span>
+              <span>{t('butler.portal.tabArtifact')}</span>
               {visibleArtifact ? <span className="h-1.5 w-1.5 rounded-full bg-primary" /> : null}
             </button>
             <button
@@ -268,7 +273,7 @@ export default function ButlerWorkPortalDock({
               }`}
             >
               <ActivityIcon size={12} />
-              <span>动态</span>
+              <span>{t('butler.portal.tabActivity')}</span>
               {visibleEvents.length > 0 ? (
                 <span className="text-xs text-ink-3">({visibleEvents.length})</span>
               ) : null}
@@ -283,7 +288,7 @@ export default function ButlerWorkPortalDock({
               }`}
             >
               <FileText size={12} />
-              <span>汇报</span>
+              <span>{t('butler.portal.tabReport')}</span>
             </button>
             <button
               type="button"
@@ -295,7 +300,7 @@ export default function ButlerWorkPortalDock({
               }`}
             >
               <Sparkles size={12} />
-              <span>助理</span>
+              <span>{t('butler.portal.tabAssistant')}</span>
             </button>
           </div>
 
@@ -303,16 +308,16 @@ export default function ButlerWorkPortalDock({
             <button
               type="button"
               onClick={() => setButlerView('kanban')}
-              title="打开全屏统一看板"
+              title={t('butler.portal.openKanbanTitle')}
               className="flex h-7 items-center gap-1 rounded-md px-2 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-primary"
             >
               <SquareKanban size={13} />
-              看板
+              {t('butler.portal.kanban')}
             </button>
             <button
               type="button"
               onClick={onClose}
-              title="关闭工作台 (Alt+P)"
+              title={t('butler.portal.closePortalTitle')}
               className="flex h-7 w-7 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-ink"
             >
               <X size={14} />
@@ -327,20 +332,20 @@ export default function ButlerWorkPortalDock({
               {sortedCards.length > 0 ? (
                 <button
                   type="button"
-                  aria-label={activeCard ? undefined : '选择任务'}
+                  aria-label={activeCard ? undefined : t('butler.portal.selectTask')}
                   onClick={() => setPickerOpen((prev) => !prev)}
                   className="flex w-full items-center justify-between gap-1.5 rounded border border-line bg-surface px-2 py-1 text-left text-xs text-ink transition hover:bg-fill-hover"
                 >
                   <span className="truncate font-medium">
-                    {activeCard ? activeCard.title || activeCard.note || '未命名任务' : '选择任务'}
+                    {activeCard ? activeCard.title || activeCard.note || t('butler.portal.untitledTask') : t('butler.portal.selectTask')}
                   </span>
                   <span className="flex shrink-0 items-center gap-1 text-xs text-ink-3">
-                    {activeCard ? STAGE_LABEL_MAP[activeCard.state.stage] : '暂无关联'}
+                    {activeCard ? t(STAGE_LABEL_KEYS[activeCard.state.stage]) : t('butler.portal.noAssociation')}
                     <ChevronDown size={11} />
                   </span>
                 </button>
               ) : (
-                <span className="text-xs text-ink-3">暂无关联卡片</span>
+                <span className="text-xs text-ink-3">{t('butler.portal.noAssociatedCards')}</span>
               )}
 
               {pickerOpen && sortedCards.length > 0 ? (
@@ -361,8 +366,8 @@ export default function ButlerWorkPortalDock({
                             selected ? 'bg-primary-light font-medium text-primary' : 'text-ink hover:bg-fill-hover'
                           }`}
                         >
-                          <span className="truncate">{card.title || card.note || '未命名任务'}</span>
-                          <span className="shrink-0 text-xs text-ink-3">{STAGE_LABEL_MAP[card.state.stage]}</span>
+                          <span className="truncate">{card.title || card.note || t('butler.portal.untitledTask')}</span>
+                          <span className="shrink-0 text-xs text-ink-3">{t(STAGE_LABEL_KEYS[card.state.stage])}</span>
                         </button>
                       );
                     })}
@@ -374,11 +379,11 @@ export default function ButlerWorkPortalDock({
             <button
               type="button"
               onClick={() => setCreating((prev) => !prev)}
-              title="新建任务卡片"
+              title={t('butler.portal.newCardTitle')}
               className="ml-2 flex h-6 items-center gap-1 rounded bg-fill-2 px-2 text-xs font-medium text-ink transition hover:bg-fill-hover"
             >
               <Plus size={12} />
-              新建
+              {t('butler.portal.newCardButton')}
             </button>
           </div>
         )}
@@ -390,7 +395,7 @@ export default function ButlerWorkPortalDock({
             autoFocus
             value={newNote}
             onChange={(event) => setNewNote(event.target.value)}
-            placeholder="输入新任务卡片标题…"
+            placeholder={t('butler.portal.newCardPlaceholder')}
             className="h-7 min-w-0 flex-1 rounded border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
           />
           <button
@@ -398,7 +403,7 @@ export default function ButlerWorkPortalDock({
             disabled={!newNote.trim()}
             className="h-7 shrink-0 rounded bg-primary px-2.5 text-xs font-medium text-white disabled:opacity-50"
           >
-            新建
+            {t('butler.portal.newCardButton')}
           </button>
         </form>
       ) : null}
@@ -412,16 +417,16 @@ export default function ButlerWorkPortalDock({
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <SquareKanban size={28} className="text-ink-3" />
               <div className="text-sm font-medium text-ink">
-                {selectedCardId ? '所选任务已不存在' : sortedCards.length > 0 ? '当前会话暂无关联任务' : '还没有任务卡片'}
+                {selectedCardId ? t('butler.portal.selectedCardMissing') : sortedCards.length > 0 ? t('butler.portal.noLinkedCardInChat') : t('butler.portal.noCardsYet')}
               </div>
               <p className="text-xs leading-5 text-ink-3">
-                {sortedCards.length > 0 ? '从上方选择任务以查看详情，或创建一项新工作。' : '创建任务后，可以在这里查看执行过程、成果和验证记录。'}
+                {sortedCards.length > 0 ? t('butler.portal.selectOrCreateHint') : t('butler.portal.createFirstHint')}
               </p>
               <form onSubmit={handleCreate} className="mt-1 flex w-full max-w-xs gap-1.5">
                 <input
                   value={newNote}
                   onChange={(event) => setNewNote(event.target.value)}
-                  placeholder="输入第一张任务卡标题…"
+                  placeholder={t('butler.portal.firstCardPlaceholder')}
                   className="h-8 min-w-0 flex-1 rounded-md border border-line bg-surface px-2.5 text-xs text-ink outline-none focus:border-primary"
                 />
                 <button
@@ -429,7 +434,7 @@ export default function ButlerWorkPortalDock({
                   disabled={!newNote.trim()}
                   className="h-8 shrink-0 rounded-md bg-primary px-3 text-xs font-medium text-white disabled:opacity-50"
                 >
-                  创建
+                  {t('butler.portal.createButton')}
                 </button>
               </form>
             </div>
@@ -442,9 +447,9 @@ export default function ButlerWorkPortalDock({
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
               <FileCode2 size={32} className="text-ink-4" />
-              <div className="text-sm font-medium text-ink">暂未选定产物</div>
+              <div className="text-sm font-medium text-ink">{t('butler.portal.noArtifactTitle')}</div>
               <p className="text-xs text-ink-3 max-w-xs">
-                在对话中点击生成的 Markdown、Diff、代码或报告链接，产物将立即在此无损展示，不会遮挡左侧会话。
+                {t('butler.portal.noArtifactDesc')}
               </p>
             </div>
           )
@@ -453,14 +458,14 @@ export default function ButlerWorkPortalDock({
         {activeTab === 'activity' && (
           <div className="h-full overflow-y-auto p-4 space-y-3">
             <div className="flex items-center justify-between pb-2 border-b border-line">
-              <span className="text-xs font-semibold text-ink">执行步骤与检查器</span>
-              <span className="text-xs text-ink-3">共 {visibleEvents.length} 项</span>
+              <span className="text-xs font-semibold text-ink">{t('butler.portal.activityHeading')}</span>
+              <span className="text-xs text-ink-3">{tp(visibleEvents.length, 'butler.portal.activityCountOne', 'butler.portal.activityCountOther')}</span>
             </div>
             {visibleEvents.length === 0 ? (
               <div className="flex h-64 flex-col items-center justify-center gap-2 text-center text-ink-3">
                 <ActivityIcon size={28} className="text-ink-4" />
-                <span className="text-xs">当前会话暂无执行活动</span>
-                <span className="text-xs text-ink-4">发送任务后，工具调用与动态步骤将在此实时流式展示</span>
+                <span className="text-xs">{t('butler.portal.noActivityTitle')}</span>
+                <span className="text-xs text-ink-4">{t('butler.portal.noActivityDesc')}</span>
               </div>
             ) : (
               <div className="space-y-2">
@@ -503,9 +508,9 @@ export default function ButlerWorkPortalDock({
             ) : (
               <div className="flex h-64 flex-col items-center justify-center gap-2 text-center text-ink-3">
                 <FileText size={28} className="text-ink-4" />
-                <span className="text-xs font-medium text-ink">暂无可汇总的进展汇报</span>
+                <span className="text-xs font-medium text-ink">{t('butler.portal.noReportTitle')}</span>
                 <span className="text-xs text-ink-4">
-                  选定任务卡或启动 ACP 会话后，可在此一键生成并沉淀结构化工作汇报
+                  {t('butler.portal.noReportDesc')}
                 </span>
               </div>
             )}
@@ -518,17 +523,23 @@ export default function ButlerWorkPortalDock({
               <div className="flex items-center justify-between gap-2">
                 <span className="font-semibold text-ink">{assistantBrief.title}</span>
                 <span className="rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-2xs text-primary">
-                  专注焦点
+                  {t('butler.portal.assistantFocusBadge')}
                 </span>
               </div>
               <p className="mt-1.5 leading-relaxed text-ink-2">
-                待办 {assistantBrief.metrics.openTodos} 项（逾期 {assistantBrief.metrics.overdueTodos}）· 日程 {assistantBrief.metrics.todayEvents} 项 · 活跃工作流 {assistantBrief.metrics.activeWorkflows} 项 · 长期记忆 {assistantBrief.metrics.memoryCount} 条
+                {t('butler.portal.assistantSummary', {
+                  openTodos: assistantBrief.metrics.openTodos,
+                  overdueTodos: assistantBrief.metrics.overdueTodos,
+                  todayEvents: assistantBrief.metrics.todayEvents,
+                  activeWorkflows: assistantBrief.metrics.activeWorkflows,
+                  memoryCount: assistantBrief.metrics.memoryCount,
+                })}
               </p>
             </div>
 
             {assistantBrief.focusItems.length > 0 ? (
               <div className="rounded-xl border border-line bg-surface-4 p-3.5 shadow-raise">
-                <div className="mb-2 font-semibold text-ink">当前优先事项</div>
+                <div className="mb-2 font-semibold text-ink">{t('butler.portal.assistantPriorities')}</div>
                 <ul className="space-y-1.5 text-ink-2">
                   {assistantBrief.focusItems.slice(0, 4).map((item) => (
                     <li key={item.id} className="rounded-lg border border-line/60 bg-surface-2 px-2.5 py-1.5">
@@ -542,7 +553,7 @@ export default function ButlerWorkPortalDock({
 
             {assistantBrief.actionItems.length > 0 ? (
               <div className="rounded-xl border border-line bg-surface-4 p-3.5 shadow-raise">
-                <div className="mb-2 font-semibold text-ink">建议下一步</div>
+                <div className="mb-2 font-semibold text-ink">{t('butler.portal.assistantNextSteps')}</div>
                 <ul className="space-y-1.5 text-ink-2">
                   {assistantBrief.actionItems.slice(0, 4).map((act, idx) => (
                     <li key={idx} className="flex items-start gap-1.5">
@@ -561,7 +572,7 @@ export default function ButlerWorkPortalDock({
                 className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
               >
                 <Sparkles size={13} />
-                打开个人助理与长期记忆中心
+                {t('butler.portal.openAssistantCenter')}
               </button>
               <button
                 type="button"
@@ -569,7 +580,7 @@ export default function ButlerWorkPortalDock({
                 className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-line bg-surface-4 px-3 py-2 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover hover:text-ink"
               >
                 <Bot size={13} />
-                ACP 客户端
+                {t('butler.history.acpClient')}
               </button>
             </div>
           </div>

@@ -20,6 +20,7 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
+import { useI18n, useT, type MessageKey } from '../i18n';
 import { myPrsOf, reviewPrsOf, useWorkbench, type WorkItem } from '../stores/workbench';
 import { BuildList, PullRequestList, WorkItemList } from '../components/AdoLists';
 import CreateWorkItemDiscussionDialog from '../components/CreateWorkItemDiscussionDialog';
@@ -30,7 +31,7 @@ import { useChat } from '../stores/chat';
 import { useTodos, todayKey, type Todo } from '../stores/todos';
 import { buildQueue, queueSummary, type QueueItem } from '../lib/queue';
 import { useCalendar, eventsForDate } from '../stores/calendar';
-import { useFavorites, SIZE_SPAN, SIZE_LABELS, normalizeFavoriteUrl, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
+import { useFavorites, SIZE_SPAN, SIZE_LABEL_KEYS, normalizeFavoriteUrl, randomFavColor, type Favorite, type FavSize } from '../stores/favorites';
 import {
   beginCustomQueryLoad,
   customQueryConnectionScope,
@@ -64,10 +65,10 @@ type QueryViewMode = 'list' | 'board' | 'wbs';
 
 const QUERY_VIEWS_KEY = 'rcx-query-views-v1';
 
-const QUERY_VIEW_OPTIONS: { key: QueryViewMode; label: string; icon: typeof LayoutList }[] = [
-  { key: 'list', label: '列表', icon: LayoutList },
-  { key: 'board', label: '看板', icon: SquareKanban },
-  { key: 'wbs', label: 'WBS', icon: ListTree },
+const QUERY_VIEW_OPTIONS: { key: QueryViewMode; labelKey: MessageKey; icon: typeof LayoutList }[] = [
+  { key: 'list', labelKey: 'workbench.queryView.list', icon: LayoutList },
+  { key: 'board', labelKey: 'workbench.queryView.board', icon: SquareKanban },
+  { key: 'wbs', labelKey: 'workbench.queryView.wbs', icon: ListTree },
 ];
 
 /**
@@ -139,6 +140,7 @@ function QueryDialog({
   onClose: () => void;
   onSave: (name: string, query: ParsedCustomQuery) => void;
 }) {
+  const t = useT();
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const parsed = url.trim() ? parseQueryUrl(url.trim(), adoBase) : null;
@@ -150,48 +152,55 @@ function QueryDialog({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="添加自定义查询"
+        aria-label={t('workbench.customQueryDialog.title')}
         tabIndex={-1}
         className="w-[440px] rounded-xl bg-surface-4 shadow-raise shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
-          <span className="text-base font-semibold text-ink">添加自定义查询</span>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭添加自定义查询">
+          <span className="text-base font-semibold text-ink">{t('workbench.customQueryDialog.title')}</span>
+          <button
+            onClick={onClose}
+            className="text-ink-3 hover:text-ink"
+            title={t('common.close')}
+            aria-label={t('workbench.customQueryDialog.closeAria')}
+          >
             <XCircle size={16} />
           </button>
         </header>
         <div className="space-y-4 p-5">
           <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">查询名称</label>
+            <label className="mb-1 block text-xs font-medium text-ink-2">{t('workbench.customQueryDialog.nameLabel')}</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例：本迭代待办、我的 Bug"
+              placeholder={t('workbench.customQueryDialog.namePlaceholder')}
               autoFocus
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-ink-2">
-              ADO 查询链接
+              {t('workbench.customQueryDialog.urlLabel')}
             </label>
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder="粘贴浏览器地址栏里的查询页面链接"
+              placeholder={t('workbench.customQueryDialog.urlPlaceholder')}
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
             <p className="mt-1.5 text-xs text-ink-3">
-              在 Azure DevOps 打开一个已存查询，复制浏览器地址栏的链接粘贴到这里
+              {t('workbench.customQueryDialog.urlHint')}
             </p>
             {url.trim() && !parsed && (
-              <p className="mt-1 text-xs text-danger">无法从链接中解析出查询 ID</p>
+              <p className="mt-1 text-xs text-danger">{t('workbench.customQueryDialog.invalidUrl')}</p>
             )}
             {parsed && (
               <p className="mt-1 text-xs text-success">
-                已识别查询 {parsed.queryId.slice(0, 8)}…
-                {parsed.project ? ` (${parsed.project})` : ''}
+                {t('workbench.customQueryDialog.parsedQuery', {
+                  id: parsed.queryId.slice(0, 8),
+                  projectPart: parsed.project ? ` (${parsed.project})` : '',
+                })}
               </p>
             )}
           </div>
@@ -201,7 +210,7 @@ function QueryDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => {
@@ -210,7 +219,7 @@ function QueryDialog({
             disabled={!name.trim() || !parsed}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
           >
-            添加
+            {t('common.add')}
           </button>
         </footer>
       </div>
@@ -226,6 +235,7 @@ function FavoriteDialog({
   existing?: Favorite;
   onClose: () => void;
 }) {
+  const t = useT();
   const add = useFavorites((s) => s.add);
   const update = useFavorites((s) => s.update);
   const [title, setTitle] = useState(existing?.title ?? '');
@@ -233,7 +243,7 @@ function FavoriteDialog({
   const [icon, setIcon] = useState(existing?.icon ?? '');
   const [color, setColor] = useState(existing?.color ?? randomFavColor());
   const [size, setSize] = useState<FavSize>(existing?.size ?? 'small');
-  const dialogTitle = existing ? '编辑收藏' : '添加收藏';
+  const dialogTitle = existing ? t('workbench.favoriteDialog.editTitle') : t('workbench.favoriteDialog.addTitle');
   const dialogRef = useDialogBehavior(onClose);
   const normalizedUrl = normalizeFavoriteUrl(url);
   const urlInvalid = !!url.trim() && !normalizedUrl;
@@ -243,10 +253,10 @@ function FavoriteDialog({
     const data = { title: title.trim(), url: normalizedUrl, icon: icon || undefined, color, size };
     if (existing) {
       update(existing.id, data);
-      toast.success('已更新');
+      toast.success(t('workbench.toast.updated'));
     } else {
       add(data);
-      toast.success('已添加');
+      toast.success(t('workbench.toast.added'));
     }
     onClose();
   };
@@ -269,31 +279,31 @@ function FavoriteDialog({
       >
         <header className="flex items-center justify-between border-b border-line px-5 py-3">
           <span className="text-base font-semibold text-ink">{dialogTitle}</span>
-          <button onClick={onClose} className="text-ink-3 hover:text-ink" title="关闭" aria-label="关闭收藏编辑"><XCircle size={16} /></button>
+          <button onClick={onClose} className="text-ink-3 hover:text-ink" title={t('common.close')} aria-label={t('workbench.favoriteDialog.closeAria')}><XCircle size={16} /></button>
         </header>
         <div className="space-y-4 p-5">
           <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">标题</label>
+            <label className="mb-1 block text-xs font-medium text-ink-2">{t('workbench.favoriteDialog.titleLabel')}</label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="例：Jira、GitLab"
+              placeholder={t('workbench.favoriteDialog.titlePlaceholder')}
               autoFocus
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
-            {urlInvalid && <p className="mt-1 text-xs text-danger">请输入以 http:// 或 https:// 开头的链接</p>}
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">链接</label>
+            <label className="mb-1 block text-xs font-medium text-ink-2">{t('workbench.favoriteDialog.urlLabel')}</label>
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://..."
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none focus:border-primary"
             />
+            {urlInvalid && <p className="mt-1 text-xs text-danger">{t('workbench.favoriteDialog.invalidUrl')}</p>}
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">图标（emoji，可选）</label>
+            <label className="mb-1 block text-xs font-medium text-ink-2">{t('workbench.favoriteDialog.iconLabel')}</label>
             <input
               value={icon}
               onChange={(e) => setIcon(e.target.value)}
@@ -303,7 +313,7 @@ function FavoriteDialog({
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-ink-2">颜色</label>
+            <label className="mb-1.5 block text-xs font-medium text-ink-2">{t('workbench.favoriteDialog.colorLabel')}</label>
             <div className="flex gap-2">
               {COLORS.map((c) => (
                 <button
@@ -316,7 +326,7 @@ function FavoriteDialog({
             </div>
           </div>
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-ink-2">卡片大小</label>
+            <label className="mb-1.5 block text-xs font-medium text-ink-2">{t('workbench.favoriteDialog.sizeLabel')}</label>
             <div className="flex gap-2">
               {(['small', 'medium', 'large'] as FavSize[]).map((s) => (
                 <button
@@ -326,20 +336,20 @@ function FavoriteDialog({
                     size === s ? 'border-primary bg-primary/5 text-primary' : 'border-line text-ink-2 hover:bg-fill-hover'
                   }`}
                 >
-                  {SIZE_LABELS[s]}
+                  {t(SIZE_LABEL_KEYS[s])}
                 </button>
               ))}
             </div>
           </div>
         </div>
         <footer className="flex justify-end gap-2 border-t border-line px-5 py-3">
-          <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover">取消</button>
+          <button onClick={onClose} className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover">{t('common.cancel')}</button>
           <button
             onClick={handleSave}
             disabled={!title.trim() || !normalizedUrl}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
           >
-            {existing ? '保存' : '添加'}
+            {existing ? t('common.save') : t('common.add')}
           </button>
         </footer>
       </div>
@@ -350,6 +360,7 @@ function FavoriteDialog({
 // ---------- Main ----------
 
 export default function WorkbenchPage() {
+  const { t, tp, locale } = useI18n();
   const features = runtimeFeatures();
   const setModule = useUI((s) => s.setModule);
   const tab = useUI((s) => s.workbenchTab);
@@ -463,11 +474,14 @@ export default function WorkbenchPage() {
           ),
         },
       }));
-      toast.success(`#${move.item.id} 已改为「${move.toState}」`);
+      toast.success(t('workbench.board.stateChangedToast', {
+        id: move.item.id,
+        state: move.toState,
+      }));
     } catch (err) {
-      toast.error(err, '改状态失败，流转可能不被过程模板允许');
+      toast.error(err, t('workbench.board.stateChangeFailed'));
     }
-  }, [pendingMove, updateQueryState]);
+  }, [pendingMove, t, updateQueryState]);
 
   useEffect(() => {
     if (queryConnectionScope && queryAdoBase) {
@@ -548,7 +562,13 @@ export default function WorkbenchPage() {
   const today = todayKey();
   const now = new Date();
   const hour = now.getHours();
-  const greeting = hour < 6 ? '夜深了' : hour < 12 ? '上午好' : hour < 18 ? '下午好' : '晚上好';
+  const greeting = hour < 6
+    ? t('workbench.greeting.lateNight')
+    : hour < 12
+      ? t('workbench.greeting.morning')
+      : hour < 18
+        ? t('workbench.greeting.afternoon')
+        : t('workbench.greeting.evening');
 
   const unreadTotal = useMemo(() => totalUnread(subscriptions), [subscriptions]);
   const todayEvents = useMemo(() => eventsForDate(calendarEvents, today), [calendarEvents, today]);
@@ -588,7 +608,7 @@ export default function WorkbenchPage() {
   /** 首页的核心：把待办、工作项、PR、构建合成一条按紧急度排序的队列 */
   const queue = useMemo(
     () => buildQueue({ todos, workItems, prs, builds, events: calendarEvents, account, today }),
-    [todos, workItems, prs, builds, calendarEvents, account, today],
+    [todos, workItems, prs, builds, calendarEvents, account, today, locale],
   );
 
   /** 待办点击：回到它来自的那条消息，上下文才是最重要的；手动待办没有来源，去待办模块 */
@@ -605,20 +625,20 @@ export default function WorkbenchPage() {
   // ADO 未配置时不显示个人工作视图——点进去只有空页，没意义
   const tabs: {
     key: AdoTab;
-    label: string;
+    labelKey: MessageKey;
     icon: typeof CircleDot;
     badge?: number;
     danger?: boolean;
   }[] = [
-      { key: 'overview', label: '概览', icon: LayoutList },
+      { key: 'overview', labelKey: 'workbench.tab.overview', icon: LayoutList },
       ...(connected
         ? [
-            { key: 'workitems' as const, label: '我的工作项', icon: CircleDot, badge: workItems.length },
-            { key: 'contributions' as const, label: '我的代码', icon: SquareActivity },
-            { key: 'prs' as const, label: '拉取请求', icon: GitPullRequest, badge: reviewPrs.length },
+            { key: 'workitems' as const, labelKey: 'workbench.tab.workItems' as const, icon: CircleDot, badge: workItems.length },
+            { key: 'contributions' as const, labelKey: 'workbench.tab.contributions' as const, icon: SquareActivity },
+            { key: 'prs' as const, labelKey: 'workbench.tab.pullRequests' as const, icon: GitPullRequest, badge: reviewPrs.length },
             {
               key: 'builds' as const,
-              label: '构建',
+              labelKey: 'workbench.tab.builds' as const,
               icon: Wrench,
               badge: failedBuilds || undefined,
               danger: failedBuilds > 0,
@@ -630,7 +650,7 @@ export default function WorkbenchPage() {
   const refreshBar = connected && (
     <div className="flex items-center gap-2">
       {lastRefresh && !loading && (
-        <span className="text-xs text-ink-3">{fmtConvTime(lastRefresh)} 更新</span>
+        <span className="text-xs text-ink-3">{t('workbench.updatedAt', { time: fmtConvTime(lastRefresh) })}</span>
       )}
       <button
         onClick={() => void refresh()}
@@ -638,17 +658,20 @@ export default function WorkbenchPage() {
         className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
       >
         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-        刷新
+        {t('common.refresh')}
       </button>
     </div>
   );
 
+  const activeTabItem = tabs.find((item) => item.key === tab);
+  const displayName = user?.name || user?.username || '';
+
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="flex w-[196px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
-        <div className="px-2.5 py-2 text-base font-semibold text-ink">工作台</div>
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">{t('workbench.title')}</div>
         <div className="flex flex-col gap-0.5">
-          {tabs.map(({ key, label, icon: Icon, badge, danger }) => (
+          {tabs.map(({ key, labelKey, icon: Icon, badge, danger }) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -660,7 +683,7 @@ export default function WorkbenchPage() {
               }`}
             >
               <Icon size={16} className={tab === key ? 'text-primary' : ''} />
-              <span className="min-w-0 truncate">{label}</span>
+              <span className="min-w-0 truncate">{t(labelKey)}</span>
               {badge ? (
                 <span
                   className={`ml-auto rounded-full px-1.5 py-0.5 text-2xs font-medium ${
@@ -676,7 +699,7 @@ export default function WorkbenchPage() {
 
         {canUseCustomQueries && customQueries.length > 0 && (
           <>
-            <div className="mt-4 mb-1.5 px-2.5 text-xs font-medium text-ink-3">自定义查询</div>
+            <div className="mt-4 mb-1.5 px-2.5 text-xs font-medium text-ink-3">{t('workbench.sidebar.customQueries')}</div>
             <div className="flex flex-col gap-0.5">
             {customQueries.map((q) => (
               <div key={q.id} className="group relative">
@@ -701,8 +724,10 @@ export default function WorkbenchPage() {
                     removeQuery(q.id);
                     updateQueryState((current) => removeCustomQueryLoad(current, q.id));
                     if (tab === `query:${q.id}`) setTab('overview');
-                    toast.success('已删除');
+                    toast.success(t('workbench.toast.deleted'));
                   }}
+                  title={t('common.delete')}
+                  aria-label={t('common.delete')}
                   className="absolute top-1 right-1 hidden h-5 w-5 items-center justify-center rounded text-ink-3 hover:text-danger group-hover:flex"
                 >
                   <Trash2 size={12} />
@@ -719,7 +744,7 @@ export default function WorkbenchPage() {
             className="mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-primary"
           >
             <Plus size={14} />
-            添加查询
+            {t('workbench.sidebar.addQuery')}
           </button>
         )}
 
@@ -728,7 +753,7 @@ export default function WorkbenchPage() {
           className="mt-auto flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
         >
           <Settings size={14} />
-          {connected ? '工作台设置' : '连接 Azure DevOps'}
+          {connected ? t('workbench.sidebar.settings') : t('workbench.sidebar.connectAdo')}
         </button>
       </aside>
 
@@ -746,7 +771,7 @@ export default function WorkbenchPage() {
         <main className="flex min-w-0 flex-1 flex-col bg-surface-3">
           <div className="rcx-glass-header flex h-14 shrink-0 items-center justify-between border-b border-line px-6">
             <span className="text-base font-semibold text-ink">
-              {activeQuery ? activeQuery.name : tabs.find((t) => t.key === tab)?.label}
+              {activeQuery ? activeQuery.name : (activeTabItem ? t(activeTabItem.labelKey) : undefined)}
               <span className="ml-2 text-xs font-normal text-ink-3">
                 {adoTitle}
               </span>
@@ -754,7 +779,8 @@ export default function WorkbenchPage() {
             {activeQuery ? (
               <div className="flex items-center gap-2">
                 <div className="flex h-8 items-center rounded-xl border border-line bg-surface-2 p-0.5">
-                  {QUERY_VIEW_OPTIONS.map(({ key, label, icon: Icon }) => {
+                  {QUERY_VIEW_OPTIONS.map(({ key, labelKey, icon: Icon }) => {
+                    const label = t(labelKey);
                     const active = (queryViews[activeQuery.id] ?? 'list') === key;
                     return (
                       <button
@@ -765,7 +791,7 @@ export default function WorkbenchPage() {
                             ? 'bg-surface-4 font-medium text-ink shadow-raise'
                             : 'text-ink-3 hover:text-ink'
                         }`}
-                        title={`${label}视图`}
+                        title={t('workbench.queryView.tooltip', { label })}
                       >
                         <Icon size={14} />
                         {label}
@@ -786,7 +812,7 @@ export default function WorkbenchPage() {
                         : ''
                     }
                   />
-                  刷新
+                  {t('common.refresh')}
                 </button>
                 <a
                   href={activeQuery.url}
@@ -795,7 +821,7 @@ export default function WorkbenchPage() {
                   className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 transition hover:bg-fill-hover"
                 >
                   <ExternalLink size={14} />
-                  在 ADO 中打开
+                  {t('workbench.customQuery.openInAdo')}
                 </a>
               </div>
             ) : (
@@ -818,7 +844,7 @@ export default function WorkbenchPage() {
                   onClick={() => void fetchQuery(activeQuery, true)}
                   className="mt-1 h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
                 >
-                  重试
+                  {t('common.retry')}
                 </button>
               </div>
             ) : (queryViews[activeQuery.id] ?? 'list') === 'board' ? (
@@ -844,7 +870,7 @@ export default function WorkbenchPage() {
                 onClick={() => void refresh()}
                 className="mt-1 h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
               >
-                重试
+                {t('common.retry')}
               </button>
             </div>
           ) : loading && !lastRefresh ? (
@@ -865,7 +891,9 @@ export default function WorkbenchPage() {
             <header className="flex shrink-0 items-start justify-between pb-5">
               <div>
                 <h1 className="text-xl font-bold text-ink">
-                  {greeting}，{user?.name || user?.username || ''}
+                  {displayName
+                    ? t('workbench.overview.greetingNamed', { greeting, name: displayName })
+                    : greeting}
                 </h1>
                 <p className="mt-1 text-sm text-ink-3">
                   {queueSummary(queue)}
@@ -874,7 +902,9 @@ export default function WorkbenchPage() {
                       onClick={() => setModule('messages')}
                       className="ml-2 text-primary hover:underline"
                     >
-                      · {unreadTotal} 条未读消息
+                      {tp(unreadTotal, 'workbench.overview.unreadMessagesOne', 'workbench.overview.unreadMessagesOther', {
+                        count: unreadTotal,
+                      })}
                     </button>
                   )}
                 </p>
@@ -885,9 +915,9 @@ export default function WorkbenchPage() {
             {connected && adoError && (
               <div className="mb-4 flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger">
                 <XCircle size={14} className="shrink-0" />
-                <span className="min-w-0 flex-1">Azure DevOps：{adoError}</span>
+                <span className="min-w-0 flex-1">{t('workbench.overview.adoErrorPrefix', { error: adoError })}</span>
                 <button onClick={() => void refresh()} className="shrink-0 hover:underline">
-                  重试
+                  {t('common.retry')}
                 </button>
               </div>
             )}
@@ -895,7 +925,7 @@ export default function WorkbenchPage() {
             {connected && (
               <div className="mb-5 grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
                 <div className="rounded-2xl border border-line bg-surface-4 px-4 py-3 shadow-raise">
-                  <div className="text-xs text-ink-3">待处理队列</div>
+                  <div className="text-xs text-ink-3">{t('workbench.overview.card.pendingQueue')}</div>
                   <div className="mt-1 text-lg font-semibold text-ink">{queue.length}</div>
                 </div>
                 <button
@@ -903,7 +933,7 @@ export default function WorkbenchPage() {
                   onClick={() => setTab('workitems')}
                   className="rounded-2xl border border-line bg-surface-4 px-4 py-3 text-left shadow-raise transition hover:border-primary/40 hover:shadow-card"
                 >
-                  <div className="text-xs text-ink-3">工作项</div>
+                  <div className="text-xs text-ink-3">{t('workbench.overview.card.workItems')}</div>
                   <div className="mt-1 text-lg font-semibold text-ink">{workItems.length}</div>
                 </button>
                 <button
@@ -911,7 +941,7 @@ export default function WorkbenchPage() {
                   onClick={() => setTab('prs')}
                   className="rounded-2xl border border-line bg-surface-4 px-4 py-3 text-left shadow-raise transition hover:border-primary/40 hover:shadow-card"
                 >
-                  <div className="text-xs text-ink-3">拉取请求</div>
+                  <div className="text-xs text-ink-3">{t('workbench.overview.card.pullRequests')}</div>
                   <div className="mt-1 text-lg font-semibold text-ink">{reviewPrs.length + myPrs.length}</div>
                 </button>
                 <button
@@ -919,7 +949,7 @@ export default function WorkbenchPage() {
                   onClick={() => setTab('builds')}
                   className="rounded-2xl border border-line bg-surface-4 px-4 py-3 text-left shadow-raise transition hover:border-primary/40 hover:shadow-card"
                 >
-                  <div className="text-xs text-ink-3">构建</div>
+                  <div className="text-xs text-ink-3">{t('workbench.overview.card.builds')}</div>
                   <div className="mt-1 text-lg font-semibold text-ink">{builds.length}</div>
                 </button>
               </div>
@@ -931,10 +961,9 @@ export default function WorkbenchPage() {
               <div className="flex flex-1 flex-col items-center justify-center text-center">
                 <div className="flex flex-col items-center gap-2.5 rounded-2xl border border-line-soft bg-surface-2/60 px-10 py-8 shadow-raise">
                   <CheckCircle2 size={32} className="text-success" />
-                  <div className="text-sm font-medium text-ink-2">今天没有待处理的事</div>
+                  <div className="text-sm font-medium text-ink-2">{t('workbench.overview.emptyQueueTitle')}</div>
                   <div className="max-w-sm text-xs leading-relaxed text-ink-3">
-                    这里会汇总：逾期与今天到期的待办、失败的构建、等你评审的 PR、
-                    分配给你的工作项。在聊天消息上右键「标记为待办」也会出现在这里。
+                    {t('workbench.overview.emptyQueueDesc')}
                   </div>
                 </div>
               </div>
@@ -956,13 +985,13 @@ export default function WorkbenchPage() {
               <div className="flex shrink-0 items-center gap-4 pt-4 text-xs text-ink-3">
                 <span>{adoTitle}</span>
                 <button onClick={() => setTab('workitems')} className="hover:text-primary">
-                  工作项 {workItems.length}
+                  {t('workbench.overview.footerWorkItems', { count: workItems.length })}
                 </button>
                 <button onClick={() => setTab('prs')} className="hover:text-primary">
-                  拉取请求 {reviewPrs.length + myPrs.length}
+                  {t('workbench.overview.footerPullRequests', { count: reviewPrs.length + myPrs.length })}
                 </button>
                 <button onClick={() => setTab('builds')} className="hover:text-primary">
-                  构建 {builds.length}
+                  {t('workbench.overview.footerBuilds', { count: builds.length })}
                 </button>
               </div>
             ) : (
@@ -971,7 +1000,7 @@ export default function WorkbenchPage() {
                 className="mt-4 flex shrink-0 items-center justify-center gap-2 rounded-lg border border-dashed border-line py-3 text-xs text-ink-3 transition hover:border-primary hover:text-primary"
               >
                 <Wrench size={14} />
-                连接 Azure DevOps，把工作项、PR、构建也汇总到这里
+                {t('workbench.overview.connectAdoBanner')}
               </button>
             )}
           </div>
@@ -982,18 +1011,18 @@ export default function WorkbenchPage() {
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
                   <Calendar size={14} className="text-primary" />
-                  <span className="text-sm font-semibold text-ink">今天日程</span>
+                  <span className="text-sm font-semibold text-ink">{t('workbench.overview.todaySchedule')}</span>
                 </div>
                 <button
                   onClick={() => setModule('calendar')}
                   className="flex items-center gap-0.5 text-xs text-ink-3 transition hover:text-primary"
                 >
-                  日历
+                  {t('workbench.overview.calendarLink')}
                   <ChevronRight size={12} />
                 </button>
               </div>
               {todayEvents.length === 0 ? (
-                <div className="py-2 text-xs text-ink-3">今天没有安排</div>
+                <div className="py-2 text-xs text-ink-3">{t('workbench.overview.noEventsToday')}</div>
               ) : (
                 <div className="space-y-1.5">
                   {todayEvents.map((e) => (
@@ -1014,7 +1043,7 @@ export default function WorkbenchPage() {
                         <span className="block truncate text-xs text-ink">{e.title}</span>
                         <span className="block text-xs text-ink-3">
                           {e.allDay
-                            ? '全天'
+                            ? t('workbench.overview.allDay')
                             : `${e.startTime ?? ''}${e.endTime ? ` - ${e.endTime}` : ''}`}
                         </span>
                       </span>
@@ -1028,12 +1057,12 @@ export default function WorkbenchPage() {
               <div className="flex items-center justify-between pb-2">
                 <div className="flex items-center gap-2">
                   <Bookmark size={14} className="text-primary" />
-                  <span className="text-sm font-semibold text-ink">收藏夹</span>
+                  <span className="text-sm font-semibold text-ink">{t('workbench.overview.favorites')}</span>
                 </div>
                 <button
                   onClick={() => setFavDialog({})}
                   className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
-                  title="添加收藏"
+                  title={t('workbench.favoriteDialog.addTitle')}
                 >
                   <Plus size={14} />
                 </button>
@@ -1044,7 +1073,7 @@ export default function WorkbenchPage() {
                   onClick={() => setFavDialog({})}
                   className="w-full rounded-lg border border-dashed border-line py-3 text-xs text-ink-3 transition hover:border-primary hover:text-primary"
                 >
-                  收藏常用链接
+                  {t('workbench.overview.addFavoritePrompt')}
                 </button>
               ) : (
                 <div className="grid grid-cols-3 gap-2">
@@ -1073,6 +1102,8 @@ export default function WorkbenchPage() {
                             e.stopPropagation();
                             setFavDialog({ existing: fav });
                           }}
+                          title={t('common.edit')}
+                          aria-label={t('common.edit')}
                           className="flex h-5 w-5 items-center justify-center rounded bg-surface-4/80 text-ink-3 hover:text-primary"
                         >
                           <Pencil size={12} />
@@ -1082,8 +1113,10 @@ export default function WorkbenchPage() {
                             e.preventDefault();
                             e.stopPropagation();
                             removeFav(fav.id);
-                            toast.success('已删除');
+                            toast.success(t('workbench.toast.deleted'));
                           }}
+                          title={t('common.delete')}
+                          aria-label={t('common.delete')}
                           className="flex h-5 w-5 items-center justify-center rounded bg-surface-4/80 text-ink-3 hover:text-danger"
                         >
                           <Trash2 size={12} />
@@ -1103,10 +1136,15 @@ export default function WorkbenchPage() {
       )}
       {pendingMove && (
         <ConfirmDialog
-          title="修改工作项状态"
+          title={t('workbench.board.confirmMoveTitle')}
           danger={false}
-          message={`将把 #${pendingMove.item.id}「${pendingMove.item.title}」从「${pendingMove.item.state}」改为「${pendingMove.toState}」，改动直接写入 Azure DevOps。`}
-          confirmLabel="修改"
+          message={t('workbench.board.confirmMoveMessage', {
+            id: pendingMove.item.id,
+            title: pendingMove.item.title,
+            from: pendingMove.item.state,
+            to: pendingMove.toState,
+          })}
+          confirmLabel={t('workbench.board.confirmMoveButton')}
           onConfirm={() => void applyMove()}
           onClose={() => setPendingMove(null)}
         />
@@ -1125,7 +1163,7 @@ export default function WorkbenchPage() {
             );
             setQueryDialog(false);
             setTab(`query:${id}`);
-            toast.success('查询已添加');
+            toast.success(t('workbench.toast.queryAdded'));
           }}
         />
       )}

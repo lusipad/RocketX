@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
+import { useI18n, type MessageKey } from '../i18n';
 import {
   useCalendar,
   randomColor,
-  REPEAT_LABELS,
-  DAY_NAMES,
+  REPEAT_LABEL_KEYS,
+  DAY_NAME_KEYS,
   type CalendarEvent,
   type RepeatRule,
 } from '../stores/calendar';
@@ -16,6 +17,15 @@ const COLORS = [
   '#3370ff', '#00b96b', '#7f3bf5', '#f54a45', '#ff8800',
   '#14b8a6', '#f472b6', '#8b5cf6', '#06b6d4', '#84cc16',
 ];
+
+const REPEAT_UNIT_KEYS: Record<RepeatRule['type'], { one: MessageKey; other: MessageKey }> = {
+  daily: { one: 'pages.calendarDialog.unit.dailyOne', other: 'pages.calendarDialog.unit.dailyOther' },
+  weekly: { one: 'pages.calendarDialog.unit.weeklyOne', other: 'pages.calendarDialog.unit.weeklyOther' },
+  monthly: { one: 'pages.calendarDialog.unit.monthlyOne', other: 'pages.calendarDialog.unit.monthlyOther' },
+  yearly: { one: 'pages.calendarDialog.unit.yearlyOne', other: 'pages.calendarDialog.unit.yearlyOther' },
+  weekday: { one: 'pages.calendarDialog.unit.dailyOne', other: 'pages.calendarDialog.unit.dailyOther' },
+  custom: { one: 'pages.calendarDialog.unit.customOne', other: 'pages.calendarDialog.unit.customOther' },
+};
 
 
 /** '14:00' → '15:00' */
@@ -41,6 +51,7 @@ export default function CalendarEventDialog({
   origin?: ButlerSource;
   onClose: () => void;
 }) {
+  const { t, tp } = useI18n();
   const add = useCalendar((s) => s.add);
   const update = useCalendar((s) => s.update);
   const remove = useCalendar((s) => s.remove);
@@ -69,7 +80,7 @@ export default function CalendarEventDialog({
   const [repeatEndDate, setRepeatEndDate] = useState(existing?.repeat?.endDate ?? '');
   const [repeatEndAfter, setRepeatEndAfter] = useState<number | undefined>(existing?.repeat?.endAfter);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const dialogTitle = existing ? '编辑日程' : '新建日程';
+  const dialogTitle = t(existing ? 'pages.calendarDialog.titleEdit' : 'pages.calendarDialog.titleNew');
   const dialogRef = useDialogBehavior(onClose);
 
   const isEdit = !!existing;
@@ -110,10 +121,10 @@ export default function CalendarEventDialog({
 
     if (isEdit) {
       update(existing.id, data);
-      toast.success('日程已更新');
+      toast.success(t('pages.calendarDialog.updated'));
     } else {
       add(data);
-      toast.success('日程已创建');
+      toast.success(t('pages.calendarDialog.created'));
     }
     onClose();
   };
@@ -121,7 +132,7 @@ export default function CalendarEventDialog({
   const handleDelete = () => {
     if (existing) {
       remove(existing.id);
-      toast.success('日程已删除');
+      toast.success(t('pages.calendarDialog.deleted'));
     }
     onClose();
   };
@@ -141,7 +152,12 @@ export default function CalendarEventDialog({
           <span className="text-base font-semibold text-ink">
             {dialogTitle}
           </span>
-          <button onClick={onClose} className="text-ink-3 transition hover:text-ink" title="关闭" aria-label="关闭日程编辑">
+          <button
+            onClick={onClose}
+            className="text-ink-3 transition hover:text-ink"
+            title={t('common.close')}
+            aria-label={t('pages.calendarDialog.closeAria')}
+          >
             <X size={16} />
           </button>
         </header>
@@ -149,11 +165,11 @@ export default function CalendarEventDialog({
         <div className="space-y-4 p-5">
           {/* 标题 */}
           <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">标题</label>
+            <label className="mb-1 block text-xs font-medium text-ink-2">{t('pages.calendarDialog.fieldTitle')}</label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="输入日程标题"
+              placeholder={t('pages.calendarDialog.titlePlaceholder')}
               autoFocus
               className="h-9 w-full rounded-md border border-line bg-surface-3 px-3 text-sm text-ink outline-none transition focus:border-primary"
             />
@@ -162,7 +178,7 @@ export default function CalendarEventDialog({
           {/* 日期 */}
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="mb-1 block text-xs font-medium text-ink-2">日期</label>
+              <label className="mb-1 block text-xs font-medium text-ink-2">{t('pages.calendarDialog.fieldDate')}</label>
               <input
                 type="date"
                 value={date}
@@ -178,7 +194,7 @@ export default function CalendarEventDialog({
                   onChange={(e) => setAllDay(e.target.checked)}
                   className="accent-primary"
                 />
-                全天
+                {t('pages.calendar.allDay')}
               </label>
             </div>
           </div>
@@ -187,7 +203,7 @@ export default function CalendarEventDialog({
           {!allDay && (
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="mb-1 block text-xs font-medium text-ink-2">开始时间</label>
+                <label className="mb-1 block text-xs font-medium text-ink-2">{t('pages.calendarDialog.startTime')}</label>
                 <input
                   type="time"
                   value={startTime}
@@ -196,7 +212,7 @@ export default function CalendarEventDialog({
                 />
               </div>
               <div className="flex-1">
-                <label className="mb-1 block text-xs font-medium text-ink-2">结束时间</label>
+                <label className="mb-1 block text-xs font-medium text-ink-2">{t('pages.calendarDialog.endTime')}</label>
                 <input
                   type="time"
                   value={endTime}
@@ -209,7 +225,7 @@ export default function CalendarEventDialog({
 
           {/* 颜色 */}
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-ink-2">颜色</label>
+            <label className="mb-1.5 block text-xs font-medium text-ink-2">{t('pages.calendarDialog.color')}</label>
             <div className="flex gap-2">
               {COLORS.map((c) => (
                 <button
@@ -224,11 +240,11 @@ export default function CalendarEventDialog({
 
           {/* 描述 */}
           <div>
-            <label className="mb-1 block text-xs font-medium text-ink-2">描述</label>
+            <label className="mb-1 block text-xs font-medium text-ink-2">{t('pages.calendarDialog.description')}</label>
             <textarea
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
-              placeholder="可选"
+              placeholder={t('pages.calendarDialog.optionalPlaceholder')}
               rows={2}
               className="w-full rounded-md border border-line bg-surface-3 px-3 py-2 text-sm text-ink outline-none transition focus:border-primary resize-none"
             />
@@ -243,7 +259,7 @@ export default function CalendarEventDialog({
                 onChange={(e) => setRepeatEnabled(e.target.checked)}
                 className="accent-primary"
               />
-              <span className="font-medium">重复</span>
+              <span className="font-medium">{t('pages.calendarDialog.repeat')}</span>
             </label>
 
             {repeatEnabled && (
@@ -254,13 +270,13 @@ export default function CalendarEventDialog({
                     onChange={(e) => setRepeatType(e.target.value as RepeatRule['type'])}
                     className="h-8 flex-1 rounded-md border border-line bg-surface-3 px-2 text-sm text-ink outline-none"
                   >
-                    {Object.entries(REPEAT_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>{v}</option>
+                    {(Object.entries(REPEAT_LABEL_KEYS) as [RepeatRule['type'], MessageKey][]).map(([k, key]) => (
+                      <option key={k} value={k}>{t(key)}</option>
                     ))}
                   </select>
                   {repeatType !== 'weekday' && (
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-ink-3">每</span>
+                      <span className="text-xs text-ink-3">{t('pages.calendarDialog.repeatEvery')}</span>
                       <input
                         type="number"
                         min={1}
@@ -270,7 +286,7 @@ export default function CalendarEventDialog({
                         className="h-8 w-14 rounded-md border border-line bg-surface-3 px-2 text-center text-sm text-ink outline-none"
                       />
                       <span className="text-xs text-ink-3">
-                        {repeatType === 'daily' ? '天' : repeatType === 'weekly' ? '周' : repeatType === 'monthly' ? '月' : repeatType === 'yearly' ? '年' : ''}
+                        {tp(repeatInterval, REPEAT_UNIT_KEYS[repeatType].one, REPEAT_UNIT_KEYS[repeatType].other)}
                       </span>
                     </div>
                   )}
@@ -278,7 +294,7 @@ export default function CalendarEventDialog({
 
                 {repeatType === 'custom' && (
                   <div className="flex gap-1.5">
-                    {DAY_NAMES.map((name, i) => (
+                    {DAY_NAME_KEYS.map((key, i) => (
                       <button
                         key={i}
                         onClick={() =>
@@ -292,7 +308,7 @@ export default function CalendarEventDialog({
                             : 'bg-fill-1 text-ink-3 hover:bg-fill-hover'
                         }`}
                       >
-                        {name}
+                        {t(key)}
                       </button>
                     ))}
                   </div>
@@ -300,7 +316,7 @@ export default function CalendarEventDialog({
 
                 <div className="flex gap-3">
                   <div className="flex-1">
-                    <label className="mb-1 block text-xs text-ink-3">结束日期（可选）</label>
+                    <label className="mb-1 block text-xs text-ink-3">{t('pages.calendarDialog.repeatEndDate')}</label>
                     <input
                       type="date"
                       value={repeatEndDate}
@@ -309,7 +325,7 @@ export default function CalendarEventDialog({
                     />
                   </div>
                   <div className="flex-1">
-                    <label className="mb-1 block text-xs text-ink-3">重复次数（可选）</label>
+                    <label className="mb-1 block text-xs text-ink-3">{t('pages.calendarDialog.repeatEndAfter')}</label>
                     <input
                       type="number"
                       min={1}
@@ -320,7 +336,7 @@ export default function CalendarEventDialog({
                         const n = Number(e.target.value);
                         setRepeatEndAfter(Number.isFinite(n) && n >= 1 ? n : undefined);
                       }}
-                      placeholder="不限"
+                      placeholder={t('pages.calendarDialog.unlimited')}
                       className="h-8 w-full rounded-md border border-line bg-surface-3 px-2 text-sm text-ink outline-none"
                     />
                   </div>
@@ -336,18 +352,18 @@ export default function CalendarEventDialog({
             {isEdit && existing.source === 'manual' && (
               confirmDelete ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-danger">确认删除？</span>
+                  <span className="text-xs text-danger">{t('pages.calendarDialog.confirmDelete')}</span>
                   <button
                     onClick={handleDelete}
                     className="h-7 rounded bg-danger px-3 text-xs text-white"
                   >
-                    删除
+                    {t('common.delete')}
                   </button>
                   <button
                     onClick={() => setConfirmDelete(false)}
                     className="h-7 rounded border border-line px-3 text-xs text-ink-2"
                   >
-                    取消
+                    {t('common.cancel')}
                   </button>
                 </div>
               ) : (
@@ -355,7 +371,7 @@ export default function CalendarEventDialog({
                   onClick={() => setConfirmDelete(true)}
                   className="text-xs text-ink-3 transition hover:text-danger"
                 >
-                  删除日程
+                  {t('pages.calendarDialog.deleteEvent')}
                 </button>
               )
             )}
@@ -365,14 +381,14 @@ export default function CalendarEventDialog({
               onClick={onClose}
               className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               onClick={handleSave}
               disabled={!canSave}
               className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
             >
-              {isEdit ? '保存' : '创建'}
+              {isEdit ? t('common.save') : t('pages.calendarDialog.createAction')}
             </button>
           </div>
         </footer>

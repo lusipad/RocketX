@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { createDiscussion, RcRestClient, slugifyRoomName } from '../../packages/rc-client/src/index';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { rest } from '../../apps/web/src/lib/client';
 import {
   normalizeDiscussionEnabled,
@@ -118,9 +120,15 @@ test('房间级创建讨论的入口在 + 菜单、会话分类和群信息里�
     'utf8',
   );
 
-  assert.match(navRail, /创建讨论/);
-  assert.match(conversationList, /discussions: \{ label: '创建讨论'/);
-  assert.match(roomInfo, /在此房间创建讨论/);
+  assert.match(navRail, /t\('nav\.plus\.createDiscussion'\)/);
+  assert.equal(zhCN['nav.plus.createDiscussion'], '创建讨论');
+  assert.ok(enUS['nav.plus.createDiscussion'].length > 0);
+  assert.match(conversationList, /discussions: \{ labelKey: 'chat\.conv\.newDiscussion'/);
+  assert.equal(zhCN['chat.conv.newDiscussion'], '创建讨论');
+  assert.ok(enUS['chat.conv.newDiscussion'].length > 0);
+  assert.match(roomInfo, /t\('panels\.roomInfo\.createDiscussion'\)/);
+  assert.equal(zhCN['panels.roomInfo.createDiscussion'], '在此房间创建讨论');
+  assert.ok(enUS['panels.roomInfo.createDiscussion'].length > 0);
   // 不选中任何消息也能建：弹窗只要求父房间，不要求消息
   assert.match(dialog, /createDiscussionInRoom\(parentRid, name\.trim\(\) \|\| undefined\)/);
 });
@@ -145,6 +153,10 @@ test('Rocket.Chat 拒绝嵌套讨论，父房间候选必须排除讨论（真�
   // 讨论里既不给「再建讨论」，也不给 RC 根本不存在的「升级为频道」假按钮
   assert.doesNotMatch(roomInfo, /在此讨论下再建讨论/);
   assert.doesNotMatch(roomInfo, /label="把讨论升级为频道"/);
+  assert.equal(
+    Object.values(zhCN).some((value) => value.includes('在此讨论下再建讨论') || value.includes('把讨论升级为频道')),
+    false,
+  );
   assert.doesNotMatch(roomInfo, /ConvertDiscussionDialog/);
   assert.doesNotMatch(roomInfo, /convertDiscussionToChannel/);
 });
@@ -159,7 +171,9 @@ test('store 的房间级创建走不带 pmid 的接口，并把开关决定权�
   // 房间级创建不带 pmid：这是「群里没有消息也能开讨论」的关键
   assert.match(chatStore, /const discussion = await rest\.createDiscussion\(rid, name\);/);
   assert.match(chatStore, /if \(!\(await ensureDiscussionsEnabled\(\)\)\)/);
-  assert.match(chatStore, /本服务器的讨论功能已被管理员关闭/);
+  assert.match(chatStore, /t\('chat\.discussion\.disabled'\)/);
+  assert.equal(zhCN['chat.discussion.disabled'], '本服务器的讨论功能已被管理员关闭');
+  assert.ok(enUS['chat.discussion.disabled'].length > 0);
 });
 
 test('服务端关闭讨论时，房间级创建只提示不请求（并同步掉 UI 入口）', async () => {

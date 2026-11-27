@@ -1,4 +1,5 @@
 import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 /**
  * RocketX 原生投票。
@@ -89,10 +90,10 @@ export function pollFromMessage(message: RcMessage): { poll: PollPayload; attInd
 
 /** 投票消息的正文（官方客户端看到的就是这段） */
 export function pollText(poll: PollPayload): string {
-  const lines = [`📊 投票：${poll.question}`];
+  const lines = [t('chat.poll.text.header', { question: poll.question })];
   poll.options.forEach((option, i) => lines.push(`${i + 1}. ${option}`));
-  lines.push(poll.multi ? '点数字表情可多选' : '点数字表情投票，每人一票');
-  if (poll.closed) lines.push('—— 投票已结束 ——');
+  lines.push(poll.multi ? t('chat.poll.text.multiHint') : t('chat.poll.text.singleHint'));
+  if (poll.closed) lines.push(t('chat.poll.text.closed'));
   return lines.join('\n');
 }
 

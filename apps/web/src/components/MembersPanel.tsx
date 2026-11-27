@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { RcRoomRole, RcUser, RoomType } from '@rcx/rc-client';
+import type { RcRoomRole, RcUser, RoomRole, RoomType } from '@rcx/rc-client';
 import {
   AlertCircle,
   Check,
@@ -22,7 +22,6 @@ import { humanError } from '../stores/toast';
 import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
 import { rest } from '../lib/client';
 import {
-  ROLE_LABELS,
   canActOn,
   canInviteMembers,
   canTransferOwnership,
@@ -30,6 +29,7 @@ import {
   rolesOf,
   sortMembers,
 } from '../lib/roomAdmin';
+import { useT, type MessageKey } from '../i18n';
 import Avatar from './Avatar';
 import PanelShell from './PanelShell';
 import Dialog, { ConfirmDialog } from './Dialog';
@@ -47,6 +47,19 @@ import { SkeletonList } from './Skeleton';
  */
 const NO_ROLES: RcRoomRole[] = [];
 
+const ROLE_LABEL_KEYS: Record<RoomRole, MessageKey> = {
+  owner: 'panels.members.role.owner',
+  moderator: 'panels.members.role.moderator',
+  leader: 'panels.members.role.leader',
+};
+
+const STATUS_LABEL_KEYS: Record<string, MessageKey> = {
+  online: 'panels.members.status.online',
+  away: 'panels.members.status.away',
+  busy: 'panels.members.status.busy',
+  offline: 'panels.members.status.offline',
+};
+
 /** 添加成员弹窗（成员面板按钮与 /invite 命令共用） */
 export function AddMembersDialog({
   onClose,
@@ -59,6 +72,7 @@ export function AddMembersDialog({
   /** 预填的用户名（"@张三 @李四"），匹配到的自动选中 */
   prefill?: string;
 }) {
+  const t = useT();
   const activeRid = useChat((s) => s.activeRid);
   const rid = ridProp ?? activeRid;
   const inviteMembers = useChat((s) => s.inviteMembers);
@@ -73,7 +87,7 @@ export function AddMembersDialog({
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ raw: unknown } | null>(null);
   const { users, warning: userSearchWarning } = useUserSearch(keyword);
 
   // 命令预填：/@([\w.-]+)/ 里给的用户名逐个精确解析并选中，用户确认后再统一邀请。
@@ -128,19 +142,17 @@ export function AddMembersDialog({
       await inviteMembers(rid, [...selected.values()]);
       onClose();
     } catch (err) {
-      setError(humanError(err, '邀请失败'));
+      setError({ raw: err });
       setBusy(false);
     }
   };
 
+  const errorMessage = error ? humanError(error.raw, t('panels.members.inviteFailed')) : null;
+
   return (
     <Dialog
-      title={isDirect ? '拉人进来聊' : '添加成员'}
-      hint={
-        isDirect
-          ? 'Rocket.Chat 不支持往已有的多人聊天里加人，会新建一个包含所有人的会话；原会话和它的历史消息都还在。'
-          : undefined
-      }
+      title={isDirect ? t('panels.members.addToDirectTitle') : t('panels.members.addMembersTitle')}
+      hint={isDirect ? t('panels.members.directHint') : undefined}
       width={400}
       onClose={onClose}
       footer={
@@ -151,9 +163,14 @@ export function AddMembersDialog({
         >
           {busy
             ? isDirect
-              ? '新建会话中…'
-              : '邀请中…'
-            : `${isDirect ? '新建会话' : '添加'}${selected.size > 0 ? `（${selected.size}）` : ''}`}
+              ? t('panels.members.creatingChat')
+              : t('panels.members.inviting')
+            : selected.size > 0
+              ? t(
+                  isDirect ? 'panels.members.createChatWithCount' : 'panels.members.addWithCount',
+                  { count: selected.size },
+                )
+              : t(isDirect ? 'panels.members.createChat' : 'common.add')}
         </button>
       }
     >
@@ -164,7 +181,7 @@ export function AddMembersDialog({
             autoFocus
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索用户"
+            placeholder={t('panels.members.searchUsersPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
@@ -197,11 +214,11 @@ export function AddMembersDialog({
         })}
         {users.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '未找到匹配的用户' : '输入用户名搜索'}
+            {keyword ? t('panels.members.noMatchingUsers') : t('panels.members.searchUsersPrompt')}
           </div>
         )}
       </div>
-      {error && <div className="px-5 pt-1 text-xs text-danger">{error}</div>}
+      {errorMessage && <div className="px-5 pt-1 text-xs text-danger">{errorMessage}</div>}
     </Dialog>
   );
 }
@@ -218,6 +235,7 @@ function MemberMenu({
   member: RcUser;
   onClose: () => void;
 }) {
+  const t = useT();
   // `?? NO_ROLES` 必须在选择器**外面**做，见 NO_ROLES 的注释
   const roomRoles = useChat((s) => s.roomRoles[rid]) ?? NO_ROLES;
   const muted = useChat((s) => s.rooms[rid]?.muted);
@@ -252,7 +270,7 @@ function MemberMenu({
             onClick={() => run(() => setMemberRole(rid, member, 'owner', !isOwner))}
           >
             <Crown size={14} className="text-ink-2" />
-            {isOwner ? '取消群主' : '设为群主'}
+            {isOwner ? t('panels.members.removeOwner') : t('panels.members.setOwner')}
           </button>
         )}
         <button
@@ -260,25 +278,25 @@ function MemberMenu({
           onClick={() => run(() => setMemberRole(rid, member, 'moderator', !isMod))}
         >
           <Shield size={14} className="text-ink-2" />
-          {isMod ? '取消管理员' : '设为管理员'}
+          {isMod ? t('panels.members.removeModerator') : t('panels.members.setModerator')}
         </button>
         <button className={item} onClick={() => run(() => toggleMemberMute(rid, member))}>
           <MicOff size={14} className="text-ink-2" />
-          {nowMuted ? '解除禁言' : '禁言'}
+          {nowMuted ? t('panels.members.unmute') : t('panels.members.mute')}
         </button>
         <button
           className={`${item} text-danger`}
           onClick={() => setConfirmKick(true)}
         >
           <UserMinus size={14} />
-          移出群聊
+          {t('panels.members.kick')}
         </button>
       </div>
       {confirmKick && (
         <ConfirmDialog
-          title="移出群聊"
-          message={`确定把「${member.name || member.username}」移出群聊吗？他将不再收到该群消息，需要重新邀请才能回来。`}
-          confirmLabel="移出"
+          title={t('panels.members.kick')}
+          message={t('panels.members.kickConfirmMessage', { name: member.name || member.username })}
+          confirmLabel={t('panels.members.kickConfirmLabel')}
           onConfirm={() => {
             onClose();
             void kickMember(rid, member);
@@ -291,6 +309,7 @@ function MemberMenu({
 }
 
 /** 群成员面板：搜索 + 成员列表（带角色）+ 添加成员 + 管理操作 */export default function MembersPanel() {
+  const t = useT();
   const rid = useChat((s) => s.activeRid);
   const loadMembers = useChat((s) => s.loadMembers);
   const loadRoomRoles = useChat((s) => s.loadRoomRoles);
@@ -316,7 +335,7 @@ function MemberMenu({
   // 其他房间（含私聊）保持宽松判定，交给服务端的 add-user 权限决定。
   const canInvite = canInviteMembers(me, room);
   const inviteBlockedReason = !canInvite
-    ? '只有讨论的创建者能往讨论里加人（Rocket.Chat 限制）。可以让创建者拉人，或改用群组 / 频道。'
+    ? t('panels.members.discussionInviteBlocked')
     : null;
 
   const [members, setMembers] = useState<RcUser[]>([]);
@@ -405,19 +424,25 @@ function MemberMenu({
   }, [filtered, highlightTarget, loading]);
 
   return (
-    <PanelShell title={`群成员${members.length ? `（${members.length}）` : ''}`}>
+    <PanelShell
+      title={
+        members.length
+          ? t('panels.members.titleWithCount', { count: members.length })
+          : t('panels.members.title')
+      }
+    >
       <div className="flex items-center gap-2 p-3">
         <div className="flex h-8 flex-1 items-center gap-2 rounded-md bg-fill-1 px-2.5">
           <Search size={14} className="text-ink-3" />
           <input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索成员"
+            placeholder={t('panels.members.searchMembersPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
         <button
-          title="添加成员"
+          title={t('panels.members.addMembersTitle')}
           disabled={!canInvite}
           onClick={() => setAdding(true)}
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-fill-1 disabled:hover:text-ink-2"
@@ -425,7 +450,7 @@ function MemberMenu({
           <UserPlus size={14} />
         </button>
         <button
-          title="从其他频道导入成员"
+          title={t('panels.members.importMembersTitle')}
           disabled={!canInvite}
           onClick={() =>
             rid && useCommandUi.getState().open({ kind: 'roomPick', rid, mode: 'invite-all-from' })
@@ -438,7 +463,7 @@ function MemberMenu({
             这两个端点在讨论/DM 上不适用（讨论按创建者权限收口，DM 只能新建会话） */}
         {(type === 'c' || type === 'p') && !room?.prid && (
           <button
-            title="把服务器上的用户全部加进来"
+            title={t('panels.members.addAllTitle')}
             disabled={!canInvite}
             onClick={() => setAddAllOpen(true)}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-fill-1 text-ink-2 transition hover:bg-fill-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-fill-1 disabled:hover:text-ink-2"
@@ -452,7 +477,7 @@ function MemberMenu({
         <AddAllMembersDialog
           rid={rid}
           type={type}
-          roomLabel={room?.fname || room?.name || '本群'}
+          roomLabel={room?.fname || room?.name || t('panels.members.thisRoomFallback')}
           onClose={() => setAddAllOpen(false)}
         />
       )}
@@ -500,13 +525,13 @@ function MemberMenu({
                     <span className="truncate text-sm text-ink">{mName}</span>
                     {roles[0] && (
                       <span className="shrink-0 rounded bg-primary-light px-1 py-px text-xs text-primary">
-                        {ROLE_LABELS[roles[0]]}
+                        {t(ROLE_LABEL_KEYS[roles[0]])}
                       </span>
                     )}
                     {isMuted(muted, m.username) && (
                       <span className="flex shrink-0 items-center gap-0.5 rounded bg-fill-1 px-1 py-px text-xs text-ink-3">
                         <MicOff size={12} />
-                        已禁言
+                        {t('panels.members.mutedBadge')}
                       </span>
                     )}
                   </div>
@@ -514,7 +539,7 @@ function MemberMenu({
                 </div>
                 {m.status && (
                   <span
-                    title={m.status}
+                    title={STATUS_LABEL_KEYS[m.status] ? t(STATUS_LABEL_KEYS[m.status]) : m.status}
                     className={`h-2 w-2 shrink-0 rounded-full ${
                       m.status === 'online'
                         ? 'bg-success'
@@ -529,7 +554,7 @@ function MemberMenu({
                 {manageable && (
                   <div className="relative shrink-0">
                     <button
-                      title="管理成员"
+                      title={t('panels.members.manageMemberTitle')}
                       onClick={(e) => {
                         e.stopPropagation();
                         setMenuFor(menuFor === m._id ? null : m._id);
@@ -557,7 +582,7 @@ function MemberMenu({
           })}
         {!loading && !error && filtered.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '未找到匹配的成员' : '暂无成员'}
+            {keyword ? t('panels.members.noMatchingMembers') : t('panels.members.noMembers')}
           </div>
         )}
       </div>
@@ -583,18 +608,20 @@ function AddAllMembersDialog({
   roomLabel: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const addAllUsersToRoom = useChat((s) => s.addAllUsersToRoom);
   const [activeOnly, setActiveOnly] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ raw: unknown } | null>(null);
+  const errorMessage = error ? humanError(error.raw, t('panels.members.addAllFailed')) : null;
 
   return (
     <Dialog
-      title="批量加人"
+      title={t('panels.members.addAllDialogTitle')}
       hint={
         type === 'c'
-          ? '把服务器上的用户加入这个公开频道。'
-          : '把服务器上的用户加入这个私有群组。'
+          ? t('panels.members.addAllPublicHint')
+          : t('panels.members.addAllPrivateHint')
       }
       onClose={busy ? () => {} : onClose}
       footer={
@@ -604,7 +631,7 @@ function AddAllMembersDialog({
             disabled={busy}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             disabled={busy}
@@ -613,19 +640,19 @@ function AddAllMembersDialog({
               setError(null);
               void addAllUsersToRoom(rid, type, activeOnly)
                 .then(onClose)
-                .catch((err) => setError(humanError(err, '批量加人失败')))
+                .catch((err) => setError({ raw: err }))
                 .finally(() => setBusy(false));
             }}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
           >
-            {busy ? '添加中…' : '开始添加'}
+            {busy ? t('panels.members.adding') : t('panels.members.startAdding')}
           </button>
         </>
       }
     >
       <div className="space-y-3 px-5 pb-4">
         <div className="text-sm text-ink-2">
-          目标：<span className="text-ink">{roomLabel}</span>
+          {t('panels.members.addAllTarget')}<span className="text-ink">{roomLabel}</span>
         </div>
         <label className="flex cursor-pointer items-start gap-1.5 text-xs text-ink-2">
           <input
@@ -635,13 +662,13 @@ function AddAllMembersDialog({
             className="mt-0.5 accent-primary"
           />
           <span>
-            只加在线用户（推荐）
+            {t('panels.members.activeOnlyLabel')}
             <span className="mt-0.5 block text-ink-3">
-              取消勾选会把「服务器上的所有用户」都加进来，包括长期不活跃的账号；这个操作会给他们都产生一条入群提示。
+              {t('panels.members.activeOnlyHint')}
             </span>
           </span>
         </label>
-        {error && <div className="text-xs text-danger">{error}</div>}
+        {errorMessage && <div className="text-xs text-danger">{errorMessage}</div>}
       </div>
     </Dialog>
   );

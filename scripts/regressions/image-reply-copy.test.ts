@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import type { RcMessage } from '../../packages/rc-client/src/types';
 import { messageImagePath } from '../../apps/web/src/lib/imageClipboard';
 import { quoteMessagePrefix } from '../../apps/web/src/lib/messageText';
@@ -54,7 +56,9 @@ test('用图片/文件回复时引用跟随第一个上传发出，话题上传�
   assert.doesNotMatch(chat, /const canUseLan = !tmid && !firstMessage;/);
   // 发送确认弹窗要让用户知道这是一条回复
   const dialog = readFileSync('apps/web/src/components/UploadConfirm.tsx', 'utf8');
-  assert.match(dialog, /将作为回复发送/);
+  assert.match(dialog, /t\('chat\.uploadConfirm\.replyPreview',/);
+  assert.match(zhCN['chat.uploadConfirm.replyPreview'], /将作为回复发送/);
+  assert.ok(enUS['chat.uploadConfirm.replyPreview'].includes('{author}'));
 });
 
 test('引用链接与正文用空格连接，和真实服务冒烟路径保持一致（issue #126）', () => {

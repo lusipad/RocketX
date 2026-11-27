@@ -8,6 +8,7 @@ import {
   Cpu,
   FileText,
   FolderOpen,
+  GitCompare,
   History,
   ListChecks,
   Loader2,
@@ -36,7 +37,7 @@ import { buildWorkflowExecutionReport } from '../agent/workflowReport';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import { renderMarkdownDoc } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
-import { acpLocalSessionMessages, type LocalSessionMessage,
+import { acpLocalSessionMessages, listWorkspaceFiles, type LocalSessionMessage,
   type AcpAgentPreset,
   type AcpAgentProfile,
   type AcpDiscoveredCandidate,
@@ -53,16 +54,27 @@ import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
 import { useWorkLedger } from '../stores/workLedger';
+import { applyComposerReplacement, detectComposerTrigger, type ActiveComposerToken } from '../lib/composerCommands';
+import { ButlerComposerFilePopover } from './ButlerComposerPopovers';
+import ButlerTerminalDrawer from './ButlerTerminalDrawer';
+import ShareToRoomButton from './ShareToRoomButton';
+import PullAiToChatButton from './PullAiToChatButton';
+import WorkDiffDrawer from './WorkDiffDrawer';
 import { useAuth } from '../stores/auth';
 import { resolveButlerAccountScope } from '../stores/butlerMemory';
 import { useAgentComposerDraft, useAgentComposerDrafts, type AgentComposerRequest } from '../stores/agentComposerDrafts';
 import AgentComposerFeedback from './AgentComposerFeedback';
 import LocalVoiceControls from './LocalVoiceControls';
 import WorkflowReportCard from './WorkflowReportCard';
+import { t as rawT, useI18n, type ResolvedLocale } from '../i18n';
+import { formatTime } from '../i18n/format';
 
 type InspectorTab = 'plan' | 'tools' | 'report' | 'logs';
 
-function statusBadgeMeta(status: AcpManagedSessionState['status']): {
+function statusBadgeMeta(
+  status: AcpManagedSessionState['status'],
+  tFn: typeof rawT = rawT,
+): {
   label: string;
   dotClass: string;
   className: string;
@@ -70,59 +82,66 @@ function statusBadgeMeta(status: AcpManagedSessionState['status']): {
   switch (status) {
     case 'running':
       return {
-        label: '执行中',
+        label: tFn('agent.acpSurface.status.running'),
         dotClass: 'bg-primary animate-pulse',
         className: 'border-primary/30 bg-primary/10 text-primary',
       };
     case 'waiting_approval':
       return {
-        label: '待审批',
+        label: tFn('agent.acpSurface.status.waitingApproval'),
         dotClass: 'bg-amber-500 animate-pulse',
         className: 'border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300',
       };
     case 'ready':
       return {
-        label: '就绪',
+        label: tFn('agent.acpSurface.status.ready'),
         dotClass: 'bg-emerald-500',
         className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
       };
     case 'connecting':
       return {
-        label: '连接中',
+        label: tFn('agent.acpSurface.status.connecting'),
         dotClass: 'bg-ink-3',
         className: 'border-line bg-surface-2 text-ink-2',
       };
     case 'error':
       return {
-        label: '异常',
+        label: tFn('agent.acpSurface.status.error'),
         dotClass: 'bg-rose-500',
         className: 'border-rose-500/35 bg-rose-500/10 text-rose-700 dark:text-rose-300',
       };
     case 'stopped':
     default:
       return {
-        label: '已停止',
+        label: tFn('agent.acpSurface.status.stopped'),
         dotClass: 'bg-ink-4',
         className: 'border-line bg-surface-2 text-ink-3',
       };
   }
 }
 
-function resolveTransportLabel(preset: string, args: string[]): '内置桥接' | '原生 ACP' {
+function resolveTransportKind(preset: string, args: string[]): 'bridge' | 'native' {
   if (args.some((a) => a.startsWith('--rocketx-acp-bridge='))) {
-    return '内置桥接';
+    return 'bridge';
   }
   const tpl = ACP_PRESET_TEMPLATES.find((t) => t.preset === preset);
-  return tpl?.transportLabel || '原生 ACP';
+  if (tpl?.args.some((a) => a.startsWith('--rocketx-acp-bridge='))) {
+    return 'bridge';
+  }
+  return 'native';
 }
 
-function formatTime(ts: number): string {
+function formatSessionTime(ts: number, locale: ResolvedLocale): string {
   if (!Number.isFinite(ts)) return '';
   try {
-    return new Date(ts).toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
+    return formatTime(
+      ts,
+      {
+        hour: '2-digit',
+        minute: '2-digit',
+      },
+      locale,
+    );
   } catch {
     return '';
   }
@@ -141,14 +160,15 @@ function providerDisplayLabel(provider: string): string {
   }
 }
 
-function basenameOfPath(p: string): string {
+function basenameOfPath(p: string, tFn: typeof rawT = rawT): string {
   const clean = p.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!clean) return '未知工作区';
+  if (!clean) return tFn('agent.kanban.unknownWorkspace');
   const parts = clean.split('/');
   return parts[parts.length - 1] || clean;
 }
 
 export default function AcpWorkspaceSurface() {
+  const { t, locale } = useI18n();
   const agents = useAcpAgents((s) => s.agents);
   const discovered = useAcpAgents((s) => s.discovered);
   const localSessions = useAcpAgents((s) => s.localSessions);
@@ -174,6 +194,9 @@ export default function AcpWorkspaceSurface() {
   const sendPrompt = useAcpAgents((s) => s.sendPrompt);
   const cancelTurn = useAcpAgents((s) => s.cancelTurn);
   const setMode = useAcpAgents((s) => s.setMode);
+  const setModel = useAcpAgents((s) => s.setModel);
+  const enqueuePrompt = useAcpAgents((s) => s.enqueuePrompt);
+  const removeQueuedPrompt = useAcpAgents((s) => s.removeQueuedPrompt);
   const resolvePermission = useAcpAgents((s) => s.resolvePermission);
   const stopSession = useAcpAgents((s) => s.stopSession);
   const setActiveSession = useAcpAgents((s) => s.setActiveSession);
@@ -222,7 +245,7 @@ export default function AcpWorkspaceSurface() {
   );
 
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('plan');
-  const [auxiliaryPanel, setAuxiliaryPanel] = useState<'executors' | 'details' | null>(null);
+  const [auxiliaryPanel, setAuxiliaryPanel] = useState<'executors' | 'details' | 'diff' | null>(null);
   const auxiliaryPanelRef = useRef<HTMLElement>(null);
   const userId = useAuth((state) => state.user?._id ?? 'local-user');
   const composerTarget = {
@@ -254,6 +277,47 @@ export default function AcpWorkspaceSurface() {
   const [nativeStoppedConfirmed, setNativeStoppedConfirmed] = useState(false);
   const [thoughtExpanded, setThoughtExpanded] = useState(true);
   const [expandedToolIds, setExpandedToolIds] = useState<Record<string, boolean>>({});
+  const [acpTerminalOpen, setAcpTerminalOpen] = useState(false);
+  const acpTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [acpFileToken, setAcpFileToken] = useState<ActiveComposerToken | null>(null);
+  const [acpFiles, setAcpFiles] = useState<string[]>([]);
+  const [acpFilesLoading, setAcpFilesLoading] = useState(false);
+  const [acpFileIdx, setAcpFileIdx] = useState(0);
+
+  useEffect(() => {
+    const wsRoot = activeSession?.workspaceRoot?.trim();
+    if (!acpFileToken || !isTauriRuntime() || !wsRoot) {
+      setAcpFiles([]);
+      return;
+    }
+    let cancelled = false;
+    setAcpFilesLoading(true);
+    void listWorkspaceFiles(wsRoot, acpFileToken.query, 40)
+      .then((list) => {
+        if (!cancelled) {
+          setAcpFiles(list);
+          setAcpFileIdx(0);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAcpFiles([]);
+      })
+      .finally(() => {
+        if (!cancelled) setAcpFilesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [acpFileToken, activeSession?.workspaceRoot]);
+
+  const applyAcpFileSelection = (filePath: string) => {
+    if (!acpFileToken) return;
+    const { nextText, nextCursor } = applyComposerReplacement(composerText, acpFileToken, `@${filePath}`);
+    setComposerText(nextText);
+    setAcpFileToken(null);
+    requestAnimationFrame(() => {
+      acpTextareaRef.current?.focus();
+      acpTextareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
 
   // Launch studio state
   const [launchAgentId, setLaunchAgentId] = useState<string>('');
@@ -342,7 +406,7 @@ export default function AcpWorkspaceSurface() {
     const tpl = ACP_PRESET_TEMPLATES.find((item) => item.preset === preset);
     setEditingAgentId(null);
     setFormPreset(preset);
-    setFormName(tpl?.name || '自定义 ACP 客户端');
+    setFormName(tpl?.name || t('agent.acpPreset.custom.name'));
     setFormCommand(tpl?.command || '');
     setFormArgs((tpl?.args || []).join(' '));
     setFormCwd('');
@@ -350,7 +414,7 @@ export default function AcpWorkspaceSurface() {
     setFormAutoApprove(tpl?.defaultAutoApproveSafeReads ?? true);
     setShowProfileEditor(true);
     setAuxiliaryPanel('executors');
-  }, []);
+  }, [t]);
 
   const openEditProfile = useCallback((agent: AcpAgentProfile) => {
     setEditingAgentId(agent.id);
@@ -368,7 +432,7 @@ export default function AcpWorkspaceSurface() {
     const name = formName.trim();
     const command = formCommand.trim();
     if (!name || !command) {
-      setActionNotice('请填写客户端名称与启动命令。');
+      setActionNotice(t('agent.acpSurface.notice.fillNameAndCommand'));
       return;
     }
     setSavingProfile(true);
@@ -394,10 +458,10 @@ export default function AcpWorkspaceSurface() {
       setSelectedAcpAgentId(saved.id);
       setShowProfileEditor(false);
       setEditingAgentId(null);
-      toast.success(`已保存 ACP 客户端：${saved.name}`);
+      toast.success(t('agent.acpSurface.toast.savedClient', { name: saved.name }));
     } catch (err) {
       setActionNotice(
-        `保存客户端配置失败：${err instanceof Error ? err.message : String(err)}`,
+        t('agent.acpSurface.notice.saveFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     } finally {
       setSavingProfile(false);
@@ -412,6 +476,7 @@ export default function AcpWorkspaceSurface() {
     formName,
     formPreset,
     setSelectedAcpAgentId,
+    t,
     upsertAgent,
   ]);
 
@@ -427,19 +492,19 @@ export default function AcpWorkspaceSurface() {
           enabled: true,
           autoApproveSafeReads: true,
           description: candidate.version
-            ? `本机自动发现 (${candidate.version})`
-            : '本机自动发现的 ACP 客户端',
+            ? t('agent.acp.notes.detectedWithVersion', { version: candidate.version })
+            : t('agent.acp.notes.detected'),
         });
         setLaunchAgentId(saved.id);
         setSelectedAcpAgentId(saved.id);
-        toast.success(`已接入：${saved.name}`);
+        toast.success(t('agent.acpSurface.toast.adoptedClient', { name: saved.name }));
       } catch (err) {
         setActionNotice(
-          `接入失败：${err instanceof Error ? err.message : String(err)}`,
+          t('agent.acpSurface.notice.adoptFailed', { error: err instanceof Error ? err.message : String(err) }),
         );
       }
     },
-    [setSelectedAcpAgentId, upsertAgent],
+    [setSelectedAcpAgentId, t, upsertAgent],
   );
 
   const handleAdoptAll = useCallback(async () => {
@@ -450,18 +515,18 @@ export default function AcpWorkspaceSurface() {
       if (added.length > 0) {
         setLaunchAgentId(added[0].id);
         setSelectedAcpAgentId(added[0].id);
-        toast.success(`已一键接入 ${added.length} 个本机 Agent`);
+        toast.success(t('agent.acpSurface.toast.adoptedAllCount', { count: added.length }));
       } else {
-        toast.info('所有已探测到的本机客户端均已接入');
+        toast.info(t('agent.acpSurface.toast.allAlreadyAdopted'));
       }
     } catch (err) {
       setActionNotice(
-        `批量接入失败：${err instanceof Error ? err.message : String(err)}`,
+        t('agent.acpSurface.notice.batchAdoptFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     } finally {
       setAdoptingAll(false);
     }
-  }, [adoptAllDiscoveredAgents, setSelectedAcpAgentId]);
+  }, [adoptAllDiscoveredAgents, setSelectedAcpAgentId, t]);
 
   const handleResumeDiscoveredSession = useCallback(
     async (item: DiscoveredLocalSession) => {
@@ -482,13 +547,13 @@ export default function AcpWorkspaceSurface() {
         setAuxiliaryPanel(null);
       } catch (err) {
         setActionNotice(
-          `恢复本机会话失败：${err instanceof Error ? err.message : String(err)}`,
+          t('agent.acpSurface.notice.resumeLocalFailed', { error: err instanceof Error ? err.message : String(err) }),
         );
       } finally {
         setResumingLocalId(null);
       }
     },
-    [resumeLocalSession, nativeStoppedConfirmed],
+    [nativeStoppedConfirmed, resumeLocalSession, t],
   );
 
   const handlePromoteDiscoveredSession = useCallback(async (item: DiscoveredLocalSession) => {
@@ -500,36 +565,36 @@ export default function AcpWorkspaceSurface() {
         .getState()
         .sessions.find((s) => matchesDiscoveredWorkSession(s, item));
       if (!target) {
-        throw new Error('未能将该本机会话写入工作账本');
+        throw new Error(t('agent.acpSurface.error.cannotWriteLedger'));
       }
       const created = await promoteWorkSessionToCard(target);
-      toast.success(`已转入统一看板：${created.title}`);
+      toast.success(t('agent.acpSurface.toast.promotedToBoard', { title: created.title }));
     } catch (err) {
       setActionNotice(
-        `转入看板失败：${err instanceof Error ? err.message : String(err)}`,
+        t('agent.acpSurface.notice.promoteFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     } finally {
       setResumingLocalId(null);
     }
-  }, []);
+  }, [t]);
 
   const handlePickWorkspace = useCallback(async () => {
     if (!isTauriRuntime()) return;
     const picked = await openDesktopDialog({
       directory: true,
       multiple: false,
-      title: '选择 ACP 会话工作区目录',
+      title: t('agent.acpSurface.pickWorkspaceTitle'),
     });
     if (typeof picked === 'string' && picked.trim()) {
       setWorkspaceRoot(picked.trim());
     }
-  }, []);
+  }, [t]);
 
   const handleLaunchSession = useCallback(async () => {
     const targetAgentId = launchAgentId || agents[0]?.id;
     const root = workspaceRoot.trim() || currentWorkspaceRoot || workspaceRoots[0] || '.';
     if (!targetAgentId) {
-      setActionNotice('请先通过“管理执行器”接入并选择一个执行器。');
+      setActionNotice(t('agent.acpSurface.notice.selectExecutorFirst'));
       return;
     }
     setLaunching(true);
@@ -557,7 +622,7 @@ export default function AcpWorkspaceSurface() {
       setAuxiliaryPanel(null);
     } catch (err) {
       setActionNotice(
-        `启动 ACP 会话失败：${err instanceof Error ? err.message : String(err)}`,
+        t('agent.acpSurface.notice.launchFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     } finally {
       setLaunching(false);
@@ -573,6 +638,7 @@ export default function AcpWorkspaceSurface() {
     resumeSessionId,
     showResumeInput,
     startSession,
+    t,
     workspaceRoot,
     workspaceRoots,
   ]);
@@ -582,11 +648,11 @@ export default function AcpWorkspaceSurface() {
     stickToBottom.current = true;
     try {
       if (`${getServerBase() || 'same-origin'}:${useAuth.getState().user?._id ?? 'local-user'}` !== request.target.scope) {
-        throw new Error('账号已切换，请回到原账号继续发送');
+        throw new Error(t('agent.codexWorkspace.accountSwitchedSend'));
       }
       const session = useAcpAgents.getState().sessions[request.target.recipientId ?? ''];
       if (!session || !session.acpSessionId || session.connectionReady === false || session.workspaceRoot !== request.target.workspaceRoot || session.status === 'connecting' || session.status === 'stopped') {
-        throw new Error('原会话或工作区已不可用，请核对发送目标');
+        throw new Error(t('agent.codexWorkspace.sessionOrWorkspaceUnavailable'));
       }
       submitted = true;
       await sendPrompt(session.sessionKey, request.text, request.options);
@@ -646,8 +712,8 @@ export default function AcpWorkspaceSurface() {
             <button
               type="button"
               onClick={toggleButlerSidebarCollapsed}
-              title="展开会话列表 (Ctrl+B)"
-              aria-label="展开会话列表"
+              title={t('agent.kanban.expandSidebarTitle')}
+              aria-label={t('agent.kanban.expandSidebarAria')}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
             >
               <PanelLeft size={16} />
@@ -655,19 +721,19 @@ export default function AcpWorkspaceSurface() {
           ) : null}
           <div className="min-w-0">
             <h1 className="break-words text-sm font-semibold leading-snug tracking-tight text-ink">
-              {activeSession ? activeSession.title || activeSession.agentName : '执行会话'}
+              {activeSession ? activeSession.title || activeSession.agentName : t('agent.acpSurface.header.fallbackTitle')}
             </h1>
             {activeSession ? (
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
-                <span className={`inline-flex items-center gap-1.5 ${statusBadgeMeta(activeSession.status).className} rounded-full border px-2 py-0.5 text-2xs font-medium`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${statusBadgeMeta(activeSession.status).dotClass}`} />
-                  {statusBadgeMeta(activeSession.status).label}
+                <span className={`inline-flex items-center gap-1.5 ${statusBadgeMeta(activeSession.status, t).className} rounded-full border px-2 py-0.5 text-2xs font-medium`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${statusBadgeMeta(activeSession.status, t).dotClass}`} />
+                  {statusBadgeMeta(activeSession.status, t).label}
                 </span>
                 <span>{activeSession.agentName}</span>
                 <span className="break-all font-mono text-xs">{activeSession.workspaceRoot}</span>
               </div>
             ) : (
-              <p className="mt-1 text-xs text-ink-3">选择执行器和项目，开始工作或继续已有会话。</p>
+              <p className="mt-1 text-xs text-ink-3">{t('agent.acpSurface.header.subtitle')}</p>
             )}
           </div>
         </div>
@@ -675,15 +741,15 @@ export default function AcpWorkspaceSurface() {
         <div className="rcx-acp-header-actions flex items-center gap-2">
           {sessions.length > 0 ? (
             <select
-              aria-label="切换会话"
+              aria-label={t('agent.acpSurface.header.switchSessionAria')}
               value={activeSessionKey || ''}
               onChange={(event) => setActiveSession(event.target.value || null)}
               className="h-8 min-w-0 max-w-44 rounded-lg border border-line bg-surface-4 px-2 text-xs text-ink outline-none focus:border-primary"
             >
-              <option value="" disabled>选择会话 ({sessions.length})</option>
+              <option value="" disabled>{t('agent.acpSurface.header.selectSessionOption', { count: sessions.length })}</option>
               {sessions.map((session) => (
                 <option key={session.sessionKey} value={session.sessionKey}>
-                  {session.title || session.agentName} · {session.pendingPermissions.length > 0 ? `待审批 ${session.pendingPermissions.length} 项` : statusBadgeMeta(session.status).label}
+                  {session.title || session.agentName} · {session.pendingPermissions.length > 0 ? t('agent.acpSurface.header.pendingApprovalCount', { count: session.pendingPermissions.length }) : statusBadgeMeta(session.status, t).label}
                 </option>
               ))}
             </select>
@@ -695,7 +761,7 @@ export default function AcpWorkspaceSurface() {
               className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
             >
               <Plus size={13} />
-              <span>新建会话</span>
+              <span>{t('agent.acpSurface.header.newSessionBtn')}</span>
             </button>
           ) : null}
           <button
@@ -706,8 +772,71 @@ export default function AcpWorkspaceSurface() {
             className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
           >
             <Cpu size={13} />
-            <span>管理执行器</span>
+            <span>{t('agent.acpSurface.header.manageExecutorsBtn')}</span>
           </button>
+          {activeSession && activeSession.workspaceRoot?.trim() && isTauriRuntime() ? (
+            <>
+              <button
+                type="button"
+                aria-expanded={acpTerminalOpen}
+                onClick={() => setAcpTerminalOpen((p) => !p)}
+                title={t('agent.terminal.buttonTitle')}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
+              >
+                <Terminal size={13} aria-hidden="true" />
+                <span>{t('agent.terminal.buttonLabel')}</span>
+              </button>
+              <button
+                type="button"
+                aria-expanded={auxiliaryPanel === 'diff'}
+                onClick={() => setAuxiliaryPanel((p) => (p === 'diff' ? null : 'diff'))}
+                title={t('agent.diff.buttonTitle')}
+                className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
+              >
+                <GitCompare size={13} aria-hidden="true" />
+                <span>{t('agent.diff.buttonLabel')}</span>
+              </button>
+            </>
+          ) : null}
+          {activeSession ? (
+            <>
+              <ShareToRoomButton
+                payload={{
+                  kind: 'acp_session',
+                  sessionKey: activeSession.sessionKey,
+                  agentId: activeSession.agentId,
+                  agentName: activeSession.agentName,
+                  title: activeSession.title,
+                  status: activeSession.status,
+                  summary:
+                    [...activeSession.messages].reverse().find((m) => m.role === 'assistant')?.text.slice(0, 240)
+                    || activeSession.plan.map((p) => p.content).slice(0, 3).join(' · ')
+                    || activeSession.title,
+                  pendingApproval:
+                    activeSession.pendingPermissions[0]?.toolCall.title
+                    || activeSession.pendingPermissions[0]?.reason,
+                  workspaceRoot: activeSession.workspaceRoot,
+                }}
+                bindableTarget={{
+                  targetKind: 'acp_session',
+                  targetId: activeSession.sessionKey,
+                  label: `${activeSession.agentName}: ${activeSession.title}`,
+                }}
+              />
+              <PullAiToChatButton
+                source="acp_agent"
+                agentKind="acp"
+                agentId={activeSession.agentId}
+                agentName={activeSession.agentName}
+                acpSessionKey={activeSession.sessionKey}
+                workspaceRoot={activeSession.workspaceRoot}
+                summary={
+                  [...activeSession.messages].reverse().find((m) => m.role === 'assistant')?.text.slice(0, 240)
+                  || activeSession.title
+                }
+              />
+            </>
+          ) : null}
           {activeSession ? (
             <button
               type="button"
@@ -717,7 +846,7 @@ export default function AcpWorkspaceSurface() {
               className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
             >
               <PanelRight size={13} />
-              <span>任务详情</span>
+              <span>{t('agent.acpSurface.header.taskDetailsBtn')}</span>
             </button>
           ) : null}
           {activeSession && (activeSession.status === 'running' || activeSession.status === 'waiting_approval') ? (
@@ -727,7 +856,7 @@ export default function AcpWorkspaceSurface() {
               className="inline-flex h-8 items-center gap-1 rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 text-xs font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
             >
               <Square size={11} />
-              <span>中断</span>
+              <span>{t('agent.acpSurface.header.interruptBtn')}</span>
             </button>
           ) : null}
           {activeSession && activeSession.status !== 'stopped' ? (
@@ -736,30 +865,30 @@ export default function AcpWorkspaceSurface() {
               onClick={() => void stopSession(activeSession.sessionKey)}
               className="inline-flex h-8 items-center rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
             >
-              停止
+              {t('agent.acpSurface.header.stopBtn')}
             </button>
           ) : null}
         </div>
       </header>
 
-      {loading ? <div role="status" className="border-b border-line px-5 py-2 text-xs text-ink-2">正在加载执行器与会话，已收到的内容仍可查看。</div> : null}
+      {loading ? <div role="status" className="border-b border-line px-5 py-2 text-xs text-ink-2">{t('agent.acpSurface.loadingBanner')}</div> : null}
       {expiredPermissions.some((item) => item.accountScope === resolveButlerAccountScope()) ? (
         <div role="status" className="border-b border-warning/30 bg-warning/10 px-5 py-2 text-xs text-ink">
-          有 {expiredPermissions.filter((item) => item.accountScope === resolveButlerAccountScope()).length} 条旧权限请求已失效，需要执行器重新请求。原有审批不能用于继续执行。
+          {t('agent.acpSurface.expiredPermissionsBanner', { count: expiredPermissions.filter((item) => item.accountScope === resolveButlerAccountScope()).length })}
         </div>
       ) : null}
       {lastError || actionNotice ? (
         <div role={lastError ? 'alert' : 'status'} className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-amber-500/10 px-5 py-2 text-xs text-ink">
           <div className="flex items-center gap-2">
             <AlertTriangle size={14} className="shrink-0 text-amber-600 dark:text-amber-400" />
-            <span>{lastError ? `${lastError}。连接或读取未完成，当前保留已收到的数据。` : actionNotice}</span>
+            <span>{lastError ? t('agent.acpSurface.errorBannerSuffix', { error: lastError }) : actionNotice}</span>
           </div>
           <button
             type="button"
             onClick={() => { if (lastError) { void hydrate(); void discoverLocalSessions(); } else setActionNotice(null); }}
             className="text-xs font-medium text-ink-3 hover:text-ink"
           >
-            {lastError ? '重新加载执行器与会话' : '关闭'}
+            {lastError ? t('agent.acpSurface.reloadBtn') : t('common.close')}
           </button>
         </div>
       ) : null}
@@ -778,10 +907,10 @@ export default function AcpWorkspaceSurface() {
           >
           <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
             <div>
-              <h2 id="acp-executor-management-title" className="text-sm font-semibold text-ink">管理执行器</h2>
-              <p className="mt-1 text-xs text-ink-3">已接入 {agents.length} · 本机发现 {discovered.length}</p>
+              <h2 id="acp-executor-management-title" className="text-sm font-semibold text-ink">{t('agent.acpSurface.executors.title')}</h2>
+              <p className="mt-1 text-xs text-ink-3">{t('agent.acpSurface.executors.subtitle', { adopted: agents.length, discovered: discovered.length })}</p>
             </div>
-            <button type="button" data-panel-close aria-label="关闭执行器管理" onClick={() => setAuxiliaryPanel(null)} className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={16} /></button>
+            <button type="button" data-panel-close aria-label={t('agent.acpSurface.executors.closeAria')} onClick={() => setAuxiliaryPanel(null)} className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={16} /></button>
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -792,16 +921,16 @@ export default function AcpWorkspaceSurface() {
                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-50"
               >
                 {discovering || discoveringLocalSessions ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-                <span>重新扫描本机</span>
+                <span>{t('agent.acpSurface.executors.rescanBtn')}</span>
               </button>
               {unadoptedCount > 0 ? (
                 <button type="button" disabled={adoptingAll} onClick={() => void handleAdoptAll()} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white hover:bg-primary-hover disabled:opacity-50">
                   {adoptingAll ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  <span>全部接入 ({unadoptedCount})</span>
+                  <span>{t('agent.acpSurface.executors.adoptAllCountBtn', { count: unadoptedCount })}</span>
                 </button>
               ) : null}
               <button type="button" onClick={() => applyPresetTemplate('custom')} className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover">
-                <Plus size={13} /><span>添加自定义</span>
+                <Plus size={13} /><span>{t('agent.acpSurface.executors.addCustomBtn')}</span>
               </button>
             </div>
           {/* 快捷新增 / 编辑抽屉卡 */}
@@ -809,7 +938,7 @@ export default function AcpWorkspaceSurface() {
             <section className="rounded-2xl border border-primary/35 bg-surface-4 p-3.5 shadow-card">
               <div className="mb-2.5 flex items-center justify-between">
                 <h2 className="text-xs font-semibold text-ink">
-                  {editingAgentId ? '编辑 ACP 客户端' : '新增 ACP 客户端'}
+                  {editingAgentId ? t('agent.acpSurface.executors.editFormTitle') : t('agent.acpSurface.executors.addFormTitle')}
                 </h2>
                 <button
                   type="button"
@@ -819,7 +948,7 @@ export default function AcpWorkspaceSurface() {
                   }}
                   className="text-xs text-ink-3 hover:text-ink"
                 >
-                  取消
+                  {t('common.cancel')}
                 </button>
               </div>
               <div className="mb-2.5 flex flex-wrap gap-1">
@@ -851,31 +980,31 @@ export default function AcpWorkspaceSurface() {
                 <input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  placeholder="显示名称（如 OpenAI Codex CLI）"
+                  placeholder={t('agent.acpSurface.executors.namePlaceholder')}
                   className="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-ink outline-none focus:border-primary"
                 />
                 <input
                   value={formCommand}
                   onChange={(e) => setFormCommand(e.target.value)}
-                  placeholder="可执行命令或绝对路径"
+                  placeholder={t('agent.acpSurface.executors.commandPlaceholder')}
                   className="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 font-mono text-xs text-ink outline-none focus:border-primary"
                 />
                 <input
                   value={formArgs}
                   onChange={(e) => setFormArgs(e.target.value)}
-                  placeholder="启动参数（空格分隔）"
+                  placeholder={t('agent.acpSurface.executors.argsPlaceholder')}
                   className="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 font-mono text-xs text-ink outline-none focus:border-primary"
                 />
                 <input
                   value={formCwd}
                   onChange={(e) => setFormCwd(e.target.value)}
-                  placeholder="默认工作目录（留空则使用会话工作区）"
+                  placeholder={t('agent.acpSurface.executors.cwdPlaceholder')}
                   className="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-ink outline-none focus:border-primary"
                 />
                 <input
                   value={formDescription}
                   onChange={(e) => setFormDescription(e.target.value)}
-                  placeholder="用途备注（可选）"
+                  placeholder={t('agent.acpSurface.executors.descPlaceholder')}
                   className="h-8 w-full rounded-lg border border-line bg-surface-2 px-2.5 text-xs text-ink outline-none focus:border-primary"
                 />
                 <label className="flex items-center gap-2 text-xs text-ink-2">
@@ -885,7 +1014,7 @@ export default function AcpWorkspaceSurface() {
                     onChange={(e) => setFormAutoApprove(e.target.checked)}
                     className="rounded border-line"
                   />
-                  自主模式下自动放行安全只读检索
+                  {t('agent.acpSurface.executors.autoApproveReads')}
                 </label>
                 <button
                   type="button"
@@ -894,7 +1023,7 @@ export default function AcpWorkspaceSurface() {
                   className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
                 >
                   {savingProfile ? <Loader2 size={13} className="animate-spin" /> : null}
-                  保存客户端配置
+                  {t('agent.acpSurface.executors.saveProfileBtn')}
                 </button>
               </div>
             </section>
@@ -904,7 +1033,7 @@ export default function AcpWorkspaceSurface() {
           <section className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-ink-2">
-                发现本机 Agent ({discovered.length})
+                {t('agent.acpSurface.discovered.heading', { count: discovered.length })}
               </span>
               {unadoptedCount > 0 ? (
                 <button
@@ -913,7 +1042,7 @@ export default function AcpWorkspaceSurface() {
                   onClick={() => void handleAdoptAll()}
                   className="text-xs font-medium text-primary hover:underline disabled:opacity-50"
                 >
-                  一键全部接入
+                  {t('agent.acpSurface.discovered.adoptAllBtn')}
                 </button>
               ) : null}
             </div>
@@ -921,16 +1050,17 @@ export default function AcpWorkspaceSurface() {
             {discovering && discovered.length === 0 ? (
               <div className="flex items-center gap-2 rounded-xl border border-line bg-surface-4 p-3 text-xs text-ink-3 shadow-raise">
                 <Loader2 size={13} className="animate-spin text-primary" />
-                <span>正在扫描本机已安装的 AI CLI…</span>
+                <span>{t('agent.acpSurface.discovered.scanning')}</span>
               </div>
             ) : discovered.length === 0 ? (
               <div className="rounded-xl border border-dashed border-line bg-surface-3/60 p-3 text-xs text-ink-3">
-                暂未扫描到已安装 CLI，可点击右上角「重新扫描本机」或手动添加。
+                {t('agent.acpSurface.discovered.empty')}
               </div>
             ) : (
               <div className="space-y-1.5">
                 {discovered.map((cand) => {
-                  const transport = resolveTransportLabel(cand.preset, cand.args);
+                  const transportKind = resolveTransportKind(cand.preset, cand.args);
+                  const transport = t(transportKind === 'bridge' ? 'agent.acpPreset.transport.bridge' : 'agent.acpPreset.transport.native');
                   return (
                     <div
                       key={`${cand.preset}-${cand.command}`}
@@ -943,7 +1073,7 @@ export default function AcpWorkspaceSurface() {
                           </span>
                           <span
                             className={`rounded-full px-1.5 py-0.5 text-2xs font-medium ${
-                              transport === '原生 ACP'
+                              transportKind === 'native'
                                 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
                                 : 'bg-primary/10 text-primary'
                             }`}
@@ -957,7 +1087,7 @@ export default function AcpWorkspaceSurface() {
                       </div>
                       {cand.alreadyRegistered ? (
                         <span className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-2xs font-medium text-emerald-700 dark:text-emerald-300">
-                          已接入
+                          {t('agent.acpSurface.discovered.adoptedBadge')}
                         </span>
                       ) : (
                         <button
@@ -965,7 +1095,7 @@ export default function AcpWorkspaceSurface() {
                           onClick={() => void handleAdoptCandidate(cand)}
                           className="shrink-0 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
                         >
-                          接入
+                          {t('agent.acpSurface.discovered.adoptBtn')}
                         </button>
                       )}
                     </div>
@@ -979,20 +1109,21 @@ export default function AcpWorkspaceSurface() {
           <section className="space-y-2 border-t border-line/70 pt-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-ink-2">
-                已接入客户端 ({agents.length})
+                {t('agent.acpSurface.adopted.heading', { count: agents.length })}
               </span>
               {loading ? <Loader2 size={12} className="animate-spin text-ink-3" /> : null}
             </div>
             {agents.length === 0 ? (
               <div className="rounded-xl border border-dashed border-line bg-surface-3/60 p-3 text-xs text-ink-3">
-                点击上方扫描结果中的「接入」，或通过下方预设模板注册本地代理。
+                {t('agent.acpSurface.adopted.empty')}
               </div>
             ) : (
               <div className="space-y-1.5">
                 {agents.map((agent) => {
                   const probe = probes[agent.id];
                   const selected = launchAgentId === agent.id;
-                  const transport = resolveTransportLabel(agent.preset, agent.args);
+                  const transportKind = resolveTransportKind(agent.preset, agent.args);
+                  const transport = t(transportKind === 'bridge' ? 'agent.acpPreset.transport.bridge' : 'agent.acpPreset.transport.native');
                   return (
                     <div
                       key={agent.id}
@@ -1037,7 +1168,7 @@ export default function AcpWorkspaceSurface() {
                         >
                           <button
                             type="button"
-                            title="探测可执行状态"
+                            title={t('agent.acpSurface.adopted.probeTitle')}
                             onClick={() => void probeAgent(agent.id)}
                             className="rounded-md p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"
                           >
@@ -1045,7 +1176,7 @@ export default function AcpWorkspaceSurface() {
                           </button>
                           <button
                             type="button"
-                            title="编辑"
+                            title={t('common.edit')}
                             onClick={() => openEditProfile(agent)}
                             className="rounded-md p-1 text-ink-3 hover:bg-fill-hover hover:text-ink"
                           >
@@ -1053,7 +1184,7 @@ export default function AcpWorkspaceSurface() {
                           </button>
                           <button
                             type="button"
-                            title="删除"
+                            title={t('common.delete')}
                             onClick={() => void removeAgent(agent.id)}
                             className="rounded-md p-1 text-ink-3 hover:bg-rose-500/10 hover:text-rose-600"
                           >
@@ -1064,7 +1195,7 @@ export default function AcpWorkspaceSurface() {
 
                       {probe && !probe.ready ? (
                         <div className="mt-1.5 pl-3.5 text-xs text-rose-700 dark:text-rose-300">
-                          {probe.reason || '未找到可执行文件'}
+                          {probe.reason || t('agent.acpSurface.adopted.executableMissing')}
                         </div>
                       ) : null}
                     </div>
@@ -1078,7 +1209,7 @@ export default function AcpWorkspaceSurface() {
           <section className="space-y-2 border-t border-line/70 pt-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-ink-2">
-                本机历史会话 ({externalLocalSessions.length})
+                {t('agent.acpSurface.localHistory.heading', { count: externalLocalSessions.length })}
               </span>
               {discoveringLocalSessions ? (
                 <Loader2 size={12} className="animate-spin text-ink-3" />
@@ -1086,7 +1217,7 @@ export default function AcpWorkspaceSurface() {
             </div>
             {externalLocalSessions.length === 0 ? (
               <div className="rounded-xl border border-dashed border-line bg-surface-3/60 p-3 text-xs text-ink-3">
-                暂无可恢复的本机 Antigravity / Codex / Claude 历史会话。
+                {t('agent.acpSurface.localHistory.empty')}
               </div>
             ) : (
               <div className="space-y-1.5">
@@ -1102,7 +1233,7 @@ export default function AcpWorkspaceSurface() {
                         setNativePreview({ item, messages: [], loading: true, error: null });
                         void acpLocalSessionMessages({ provider: item.provider, sessionId: item.nativeSessionId, sourcePath: item.sourcePath, sourceScope: item.sourceScope, limit: 24 }).then((messages) => {
                           setNativePreview((current) => current?.item === item ? { item, messages, loading: false, error: null } : current);
-                        }).catch((error: unknown) => setNativePreview((current) => current?.item === item ? { ...current, loading: false, error: `历史读取失败：${error instanceof Error ? error.message : String(error)}` } : current));
+                        }).catch((error: unknown) => setNativePreview((current) => current?.item === item ? { ...current, loading: false, error: t('agent.acpSurface.localHistory.readError', { error: error instanceof Error ? error.message : String(error) }) } : current));
                       }}
                       className="w-full rounded-xl border border-line bg-surface-4 p-2.5 text-left transition hover:border-primary/40 disabled:opacity-60"
                     >
@@ -1116,9 +1247,9 @@ export default function AcpWorkspaceSurface() {
                       </div>
                       <div className="mt-1 flex items-center justify-between gap-2 text-xs text-ink-3">
                         <span className="truncate font-mono">
-                          {basenameOfPath(item.workspaceRoot)}
+                          {basenameOfPath(item.workspaceRoot, t)}
                         </span>
-                        <span>{item.runtimeStatus === 'running' ? '运行中 · 只读' : item.runtimeStatus === 'unknown' ? '活动状态未知 · 只读' : formatTime(item.updatedAt)}</span>
+                        <span>{item.runtimeStatus === 'running' ? t('agent.acpSurface.localHistory.runningReadonly') : item.runtimeStatus === 'unknown' ? t('agent.acpSurface.localHistory.unknownReadonly') : formatSessionTime(item.updatedAt, locale)}</span>
                       </div>
                     </button>
                   );
@@ -1129,16 +1260,16 @@ export default function AcpWorkspaceSurface() {
               <div className="space-y-2 rounded-xl border border-line bg-surface-4 p-3 text-xs" data-testid="native-session-preview">
                 <div className="font-semibold text-ink">{nativePreview.item.title}</div>
                 <div className="break-all font-mono text-ink-3">{nativePreview.item.workspaceRoot}</div>
-                <div className="break-all text-ink-3">来源：{nativePreview.item.sourceScope ?? '默认本机来源'}</div>
+                <div className="break-all text-ink-3">{t('agent.acpSurface.localHistory.sourceLine', { scope: nativePreview.item.sourceScope ?? t('agent.acpSurface.localHistory.defaultLocalSource') })}</div>
                 <div className="max-h-56 space-y-2 overflow-y-auto">
-                  {nativePreview.loading ? <p className="text-ink-3">正在读取原生对话记录…</p> : nativePreview.error ? <p className="text-rose-600" role="alert">{nativePreview.error}</p> : nativePreview.messages.length ? nativePreview.messages.map((message) => <p key={message.id} className="whitespace-pre-wrap break-words text-ink-2">{message.role === 'user' ? '你：' : 'Agent：'}{message.text}</p>) : <p className="text-ink-3">暂无可读取的对话记录</p>}
+                  {nativePreview.loading ? <p className="text-ink-3">{t('agent.acpSurface.localHistory.loadingTranscript')}</p> : nativePreview.error ? <p className="text-rose-600" role="alert">{nativePreview.error}</p> : nativePreview.messages.length ? nativePreview.messages.map((message) => <p key={message.id} className="whitespace-pre-wrap break-words text-ink-2">{message.role === 'user' ? t('agent.acpSurface.localHistory.youPrefix') : t('agent.acpSurface.localHistory.agentPrefix')}{message.text}</p>) : <p className="text-ink-3">{t('agent.acpSurface.localHistory.noReadableMessages')}</p>}
                 </div>
                 {nativePreview.item.provider === 'codex' ? <>
-                  <p className="text-ink-3">系统尚未确认原端是否停止。请先在原 Codex 停止执行；交接后请从 RocketX 继续，避免两端同时写入。</p>
-                  <label className="flex items-start gap-2 text-ink-2"><input type="checkbox" checked={nativeStoppedConfirmed} onChange={(event) => setNativeStoppedConfirmed(event.target.checked)} />我已停止原端执行，将此会话交接给 RocketX</label>
-                  <button type="button" disabled={!nativeStoppedConfirmed || Boolean(resumingLocalId)} onClick={() => void handleResumeDiscoveredSession(nativePreview.item)} className="rounded-lg bg-primary px-3 py-1.5 font-medium text-white disabled:opacity-50">原端已停止，接续原会话</button>
-                </> : <p className="text-ink-3">当前仅查看历史；该来源尚无经过验证的原生交接通道。</p>}
-                <button type="button" onClick={() => setNativePreview(null)} className="ml-2 text-ink-3">关闭预览</button>
+                  <p className="text-ink-3">{t('agent.acpSurface.localHistory.codexConfirmHint')}</p>
+                  <label className="flex items-start gap-2 text-ink-2"><input type="checkbox" checked={nativeStoppedConfirmed} onChange={(event) => setNativeStoppedConfirmed(event.target.checked)} />{t('agent.acpSurface.localHistory.codexConfirmCheckbox')}</label>
+                  <button type="button" disabled={!nativeStoppedConfirmed || Boolean(resumingLocalId)} onClick={() => void handleResumeDiscoveredSession(nativePreview.item)} className="rounded-lg bg-primary px-3 py-1.5 font-medium text-white disabled:opacity-50">{t('agent.acpSurface.localHistory.resumeOriginalBtn')}</button>
+                </> : <p className="text-ink-3">{t('agent.acpSurface.localHistory.readonlyOnlyHint')}</p>}
+                <button type="button" onClick={() => setNativePreview(null)} className="ml-2 text-ink-3">{t('agent.acpSurface.localHistory.closePreviewBtn')}</button>
               </div>
             ) : null}
           </section>
@@ -1159,10 +1290,10 @@ export default function AcpWorkspaceSurface() {
                     </div>
                     <div>
                       <h2 className="text-base font-semibold text-ink">
-                        开始一项工作
+                        {t('agent.acpSurface.launchpad.title')}
                       </h2>
                       <p className="mt-0.5 text-xs leading-relaxed text-ink-3">
-                        直连本机安装的 Codex、Antigravity、Claude Code、Kimi、Copilot 或 Gemini CLI，在统一控制台中查看实时计划、文件 Diff 与权限审批。
+                        {t('agent.acpSurface.launchpad.desc')}
                       </p>
                     </div>
                   </div>
@@ -1171,14 +1302,14 @@ export default function AcpWorkspaceSurface() {
                     {/* 1. 选择目标客户端 */}
                     <div>
                       <div className="mb-1.5 flex items-center justify-between">
-                        <label className="font-semibold text-ink-2">目标 ACP 客户端</label>
+                        <label className="font-semibold text-ink-2">{t('agent.acpSurface.launchpad.targetClientLabel')}</label>
                         {unadoptedCount > 0 ? (
                           <button
                             type="button"
                             onClick={() => void handleAdoptAll()}
                             className="font-medium text-primary hover:underline"
                           >
-                            一键接入本机发现的 {unadoptedCount} 个客户端
+                            {t('agent.acpSurface.launchpad.adoptAllBannerBtn', { count: unadoptedCount })}
                           </button>
                         ) : null}
                       </div>
@@ -1186,7 +1317,8 @@ export default function AcpWorkspaceSurface() {
                         <div className="flex flex-wrap gap-1.5">
                           {agents.map((agent) => {
                             const selected = launchAgentId === agent.id;
-                            const transport = resolveTransportLabel(agent.preset, agent.args);
+                            const transportKind = resolveTransportKind(agent.preset, agent.args);
+                            const transport = t(transportKind === 'bridge' ? 'agent.acpPreset.transport.bridge' : 'agent.acpPreset.transport.native');
                             return (
                               <button
                                 key={agent.id}
@@ -1211,7 +1343,7 @@ export default function AcpWorkspaceSurface() {
                         </div>
                       ) : (
                         <div className="rounded-xl border border-dashed border-line bg-surface-2 px-3 py-2.5 text-ink-3">
-                          暂无已接入执行器。打开“管理执行器”接入本机工具，或从下方预设添加。
+                          {t('agent.acpSurface.launchpad.noExecutorsEmpty')}
                         </div>
                       )}
                     </div>
@@ -1219,13 +1351,13 @@ export default function AcpWorkspaceSurface() {
                     {/* 2. 工作区目录 */}
                     <div>
                       <label className="mb-1.5 block font-semibold text-ink-2">
-                        工作区根目录
+                        {t('agent.acpSurface.launchpad.workspaceRootLabel')}
                       </label>
                       <div className="flex items-center gap-2">
                         <input
                           value={workspaceRoot}
                           onChange={(e) => setWorkspaceRoot(e.target.value)}
-                          placeholder="输入或选择本地项目目录（如 d:\Repos\rocketchatx）"
+                          placeholder={t('agent.acpSurface.launchpad.workspacePlaceholder')}
                           className="h-9 min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-3 font-mono text-xs text-ink outline-none focus:border-primary"
                         />
                         {isTauriRuntime() ? (
@@ -1235,7 +1367,7 @@ export default function AcpWorkspaceSurface() {
                             className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 transition hover:bg-fill-hover hover:text-ink"
                           >
                             <FolderOpen size={14} />
-                            <span>浏览目录</span>
+                            <span>{t('agent.acpSurface.launchpad.browseDirBtn')}</span>
                           </button>
                         ) : null}
                       </div>
@@ -1244,14 +1376,14 @@ export default function AcpWorkspaceSurface() {
                     {/* 3. 权限与自主策略分段控件 */}
                     <div>
                       <label className="mb-1.5 block font-semibold text-ink-2">
-                        权限与安全策略
+                        {t('agent.acpSurface.launchpad.autonomyLabel')}
                       </label>
                       <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-line-soft bg-surface-2 p-1">
                         {(
                           [
-                            { key: 'confirm' as const, label: '确认审批', hint: '变更前询问' },
-                            { key: 'autonomous' as const, label: '半自主', hint: '只读自动放行' },
-                            { key: 'readonly' as const, label: '严格只读', hint: '拒绝写入与终端' },
+                            { key: 'confirm' as const, labelKey: 'agent.acpSurface.launchpad.autonomyConfirmLabel' as const, hintKey: 'agent.acpSurface.launchpad.autonomyConfirmHint' as const },
+                            { key: 'autonomous' as const, labelKey: 'agent.acpSurface.launchpad.autonomyAutoLabel' as const, hintKey: 'agent.acpSurface.launchpad.autonomyAutoHint' as const },
+                            { key: 'readonly' as const, labelKey: 'agent.acpSurface.launchpad.autonomyReadonlyLabel' as const, hintKey: 'agent.acpSurface.launchpad.autonomyReadonlyHint' as const },
                           ] as const
                         ).map((opt) => (
                           <button
@@ -1264,8 +1396,8 @@ export default function AcpWorkspaceSurface() {
                                 : 'text-ink-3 hover:text-ink'
                             }`}
                           >
-                            <div className="text-xs font-medium">{opt.label}</div>
-                            <div className="text-xs text-ink-3">{opt.hint}</div>
+                            <div className="text-xs font-medium">{t(opt.labelKey)}</div>
+                            <div className="text-xs text-ink-3">{t(opt.hintKey)}</div>
                           </button>
                         ))}
                       </div>
@@ -1275,14 +1407,14 @@ export default function AcpWorkspaceSurface() {
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <label className="block">
                         <span className="mb-1.5 block font-semibold text-ink-2">
-                          关联任务卡片（可选）
+                          {t('agent.acpSurface.launchpad.linkedCardLabel')}
                         </span>
                         <select
                           value={linkedTodoId}
                           onChange={(e) => setLinkedTodoId(e.target.value)}
                           className="h-9 w-full rounded-xl border border-line bg-surface-2 px-3 text-xs text-ink outline-none focus:border-primary"
                         >
-                          <option value="">不关联具体卡片</option>
+                          <option value="">{t('agent.acpSurface.launchpad.noLinkedCardOption')}</option>
                           {cards.slice(0, 40).map((card) => (
                             <option key={card.id} value={card.id}>
                               {card.title}
@@ -1293,26 +1425,26 @@ export default function AcpWorkspaceSurface() {
 
                       <div>
                         <div className="mb-1.5 flex items-center justify-between">
-                          <span className="font-semibold text-ink-2">会话模式</span>
+                          <span className="font-semibold text-ink-2">{t('agent.acpSurface.launchpad.sessionModeLabel')}</span>
                           <button
                             type="button"
                             onClick={() => setShowResumeInput((v) => !v)}
                             className="inline-flex items-center gap-1 text-primary hover:underline"
                           >
                             <History size={12} />
-                            <span>{showResumeInput ? '切换为新会话' : '恢复已有会话'}</span>
+                            <span>{showResumeInput ? t('agent.acpSurface.launchpad.switchToNewSession') : t('agent.acpSurface.launchpad.resumeExistingSession')}</span>
                           </button>
                         </div>
                         {showResumeInput ? (
                           <input
                             value={resumeSessionId}
                             onChange={(e) => setResumeSessionId(e.target.value)}
-                            placeholder="输入要恢复的 ACP sessionId"
+                            placeholder={t('agent.acpSurface.launchpad.resumeIdPlaceholder')}
                             className="h-9 w-full rounded-xl border border-line bg-surface-2 px-3 font-mono text-xs text-ink outline-none focus:border-primary"
                           />
                         ) : (
                           <div className="flex h-9 items-center rounded-xl border border-line-soft bg-surface-2 px-3 text-ink-3">
-                            新建洁净 ACP 协议会话并同步至工作台
+                            {t('agent.acpSurface.launchpad.cleanSessionHint')}
                           </div>
                         )}
                       </div>
@@ -1331,7 +1463,7 @@ export default function AcpWorkspaceSurface() {
                         ) : (
                           <Play size={14} />
                         )}
-                        <span>{showResumeInput ? '加载并恢复 ACP 会话' : '启动 ACP 会话'}</span>
+                        <span>{showResumeInput ? t('agent.acpSurface.launchpad.loadAndResumeBtn') : t('agent.acpSurface.launchpad.startSessionBtn')}</span>
                       </button>
                     </div>
                   </div>
@@ -1343,12 +1475,12 @@ export default function AcpWorkspaceSurface() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink">
                         <History size={14} className="text-primary" />
-                        本机历史会话 ({externalLocalSessions.length})
+                        {t('agent.acpSurface.localHistory.heading', { count: externalLocalSessions.length })}
                       </span>
                       <div className="flex flex-wrap items-center gap-1">
                         {(
                           [
-                            { key: 'all', label: '全部' },
+                            { key: 'all', label: t('agent.acpSurface.launchpad.filterAll') },
                             { key: 'antigravity', label: 'Antigravity' },
                             { key: 'codex', label: 'Codex' },
                             { key: 'claude', label: 'Claude' },
@@ -1375,15 +1507,15 @@ export default function AcpWorkspaceSurface() {
                       onClick={() => setButlerView('kanban')}
                       className="text-xs font-medium text-primary hover:underline"
                     >
-                      前往统一看板
+                      {t('agent.acpSurface.launchpad.goKanbanBtn')}
                     </button>
                   </div>
 
                   {filteredExternalSessions.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-line bg-surface-3/60 px-3 py-4 text-center text-xs text-ink-3">
                       {discoveringLocalSessions
-                        ? '正在扫描本机历史会话…'
-                        : '暂未发现匹配的本机 Antigravity / Codex / Claude 历史会话，可在“管理执行器”中重新扫描本机。'}
+                        ? t('agent.acpSurface.launchpad.scanningHistory')
+                        : t('agent.acpSurface.launchpad.noMatchingHistory')}
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1401,7 +1533,7 @@ export default function AcpWorkspaceSurface() {
                                 </span>
                                 {item.runtimeStatus === 'running' && (
                                   <span className="rounded-full bg-warning/15 px-2 py-0.5 text-2xs font-medium text-warning">
-                                    运行中
+                                    {t('agent.acpSurface.status.running')}
                                   </span>
                                 )}
                                 <span className="truncate text-xs font-semibold text-ink">
@@ -1410,10 +1542,10 @@ export default function AcpWorkspaceSurface() {
                               </div>
                               <div className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
                                 <span className="font-mono">
-                                  {basenameOfPath(item.workspaceRoot)}
+                                  {basenameOfPath(item.workspaceRoot, t)}
                                 </span>
-                                {item.stepCount != null && <span>{item.stepCount} 步</span>}
-                                <span>{formatTime(item.updatedAt)}</span>
+                                {item.stepCount != null && <span>{t('agent.acpSurface.launchpad.stepsCount', { count: item.stepCount })}</span>}
+                                <span>{formatSessionTime(item.updatedAt, locale)}</span>
                               </div>
                               {item.preview && (
                                 <p className="line-clamp-1 text-xs text-ink-3">
@@ -1434,7 +1566,7 @@ export default function AcpWorkspaceSurface() {
                                 ) : (
                                   <Play size={12} />
                                 )}
-                                <span>恢复续聊</span>
+                                <span>{t('agent.acpSurface.launchpad.resumeContinueBtn')}</span>
                               </button>
                               <button
                                 type="button"
@@ -1443,7 +1575,7 @@ export default function AcpWorkspaceSurface() {
                                 className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 py-1.5 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover hover:text-ink disabled:opacity-50"
                               >
                                 <Plus size={12} />
-                                <span>转入看板</span>
+                                <span>{t('agent.acpSurface.launchpad.promoteToBoardBtn')}</span>
                               </button>
                             </div>
                           </div>
@@ -1456,8 +1588,8 @@ export default function AcpWorkspaceSurface() {
                 {/* 支持的全部 CLI 预设生态胶囊 */}
                 <section className="rounded-2xl border border-line bg-surface-4/70 p-4">
                   <div className="mb-2.5 flex items-center justify-between text-xs">
-                    <span className="font-semibold text-ink-2">支持的 ACP 客户端预设模板</span>
-                    <span className="text-ink-3">点击预设即可快速手动登记</span>
+                    <span className="font-semibold text-ink-2">{t('agent.acpSurface.launchpad.presetsTitle')}</span>
+                    <span className="text-ink-3">{t('agent.acpSurface.launchpad.presetsHint')}</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {ACP_PRESET_TEMPLATES.map((tpl) => (
@@ -1497,7 +1629,9 @@ export default function AcpWorkspaceSurface() {
                               <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
                                 <ShieldAlert size={14} />
                                 <span>
-                                  权限请求：{req.toolCall.title || req.toolCall.kind || '工具执行'}
+                                  {t('agent.acpSurface.permission.requestTitle', {
+                                    title: req.toolCall.title || req.toolCall.kind || t('agent.acpSurface.permission.toolFallback'),
+                                  })}
                                 </span>
                               </div>
                               <p className="mt-1 text-xs text-ink-2">{req.reason}</p>
@@ -1554,7 +1688,7 @@ export default function AcpWorkspaceSurface() {
                               }
                               className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-700 hover:bg-rose-500/20 dark:text-rose-300"
                             >
-                              拒绝并取消
+                              {t('agent.acpSurface.permission.declineAndCancel')}
                             </button>
                           </div>
                         </div>
@@ -1563,17 +1697,17 @@ export default function AcpWorkspaceSurface() {
                   ) : null}
 
                   {/* 消息滚动区 */}
-                  <div ref={transcriptRef} onScroll={onTranscriptScroll} role="log" aria-label="执行器会话记录" className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
+                  <div ref={transcriptRef} onScroll={onTranscriptScroll} role="log" aria-label={t('agent.acpSurface.transcript.aria')} className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
                     <div className="mx-auto max-w-3xl space-y-4">
                       {activeSession.messages.length === 0 &&
                       !activeSession.streamingText &&
                       !activeSession.streamingThought ? (
                         <div className="rounded-2xl border border-dashed border-line bg-surface-4/60 p-6 text-center text-xs text-ink-3">
                           <div className="mb-1 text-sm font-semibold text-ink">
-                            {activeSession.agentName} 已连接就绪
+                            {t('agent.acpSurface.transcript.connectedReady', { name: activeSession.agentName })}
                           </div>
                           <div>
-                            在下方输入任务目标，系统将结合工作区代码与长期记忆实时协作出结果。
+                            {t('agent.acpSurface.transcript.connectedHint')}
                           </div>
                         </div>
                       ) : null}
@@ -1589,15 +1723,15 @@ export default function AcpWorkspaceSurface() {
                         >
                           <div className="mb-1.5 flex items-center justify-between gap-2 text-xs text-ink-3">
                             <span className="font-semibold text-ink-2">
-                              {msg.role === 'user' ? '我' : activeSession.agentName}
+                              {msg.role === 'user' ? t('agent.acpSurface.transcript.meSpeaker') : activeSession.agentName}
                             </span>
-                            <span>{formatTime(msg.timestamp)}</span>
+                            <span>{formatSessionTime(msg.timestamp, locale)}</span>
                           </div>
 
                           {msg.thoughts ? (
                             <details className="mb-2.5 rounded-xl border border-line-soft bg-surface-2 px-3 py-2 text-xs text-ink-3">
                               <summary className="cursor-pointer font-medium text-ink-2">
-                                推理思考过程
+                                {t('agent.acpSurface.transcript.reasoningSummary')}
                               </summary>
                               <pre className="mt-1.5 whitespace-pre-wrap font-sans text-xs leading-relaxed text-ink-3">
                                 {msg.thoughts}
@@ -1626,7 +1760,7 @@ export default function AcpWorkspaceSurface() {
                           >
                             <span className="inline-flex items-center gap-1.5">
                               <Sparkles size={13} className="text-primary" />
-                              实时推理思考
+                              {t('agent.acpSurface.transcript.liveReasoning')}
                             </span>
                             {thoughtExpanded ? (
                               <ChevronDown size={14} />
@@ -1646,7 +1780,7 @@ export default function AcpWorkspaceSurface() {
                         <div className="mr-4 rounded-2xl border border-primary/30 bg-surface-4 p-4 shadow-card">
                           <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-primary">
                             <Loader2 size={12} className="animate-spin" />
-                            <span>{activeSession.agentName} 正在生成回复…</span>
+                            <span>{t('agent.acpSurface.transcript.generating', { name: activeSession.agentName })}</span>
                           </div>
                           <div className="prose prose-sm max-w-none text-xs leading-relaxed text-ink dark:prose-invert">
                             {activeStreamingDoc}
@@ -1657,11 +1791,51 @@ export default function AcpWorkspaceSurface() {
                   </div>
 
                   {/* 底部悬浮 Composer Dock */}
+                  {acpTerminalOpen && activeSession.workspaceRoot?.trim() && isTauriRuntime() ? (
+                    <ButlerTerminalDrawer
+                      workspaceRoot={activeSession.workspaceRoot}
+                      open={acpTerminalOpen}
+                      onClose={() => setAcpTerminalOpen(false)}
+                    />
+                  ) : null}
                   <div className="rcx-acp-composer shrink-0 px-5 pb-4 pt-2">
-                    <div className="mx-auto max-w-3xl rounded-2xl border border-line bg-surface-4 p-3 shadow-card">
+                    <div
+                      onDragOver={(e) => {
+                        if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+                      }}
+                      onDrop={(e) => {
+                        const dropped = Array.from(e.dataTransfer.files);
+                        if (!dropped.length) return;
+                        e.preventDefault();
+                        const refs = dropped.map((f) => `@${f.name}`).join(' ');
+                        setComposerText((prev) => (prev.trimEnd() ? `${prev.trimEnd()} ${refs} ` : `${refs} `));
+                      }}
+                      className="mx-auto max-w-3xl rounded-2xl border border-line bg-surface-4 p-3 shadow-card"
+                    >
                       <AgentComposerFeedback draft={draft} onRetry={retryRequest} />
                       {activeSession.error && <p role="alert" className="mb-2 whitespace-pre-wrap break-words text-xs text-danger">{activeSession.error}</p>}
-                      {!connectionReady && <p role="status" className="mb-2 text-xs text-ink-3">执行连接尚未建立，要求会保留为草稿；已有记录仍可查看。</p>}
+                      {!connectionReady && <p role="status" className="mb-2 text-xs text-ink-3">{t('agent.acpSurface.composer.disconnectedDraftHint')}</p>}
+                      {activeSession.queuedPrompts && activeSession.queuedPrompts.length > 0 ? (
+                        <div className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-xs">
+                          <div className="mb-1 font-medium text-ink-2">
+                            {t('agent.acpSurface.composer.queuedCount', { count: activeSession.queuedPrompts.length })}
+                          </div>
+                          <div className="space-y-1">
+                            {activeSession.queuedPrompts.map((q) => (
+                              <div key={q.id} className="flex items-center justify-between gap-2 text-ink-3">
+                                <span className="truncate">{q.text}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeQueuedPrompt(activeSession.sessionKey, q.id)}
+                                  className="shrink-0 text-primary hover:underline"
+                                >
+                                  {t('agent.acpSurface.composer.removeQueued')}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       <LocalVoiceControls
                         targetKey={composerKey}
                         disabled={!draft.loaded || activeSession.status === 'stopped'}
@@ -1670,6 +1844,13 @@ export default function AcpWorkspaceSurface() {
                           const current = useAgentComposerDrafts.getState().drafts[composerKey]?.text ?? '';
                           useAgentComposerDrafts.getState().edit(composerKey, { text: [current, text].filter(Boolean).join('\n') });
                         }}
+                      />
+                      <ButlerComposerFilePopover
+                        open={acpFileToken?.kind === 'file'}
+                        loading={acpFilesLoading}
+                        files={acpFiles}
+                        activeIndex={acpFileIdx}
+                        onSelect={applyAcpFileSelection}
                       />
                       {activeSession.availableCommands.length > 0 ? (
                         <div className="mb-2 flex flex-wrap gap-1.5">
@@ -1692,59 +1873,141 @@ export default function AcpWorkspaceSurface() {
                       ) : null}
 
                       <textarea
+                        ref={acpTextareaRef}
                         data-work-composer="acp"
                         data-work-session-id={activeSession.nativeSessionId ?? activeSession.acpSessionId ?? ''}
                         rows={2}
                         value={composerText}
-                        onChange={(e) => setComposerText(e.target.value)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const pos = e.target.selectionStart ?? val.length;
+                          const tok = detectComposerTrigger(val, pos);
+                          setAcpFileToken(tok?.kind === 'file' ? tok : null);
+                          setComposerText(val);
+                        }}
                         onKeyDown={(e) => {
+                          if (acpFileToken?.kind === 'file') {
+                            if (e.key === 'ArrowDown' && acpFiles.length > 0) {
+                              e.preventDefault();
+                              setAcpFileIdx((i) => (i + 1) % acpFiles.length);
+                              return;
+                            }
+                            if (e.key === 'ArrowUp' && acpFiles.length > 0) {
+                              e.preventDefault();
+                              setAcpFileIdx((i) => (i - 1 + acpFiles.length) % acpFiles.length);
+                              return;
+                            }
+                            if ((e.key === 'Enter' || e.key === 'Tab') && acpFiles[acpFileIdx]) {
+                              e.preventDefault();
+                              applyAcpFileSelection(acpFiles[acpFileIdx]);
+                              return;
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setAcpFileToken(null);
+                              return;
+                            }
+                          }
+                          if (e.key === 'Escape' && (activeSession.status === 'running' || activeSession.status === 'waiting_approval')) {
+                            e.preventDefault();
+                            void cancelTurn(activeSession.sessionKey);
+                            return;
+                          }
                           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
                             e.preventDefault();
                             void handleSendPrompt();
                           }
                         }}
                         placeholder={
-                          !connectionReady ? '可先写下要求，连接成功后再发送…' : activeSession.status === 'running'
-                            ? '执行中：输入补充指导（Enter 发送）…'
-                            : '向当前 ACP 客户端发送任务指令（Enter 发送，Shift+Enter 换行）…'
+                          !connectionReady ? t('agent.acpSurface.composer.placeholderDisconnected') : activeSession.status === 'running'
+                            ? t('agent.acpSurface.composer.placeholderSteer')
+                            : t('agent.acpSurface.composer.placeholderIdle')
                         }
                         className="w-full resize-none rounded-xl border border-line-soft bg-surface-2 px-3 py-2 text-xs text-ink outline-none focus:border-primary"
                       />
 
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <label className="flex items-center gap-1.5 text-xs text-ink-3">
-                          <input
-                            type="checkbox"
-                            checked={injectMemory}
-                            onChange={(e) => setInjectMemory(e.target.checked)}
-                            className="rounded border-line"
-                          />
-                          自动召回相关长期记忆
-                        </label>
-                        <button
-                          type="button"
-                          disabled={
-                            sending ||
-                            !draft.loaded ||
-                            !composerText.trim() ||
-                            !connectionReady
-                          }
-                          onClick={() => void handleSendPrompt()}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
-                        >
-                          {sending ? (
-                            <Loader2 size={13} className="animate-spin" />
-                          ) : (
-                            <Send size={13} />
-                          )}
-                          <span>
-                            {activeSession.status === 'running' ? '发送补充指导' : '发送指令'}
-                          </span>
-                        </button>
+                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="flex items-center gap-1.5 text-xs text-ink-3">
+                            <input
+                              type="checkbox"
+                              checked={injectMemory}
+                              onChange={(e) => setInjectMemory(e.target.checked)}
+                              className="rounded border-line"
+                            />
+                            {t('agent.acpSurface.composer.recallMemory')}
+                          </label>
+                          {activeSession.models && activeSession.models.availableModels.length > 0 ? (
+                            <select
+                              aria-label={t('agent.acpSurface.composer.modelAria')}
+                              value={activeSession.models.currentModelId}
+                              disabled={!connectionReady}
+                              onChange={(e) => {
+                                const modelId = e.target.value;
+                                void setModel(activeSession.sessionKey, modelId)
+                                  .then(() => toast.success(t('agent.acpSurface.composer.modelUpdated', { model: modelId })))
+                                  .catch((err) => toast.error(err));
+                              }}
+                              className="h-7 rounded-lg border border-line bg-surface-2 px-2 text-xs text-ink outline-none focus:border-primary"
+                            >
+                              {activeSession.models.availableModels.map((m) => (
+                                <option key={m.modelId} value={m.modelId}>{m.name || m.modelId}</option>
+                              ))}
+                            </select>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {activeSession.status === 'running' ? (
+                            <button
+                              type="button"
+                              disabled={!draft.loaded || !composerText.trim() || !connectionReady}
+                              onClick={() => {
+                                enqueuePrompt(activeSession.sessionKey, composerText);
+                                setComposerText('');
+                              }}
+                              className="inline-flex h-8 items-center rounded-xl border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 hover:bg-fill-hover hover:text-ink disabled:opacity-50"
+                            >
+                              {t('agent.acpSurface.composer.enqueueBtn')}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            disabled={
+                              sending ||
+                              !draft.loaded ||
+                              !composerText.trim() ||
+                              !connectionReady
+                            }
+                            onClick={() => void handleSendPrompt()}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
+                          >
+                            {sending ? (
+                              <Loader2 size={13} className="animate-spin" />
+                            ) : (
+                              <Send size={13} />
+                            )}
+                            <span>
+                              {activeSession.status === 'running' ? t('agent.acpSurface.composer.sendSteerBtn') : t('agent.acpSurface.composer.sendInstructionBtn')}
+                            </span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
+
+                {auxiliaryPanel === 'diff' && activeSession.workspaceRoot?.trim() ? (
+                  <>
+                    <div className="rcx-acp-panel-backdrop" onClick={() => setAuxiliaryPanel(null)} aria-hidden="true" />
+                    <div className="rcx-acp-panel flex min-h-0 flex-col">
+                      <WorkDiffDrawer
+                        workspaceRoot={activeSession.workspaceRoot}
+                        open
+                        onClose={() => setAuxiliaryPanel(null)}
+                      />
+                    </div>
+                  </>
+                ) : null}
 
                 {auxiliaryPanel === 'details' ? (
                   <>
@@ -1758,12 +2021,12 @@ export default function AcpWorkspaceSurface() {
                     className="rcx-acp-panel rcx-acp-inspector flex min-h-0 flex-col border-l border-line bg-surface-2 shadow-card"
                   >
                     <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
-                      <h2 id="acp-task-details-title" className="text-sm font-semibold text-ink">任务详情</h2>
-                      <button type="button" data-panel-close aria-label="关闭任务详情" onClick={() => setAuxiliaryPanel(null)} className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={16} /></button>
+                      <h2 id="acp-task-details-title" className="text-sm font-semibold text-ink">{t('agent.acpSurface.details.title')}</h2>
+                      <button type="button" data-panel-close aria-label={t('agent.acpSurface.details.closeAria')} onClick={() => setAuxiliaryPanel(null)} className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"><X size={16} /></button>
                     </div>
                     {activeSession.modes && activeSession.modes.availableModes.length > 0 ? (
                       <div className="shrink-0 border-b border-line px-4 py-3">
-                        <h3 className="mb-2 text-xs font-medium text-ink-2">执行权限</h3>
+                        <h3 className="mb-2 text-xs font-medium text-ink-2">{t('agent.acpSurface.details.executionPermissions')}</h3>
                         <div className="flex flex-wrap gap-1.5">
                           {activeSession.modes.availableModes.map((mode) => (
                             <button
@@ -1791,7 +2054,7 @@ export default function AcpWorkspaceSurface() {
                         }`}
                       >
                         <ListChecks size={12} />
-                        <span>执行计划</span>
+                        <span>{t('agent.acpSurface.details.tabPlan')}</span>
                         {activeSession.plan.length > 0 ? (
                           <span className="rounded-full bg-fill-2 px-1.5 text-2xs">
                             {completedPlanCount}/{activeSession.plan.length}
@@ -1808,7 +2071,7 @@ export default function AcpWorkspaceSurface() {
                         }`}
                       >
                         <Wrench size={12} />
-                        <span>工具轨迹</span>
+                        <span>{t('agent.acpSurface.details.tabTools')}</span>
                         {activeSession.toolCalls.length > 0 ? (
                           <span className="rounded-full bg-fill-2 px-1.5 text-2xs">
                             {activeSession.toolCalls.length}
@@ -1825,7 +2088,7 @@ export default function AcpWorkspaceSurface() {
                         }`}
                       >
                         <FileText size={12} />
-                        <span>工作流汇报</span>
+                        <span>{t('agent.acpSurface.details.tabReport')}</span>
                       </button>
                       <button
                         type="button"
@@ -1837,16 +2100,16 @@ export default function AcpWorkspaceSurface() {
                         }`}
                       >
                         <Terminal size={12} />
-                        <span>进程日志</span>
+                        <span>{t('agent.acpSurface.details.tabLogs')}</span>
                       </button>
                     </div>
 
                     <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
-                      {linkedCard ? <p className="mb-3 break-words text-xs text-ink-3">关联工作：{linkedCard.title}</p> : null}
+                      {linkedCard ? <p className="mb-3 break-words text-xs text-ink-3">{t('agent.acpSurface.details.linkedWorkLine', { title: linkedCard.title })}</p> : null}
                       {inspectorTab === 'plan' ? (
                         activeSession.plan.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-line bg-surface-4/60 p-4 text-xs text-ink-3">
-                            当前会话尚未产生结构化执行计划。代理发送 ACP 计划更新后将实时展示于此。
+                            {t('agent.acpSurface.details.noPlan')}
                           </div>
                         ) : (
                           <div className="space-y-2">
@@ -1867,14 +2130,14 @@ export default function AcpWorkspaceSurface() {
                                     }`}
                                   >
                                     {entry.status === 'completed'
-                                      ? '已完成'
+                                      ? t('agent.acpSurface.details.planCompleted')
                                       : entry.status === 'in_progress'
-                                        ? '进行中'
-                                        : '待执行'}
+                                        ? t('agent.acpSurface.details.planInProgress')
+                                        : t('agent.acpSurface.details.planPending')}
                                   </span>
                                 </div>
                                 <div className="mt-1 text-xs text-ink-3">
-                                  优先级：{entry.priority}
+                                  {t('agent.acpSurface.details.planPriority', { priority: entry.priority })}
                                 </div>
                               </div>
                             ))}
@@ -1885,7 +2148,7 @@ export default function AcpWorkspaceSurface() {
                       {inspectorTab === 'tools' ? (
                         activeSession.toolCalls.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-line bg-surface-4/60 p-4 text-xs text-ink-3">
-                            暂无工具调用记录。
+                            {t('agent.acpSurface.details.noTools')}
                           </div>
                         ) : (
                           <div className="space-y-2">
@@ -1966,7 +2229,7 @@ export default function AcpWorkspaceSurface() {
                                                   key={idx}
                                                   className="rounded border border-line bg-surface-2 px-2 py-1 font-mono text-xs text-ink-2"
                                                 >
-                                                  终端输出 ID: {block.terminalId}
+                                                  {t('agent.acpSurface.details.terminalOutputId', { id: block.terminalId })}
                                                 </div>
                                               );
                                             }
@@ -1997,7 +2260,7 @@ export default function AcpWorkspaceSurface() {
                           <WorkflowReportCard report={workflowReport} compact />
                         ) : (
                           <div className="rounded-xl border border-dashed border-line bg-surface-4/60 p-4 text-xs text-ink-3">
-                            暂无可汇总的工作流汇报。
+                            {t('agent.acpSurface.details.noReport')}
                           </div>
                         )
                       ) : null}
@@ -2005,7 +2268,7 @@ export default function AcpWorkspaceSurface() {
                       {inspectorTab === 'logs' ? (
                         activeSession.stderrLogs.length === 0 ? (
                           <div className="rounded-xl border border-dashed border-line bg-surface-4/60 p-4 text-xs text-ink-3">
-                            暂无标准错误日志输出。
+                            {t('agent.acpSurface.details.noLogs')}
                           </div>
                         ) : (
                           <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap rounded-xl border border-line bg-surface-4 p-3 font-mono text-xs text-ink-3">

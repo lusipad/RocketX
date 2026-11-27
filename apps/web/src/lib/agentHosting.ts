@@ -1,4 +1,5 @@
 import { fetchWorkItem } from './ado';
+import { t } from '../i18n';
 import type { AgentBackend } from '../agent/session';
 import { getServerBase } from './client';
 import { workItemIdFromRoomTitle } from '../agent/context';
@@ -62,7 +63,7 @@ export function setRoomHostingWorkspace(rid: string, workspaceRoot?: string): vo
 
 export function defaultHostingBackend(): AgentBackend {
   const provider = useUI.getState().aiRuntimeProvider;
-  if (provider === 'none') throw new Error('当前未启用 AI');
+  if (provider === 'none') throw new Error(t('agent.hosting.aiDisabled'));
   return provider === 'pi' ? 'codex' : provider;
 }
 
@@ -90,7 +91,7 @@ export async function startRoomAgentHosting(
       )
     : undefined;
   if (options.preferredEnvironmentId && !preferredEnvironment) {
-    throw new Error('这个 AI 托管工作区不可用，请在 AI 管家中重新选择');
+    throw new Error(t('agent.hosting.workspaceUnavailable'));
   }
   const environment = preferredEnvironment
     ?? (workspaceEnvironment?.enabled && !environmentIsBusy(workspaceEnvironment.id, environmentState.bindings)
@@ -112,7 +113,7 @@ export async function startRoomAgentHosting(
     || isSystemCodexWorkspace(workspaceRoot, defaultWorkspaceRoot, butlerWorkspaceRoot)
     || !configured
   ) {
-    throw new Error('请先在 AI 管家中添加专用工作项目，再开启 AI 托管');
+    throw new Error(t('agent.hosting.noProjectConfigured'));
   }
   const workItem = workItemId
     ? {

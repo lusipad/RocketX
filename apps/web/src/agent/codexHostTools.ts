@@ -1,9 +1,12 @@
 import { tsMs } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { collectMentionInbox } from '../lib/mentionInbox';
 import { rest } from '../lib/client';
 import { useAcpAgents } from '../stores/acpAgents';
 import { useAuth } from '../stores/auth';
+import { useButlerCognition } from '../stores/butlerCognition';
 import { useButlerMemory } from '../stores/butlerMemory';
+import { useButlerSkills } from '../stores/butlerSkills';
 import { eventsForDate, isEventDone, useCalendar } from '../stores/calendar';
 import { permalinkOf, useChat } from '../stores/chat';
 import { useTodos } from '../stores/todos';
@@ -29,6 +32,17 @@ import {
 } from './scheduledTaskBridge';
 import { evaluateCardCompletionGate } from './workCoordinator';
 import { renderDispatchSpec } from './dispatchSpec';
+import { buildSpecialistPlan, synthesizeDelegationSummary } from './chiefOfStaff';
+import {
+  butlerBrowserInspect,
+  butlerGithubCreateComment,
+  butlerGithubGetIssueDetail,
+  butlerGithubGetPrDiff,
+  butlerGithubListIssues,
+  butlerGithubListPrs,
+  butlerPolicyEvaluate,
+} from '../platform/desktopCommands';
+import { isTauriRuntime } from '../lib/client';
 import { verifyWorkCiEvidence } from './workCiEvidence';
 import { executePreparedExternalAction, publishWorkReport, syncWorkAdoState } from './externalWorkActions';
 import {
@@ -44,12 +58,12 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'list_mentions',
-    description: '列出当前 RocketX 账号尚未处理的 @我消息，返回实时服务器快照、覆盖状态和消息链接。',
+    get description() { return t('agent.hostTools.tool.list_mentions'); },
     inputSchema: {
       type: 'object',
       properties: {
-        since: { type: 'string', description: '可选 ISO 日期时间，只返回严格晚于该时间的消息。' },
-        unprocessedOnly: { type: 'boolean', description: '是否只返回尚未读过的 @，默认 false。' },
+        since: { type: 'string', get description() { return t('agent.hostTools.tool.list_mentions.since'); } },
+        unprocessedOnly: { type: 'boolean', get description() { return t('agent.hostTools.tool.list_mentions.unprocessedOnly'); } },
       },
       additionalProperties: false,
     },
@@ -57,12 +71,12 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'list_todos',
-    description: '列出 RocketX 本地待办；默认只返回未完成项，可按关键词筛选。',
+    get description() { return t('agent.hostTools.tool.list_todos'); },
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '待办正文、来源会话或作者关键词。' },
-        includeDone: { type: 'boolean', description: '是否包含已完成项，默认 false。' },
+        query: { type: 'string', get description() { return t('agent.hostTools.tool.list_todos.query'); } },
+        includeDone: { type: 'boolean', get description() { return t('agent.hostTools.tool.list_todos.includeDone'); } },
       },
       additionalProperties: false,
     },
@@ -70,13 +84,13 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'list_calendar',
-    description: '列出 RocketX 本地日程并展开重复事件，可按关键词和日期范围筛选。',
+    get description() { return t('agent.hostTools.tool.list_calendar'); },
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '日程标题或描述关键词。' },
-        from: { type: 'string', description: '起始日期，YYYY-MM-DD，包含当天。' },
-        to: { type: 'string', description: '结束日期，YYYY-MM-DD，包含当天。' },
+        query: { type: 'string', get description() { return t('agent.hostTools.tool.list_calendar.query'); } },
+        from: { type: 'string', get description() { return t('agent.hostTools.tool.list_calendar.from'); } },
+        to: { type: 'string', get description() { return t('agent.hostTools.tool.list_calendar.to'); } },
       },
       additionalProperties: false,
     },
@@ -84,7 +98,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'list_scheduled_tasks',
-    description: '列出当前设备上的 Codex 已安排任务、状态、规则和最近运行。用户询问现有安排时必须先调用。',
+    get description() { return t('agent.hostTools.tool.list_scheduled_tasks'); },
     inputSchema: {
       type: 'object',
       properties: {},
@@ -94,21 +108,21 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'create_scheduled_task',
-    description: '创建并启用一个 Codex 已安排任务。先与用户确认任务内容和运行时间；rrule 必须是 RFC 5545 RRULE。',
+    get description() { return t('agent.hostTools.tool.create_scheduled_task'); },
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['cron', 'heartbeat'], description: 'heartbeat 回到当前会话，默认使用；只有明确要求独立项目任务时才用 cron。' },
+        kind: { type: 'string', enum: ['cron', 'heartbeat'], get description() { return t('agent.hostTools.tool.create_scheduled_task.kind'); } },
         name: { type: 'string' },
         prompt: { type: 'string' },
-        rrule: { type: 'string', description: '例如 RRULE:FREQ=DAILY;BYHOUR=9;BYMINUTE=0。' },
+        rrule: { type: 'string', get description() { return t('agent.hostTools.tool.create_scheduled_task.rrule'); } },
         status: { type: 'string', enum: ['ACTIVE', 'PAUSED'] },
-        workspaceRoot: { type: 'string', description: 'cron 运行的本地工作区；省略则使用当前工作区。' },
-        targetThreadId: { type: 'string', description: 'heartbeat 必填，目标 Codex 会话 ID。' },
+        workspaceRoot: { type: 'string', get description() { return t('agent.hostTools.tool.create_scheduled_task.workspaceRoot'); } },
+        targetThreadId: { type: 'string', get description() { return t('agent.hostTools.tool.create_scheduled_task.targetThreadId'); } },
         model: { type: 'string' },
         reasoningEffort: { type: 'string' },
-        notificationPolicy: { type: 'string', enum: ['all_runs', 'important_updates', 'failed_runs_only'] },
-        skillName: { type: 'string', description: '可选，任务必须调用的已启用 Skill 名称。' },
+        notificationPolicy: { type: 'string', enum: ['all_runs', 'important_updates', 'failed_runs_only', 'silent', 'digest_only'] },
+        skillName: { type: 'string', get description() { return t('agent.hostTools.tool.create_scheduled_task.skillName'); } },
         pluginTemplateId: { type: 'string' },
       },
       required: ['name', 'prompt', 'rrule'],
@@ -118,7 +132,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'update_scheduled_task',
-    description: '修改、暂停或恢复一个已安排任务。先调用 list_scheduled_tasks 获取准确 ID；只传需要修改的字段。',
+    get description() { return t('agent.hostTools.tool.update_scheduled_task'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,7 +146,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
         targetThreadId: { type: 'string' },
         model: { type: 'string' },
         reasoningEffort: { type: 'string' },
-        notificationPolicy: { type: 'string', enum: ['all_runs', 'important_updates', 'failed_runs_only'] },
+        notificationPolicy: { type: 'string', enum: ['all_runs', 'important_updates', 'failed_runs_only', 'silent', 'digest_only'] },
         skillName: { type: 'string' },
         pluginTemplateId: { type: 'string' },
       },
@@ -143,7 +157,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'delete_scheduled_task',
-    description: '永久删除一个已安排任务。只有用户明确要求删除时才调用。',
+    get description() { return t('agent.hostTools.tool.delete_scheduled_task'); },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -154,7 +168,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'run_scheduled_task',
-    description: '立即运行一次指定的已安排任务，并返回本次结果。',
+    get description() { return t('agent.hostTools.tool.run_scheduled_task'); },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -165,7 +179,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'create_work_card',
-    description: '将明确目标纳入持续跟进，幂等创建同一件工作。必须明确目标和验收条件；保留消息、ADO及工作目录来源，默认遵守确认权限。重试复用requestId。',
+    get description() { return t('agent.hostTools.tool.create_work_card'); },
     inputSchema: {
       type: 'object', properties: {
         requestId: { type: 'string' }, title: { type: 'string' }, goal: { type: 'string' },
@@ -179,7 +193,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'list_work_cards',
-    description: '列出统一工作看板（Unified Kanban）中的工作卡片、阶段、正交等待状态、关联会话及验收证据。',
+    get description() { return t('agent.hostTools.tool.list_work_cards'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -192,7 +206,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'update_work_card',
-    description: '更新工作卡片的阶段（stage）、正交等待状态（waitState）或下一步计划（nextStep）。若无有效验收证据则不能直接置为 done。',
+    get description() { return t('agent.hostTools.tool.update_work_card'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -204,9 +218,9 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
         goal: { type: 'string' },
         acceptance: { type: 'array', items: { type: 'string' } },
         boundaries: { type: 'array', items: { type: 'string' } },
-        rework: { type: 'boolean', description: '成果修改/返工，使旧版本证据需要重新核验。' },
-        expectedRequirementsVersion: { type: 'integer', minimum: 0, description: '修改目标、验收、边界或请求返工时必填，防止旧执行覆盖新要求。' },
-        expectedContentVersion: { type: 'integer', minimum: 0, description: '可选成果版本比较，旧成果不能覆盖新版本。' },
+        rework: { type: 'boolean', get description() { return t('agent.hostTools.tool.update_work_card.rework'); } },
+        expectedRequirementsVersion: { type: 'integer', minimum: 0, get description() { return t('agent.hostTools.tool.update_work_card.expectedRequirementsVersion'); } },
+        expectedContentVersion: { type: 'integer', minimum: 0, get description() { return t('agent.hostTools.tool.update_work_card.expectedContentVersion'); } },
       },
       required: ['todoId'],
       additionalProperties: false,
@@ -215,7 +229,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'record_work_evidence',
-    description: '保存Agent对执行结果的声明记录。模型提交的kind/passed仅是声明，一律保存为agent_report且不通过验收；可信CI请用verify_work_ci_evidence。',
+    get description() { return t('agent.hostTools.tool.record_work_evidence'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -225,9 +239,9 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
         summary: { type: 'string' },
         headSha: { type: 'string' },
         passed: { type: 'boolean' },
-        criterionIds: { type: 'array', items: { type: 'string' }, description: '此结果明确验证的验收条件原文；缺失时仅保存记录，不贡献自动验收。' },
-        requirementsVersion: { type: 'integer', minimum: 0, description: '执行时采用的要求版本，必须从工作读取后原样提交。' },
-        contentVersion: { type: 'integer', minimum: 0, description: '被验证成果的版本。' },
+        criterionIds: { type: 'array', items: { type: 'string' }, get description() { return t('agent.hostTools.tool.record_work_evidence.criterionIds'); } },
+        requirementsVersion: { type: 'integer', minimum: 0, get description() { return t('agent.hostTools.tool.record_work_evidence.requirementsVersion'); } },
+        contentVersion: { type: 'integer', minimum: 0, get description() { return t('agent.hostTools.tool.record_work_evidence.contentVersion'); } },
       },
       required: ['todoId', 'kind', 'title', 'passed'],
       additionalProperties: false,
@@ -235,7 +249,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   },
   {
     type: 'function', name: 'verify_work_ci_evidence',
-    description: '只读核对ADO构建，确认项目、当前工作HEAD、构建定义及完成成功状态后登记可信ci_build证据。仅覆盖当前声明的CI/构建/流水线条件，不能代替业务人工验收。',
+    get description() { return t('agent.hostTools.tool.verify_work_ci_evidence'); },
     inputSchema: { type: 'object', properties: {
       todoId: { type: 'string' }, project: { type: 'string' }, buildId: { type: 'integer', minimum: 1 },
       requirementsVersion: { type: 'integer', minimum: 0 }, contentVersion: { type: 'integer', minimum: 0 },
@@ -245,17 +259,17 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'memory_search',
-    description: '检索与当前工作区或关键词相关的长期个人记忆（偏好、项目事实、工作习惯、人物上下文、阶段总结）。',
+    get description() { return t('agent.hostTools.tool.memory_search'); },
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '检索关键词。' },
+        query: { type: 'string', get description() { return t('agent.hostTools.tool.memory_search.query'); } },
         category: {
           type: 'string',
           enum: ['preference', 'project_fact', 'workflow_habit', 'person_context', 'episodic_summary'],
         },
-        workspaceRoot: { type: 'string', description: '可选工作区路径筛选。' },
-        limit: { type: 'number', description: '返回条数上限，默认 6。' },
+        workspaceRoot: { type: 'string', get description() { return t('agent.hostTools.tool.memory_search.workspaceRoot'); } },
+        limit: { type: 'number', get description() { return t('agent.hostTools.tool.memory_search.limit'); } },
       },
       additionalProperties: false,
     },
@@ -263,7 +277,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'memory_save',
-    description: '保存一条结构化的长期个人记忆；自动拦截密钥、令牌等敏感凭据。',
+    get description() { return t('agent.hostTools.tool.memory_save'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -284,7 +298,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'memory_delete',
-    description: '根据 ID 删除一条长期个人记忆。',
+    get description() { return t('agent.hostTools.tool.memory_delete'); },
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' } },
@@ -295,12 +309,12 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'assistant_daily_brief',
-    description: '汇总待办、日程、工作流进度、对外承诺与长期记忆，生成晨间简报、晚间复盘或当前聚焦摘要。',
+    get description() { return t('agent.hostTools.tool.assistant_daily_brief'); },
     inputSchema: {
       type: 'object',
       properties: {
         kind: { type: 'string', enum: ['morning_brief', 'evening_review', 'focus_digest'] },
-        saveDigest: { type: 'boolean', description: '是否持久化保存到个人助理简报归档，默认 false。' },
+        saveDigest: { type: 'boolean', get description() { return t('agent.hostTools.tool.assistant_daily_brief.saveDigest'); } },
       },
       additionalProperties: false,
     },
@@ -308,14 +322,14 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'workflow_report_generate',
-    description: '基于工作卡片或 ACP 会话生成结构化工作流执行汇报（含进度、产物、验证证据、风险与下一步建议）。',
+    get description() { return t('agent.hostTools.tool.workflow_report_generate'); },
     inputSchema: {
       type: 'object',
       properties: {
         todoId: { type: 'string' },
         sessionKey: { type: 'string' },
-        recordEvidence: { type: 'boolean', description: '若提供 todoId，保存汇报来源记录；汇报不构成验收通过证据。' },
-        distillMemory: { type: 'boolean', description: '是否提炼摘要保存到长期记忆。' },
+        recordEvidence: { type: 'boolean', get description() { return t('agent.hostTools.tool.workflow_report_generate.recordEvidence'); } },
+        distillMemory: { type: 'boolean', get description() { return t('agent.hostTools.tool.workflow_report_generate.distillMemory'); } },
       },
       additionalProperties: false,
     },
@@ -323,12 +337,12 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'workflow_report_publish',
-    description: '从指定工作的真实账本生成冻结汇报并投递到关联讨论室；保留稳定操作身份及送达回执。遵守工作现有自主权限，需审批时只登记意图，不声称已送达。',
+    get description() { return t('agent.hostTools.tool.workflow_report_publish'); },
     inputSchema: {
       type: 'object',
       properties: {
         todoId: { type: 'string' }, rid: { type: 'string' },
-        operationId: { type: 'string', description: '本次汇报的稳定操作 ID；核对和重试必须复用。' },
+        operationId: { type: 'string', get description() { return t('agent.hostTools.tool.workflow_report_publish.operationId'); } },
       },
       required: ['todoId', 'rid', 'operationId'], additionalProperties: false,
     },
@@ -336,7 +350,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'work_ado_state_sync',
-    description: '按指定ADO版本及当前状态受控更新工作的关联ADO状态，写后回读。版本冲突不覆盖，结果未知不重放；不会把外部同步等同工作验收。',
+    get description() { return t('agent.hostTools.tool.work_ado_state_sync'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -349,7 +363,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'work_external_action_continue',
-    description: '核对或执行已持久化的外部动作。仅使用现有授权，不能批准待人工审批动作。ADO结果未知仅回读，汇报可显式用原消息ID续投。',
+    get description() { return t('agent.hostTools.tool.work_external_action_continue'); },
     inputSchema: {
       type: 'object', properties: { actionId: { type: 'string' }, retryReport: { type: 'boolean' } },
       required: ['actionId'], additionalProperties: false,
@@ -358,7 +372,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'acp_list_agents',
-    description: '列出已注册的本地 ACP（Agent Client Protocol）代理配置与已发现的本地 CLI 候选。',
+    get description() { return t('agent.hostTools.tool.acp_list_agents'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -370,7 +384,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'acp_dispatch_task',
-    description: '将同一工作的执行请求持久入队并立即返回，管家可继续响应。必须先纳入工作并复用requestId；确认模式等待人工批准，自主模式由后台执行。临时会话请使用ACP工作台。',
+    get description() { return t('agent.hostTools.tool.acp_dispatch_task'); },
     inputSchema: {
       type: 'object',
       properties: {
@@ -378,7 +392,7 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
         workspaceRoot: { type: 'string' },
         prompt: { type: 'string' },
         todoId: { type: 'string' },
-        requestId: { type: 'string', description: '此轮委派的稳定请求ID，重试必须复用。' },
+        requestId: { type: 'string', get description() { return t('agent.hostTools.tool.acp_dispatch_task.requestId'); } },
         isolateWorktree: { type: 'boolean' },
         autonomyMode: { type: 'string', enum: ['readonly', 'confirm', 'autonomous'] },
         title: { type: 'string' },
@@ -390,12 +404,294 @@ export const ROCKETX_DYNAMIC_TOOLS: DynamicToolSpec[] = [
   {
     type: 'function',
     name: 'acp_session_status',
-    description: '查询当前 ACP 会话的运行状态、计划进度、待审批权限数及最新输出。',
+    get description() { return t('agent.hostTools.tool.acp_session_status'); },
     inputSchema: {
       type: 'object',
       properties: {
         sessionKey: { type: 'string' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'delegate_specialists',
+    get description() { return t('agent.hostTools.tool.delegate_specialists'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        todoId: { type: 'string' },
+        requestId: { type: 'string' },
+        tasks: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 6,
+          items: {
+            type: 'object',
+            properties: {
+              role: { type: 'string', enum: ['researcher', 'coder', 'reviewer', 'ops'] },
+              title: { type: 'string' },
+              prompt: { type: 'string' },
+              agentId: { type: 'string' },
+              autonomyMode: { type: 'string', enum: ['readonly', 'confirm', 'autonomous'] },
+              isolateWorktree: { type: 'boolean' },
+              workspaceRoot: { type: 'string' },
+            },
+            required: ['role', 'title', 'prompt'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['todoId', 'requestId', 'tasks'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'github_list_prs',
+    get description() { return t('agent.hostTools.tool.github_list_prs'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        state: { type: 'string', enum: ['open', 'closed', 'all'] },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+      },
+      required: ['owner', 'repo'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'github_list_issues',
+    get description() { return t('agent.hostTools.tool.github_list_issues'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        state: { type: 'string', enum: ['open', 'closed', 'all'] },
+        limit: { type: 'integer', minimum: 1, maximum: 50 },
+      },
+      required: ['owner', 'repo'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'github_get_pr_diff',
+    get description() { return t('agent.hostTools.tool.github_get_pr_diff'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        number: { type: 'integer', minimum: 1 },
+      },
+      required: ['owner', 'repo', 'number'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'github_get_issue',
+    get description() { return t('agent.hostTools.tool.github_get_issue'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        number: { type: 'integer', minimum: 1 },
+        commentLimit: { type: 'integer', minimum: 1, maximum: 50 },
+      },
+      required: ['owner', 'repo', 'number'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'github_create_comment',
+    get description() { return t('agent.hostTools.tool.github_create_comment'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        owner: { type: 'string' },
+        repo: { type: 'string' },
+        number: { type: 'integer', minimum: 1 },
+        body: { type: 'string' },
+        workspaceRoot: { type: 'string' },
+      },
+      required: ['owner', 'repo', 'number', 'body'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'browser_inspect_url',
+    get description() { return t('agent.hostTools.tool.browser_inspect_url'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        maxChars: { type: 'integer', minimum: 200, maximum: 32000 },
+        allowInsecureLan: { type: 'boolean' },
+        workspaceRoot: { type: 'string' },
+      },
+      required: ['url'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'project_policy_check',
+    get description() { return t('agent.hostTools.tool.project_policy_check'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspaceRoot: { type: 'string' },
+        actionKind: { type: 'string', enum: ['command', 'file_read', 'file_write', 'network', 'external'] },
+        target: { type: 'string' },
+      },
+      required: ['actionKind', 'target'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'read_activity_stream',
+    get description() { return t('agent.hostTools.tool.read_activity_stream'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        since: { type: 'string' },
+        source: { type: 'string', enum: ['chat', 'acp', 'work_ledger', 'watchpoint', 'user', 'system'] },
+        unconsumedOnly: { type: 'boolean' },
+        limit: { type: 'integer', minimum: 1, maximum: 60 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'read_room_messages',
+    get description() { return t('agent.hostTools.tool.read_room_messages'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rid: { type: 'string' },
+        since: { type: 'string' },
+        query: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 40 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'acp_inspect_session',
+    get description() { return t('agent.hostTools.tool.acp_inspect_session'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionKey: { type: 'string' },
+        todoId: { type: 'string' },
+        messageLimit: { type: 'integer', minimum: 1, maximum: 20 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'acp_steer_session',
+    get description() { return t('agent.hostTools.tool.acp_steer_session'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionKey: { type: 'string' },
+        action: { type: 'string', enum: ['followup', 'resolve_permission', 'cancel'] },
+        prompt: { type: 'string' },
+        requestId: { type: 'string' },
+        optionId: { type: 'string' },
+      },
+      required: ['sessionKey', 'action'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'watchpoint_manage',
+    get description() { return t('agent.hostTools.tool.watchpoint_manage'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['set', 'list', 'cancel'] },
+        id: { type: 'string' },
+        reason: { type: 'string' },
+        kind: { type: 'string', enum: ['after_minutes', 'acp_session_settle', 'room_activity', 'work_card_change'] },
+        afterMinutes: { type: 'number', minimum: 1, maximum: 10080 },
+        ttlMinutes: { type: 'number', minimum: 5, maximum: 10080 },
+        sessionKey: { type: 'string' },
+        rid: { type: 'string' },
+        contains: { type: 'string' },
+        todoId: { type: 'string' },
+      },
+      required: ['op'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'surface_proactive_insight',
+    get description() { return t('agent.hostTools.tool.surface_proactive_insight'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        level: { type: 'string', enum: ['silent_log', 'inbox', 'interrupt'] },
+        kind: { type: 'string', enum: ['decision', 'progress', 'risk', 'draft'] },
+        title: { type: 'string' },
+        summary: { type: 'string' },
+        rid: { type: 'string' },
+        todoId: { type: 'string' },
+        sessionKey: { type: 'string' },
+        actionId: { type: 'string' },
+        suggestedActions: {
+          type: 'array',
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string' },
+              prompt: { type: 'string' },
+            },
+            required: ['label'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['level', 'title', 'summary'],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: 'function',
+    name: 'skill_evolve',
+    get description() { return t('agent.hostTools.tool.skill_evolve'); },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['list', 'read', 'upsert'] },
+        id: { type: 'string' },
+        slug: { type: 'string' },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        category: { type: 'string' },
+        instructionsMd: { type: 'string' },
+        triggers: { type: 'array', items: { type: 'string' } },
+        allowedTools: { type: 'array', items: { type: 'string' } },
+        workspaceRoot: { type: 'string' },
+      },
+      required: ['op'],
       additionalProperties: false,
     },
   },
@@ -418,7 +714,7 @@ function optionalBoolean(args: Record<string, unknown>, key: string): boolean | 
 
 function requiredString(args: Record<string, unknown>, key: string): string {
   const value = optionalString(args, key);
-  if (!value) throw new Error(`${key} 不能为空`);
+  if (!value) throw new Error(t('agent.hostTools.cannotBeEmpty', { key }));
   return value;
 }
 
@@ -432,7 +728,7 @@ function scheduledTaskEnum(
     : key === 'status'
       ? ['ACTIVE', 'PAUSED']
       : ['all_runs', 'important_updates', 'failed_runs_only'];
-  if (!allowed.includes(value)) throw new Error(`${key} 的值无效`);
+  if (!allowed.includes(value)) throw new Error(t('agent.hostTools.invalidValue', { key }));
   return value;
 }
 
@@ -503,12 +799,12 @@ function dateRange(from?: string, to?: string): string[] | undefined {
   const start = from ?? to!;
   const end = to ?? from!;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
-    throw new Error('from 和 to 必须是 YYYY-MM-DD');
+    throw new Error(t('agent.hostTools.dateRangeFormat'));
   }
   const cursor = new Date(`${start}T00:00:00`);
   const last = new Date(`${end}T00:00:00`);
   if (Number.isNaN(cursor.getTime()) || Number.isNaN(last.getTime()) || cursor > last) {
-    throw new Error('日程日期范围无效');
+    throw new Error(t('agent.hostTools.dateRangeInvalid'));
   }
   const dates: string[] = [];
   while (cursor <= last && dates.length <= MAX_CALENDAR_DAYS) {
@@ -519,16 +815,16 @@ function dateRange(from?: string, to?: string): string[] | undefined {
     );
     cursor.setDate(cursor.getDate() + 1);
   }
-  if (dates.length > MAX_CALENDAR_DAYS) throw new Error('日程查询范围不能超过 31 天');
+  if (dates.length > MAX_CALENDAR_DAYS) throw new Error(t('agent.hostTools.dateRangeLimit'));
   return dates;
 }
 
 async function listMentions(args: Record<string, unknown>): Promise<unknown> {
   const user = useAuth.getState().user;
-  if (!user?.username) throw new Error('RocketX 尚未登录');
+  if (!user?.username) throw new Error(t('agent.hostTools.notLoggedIn'));
   const since = optionalString(args, 'since');
   const sinceAt = since ? Date.parse(since) : undefined;
-  if (sinceAt !== undefined && !Number.isFinite(sinceAt)) throw new Error('since 必须是有效的 ISO 日期时间');
+  if (sinceAt !== undefined && !Number.isFinite(sinceAt)) throw new Error(t('agent.hostTools.sinceInvalid'));
   const unprocessedOnly = optionalBoolean(args, 'unprocessedOnly') ?? false;
   const subscriptions = Object.values(useChat.getState().subscriptions);
   const candidates = subscriptions.filter((subscription) => (subscription.userMentions ?? 0) > 0);
@@ -581,7 +877,7 @@ function listTodos(args: Record<string, unknown>): unknown {
   const items = matching.slice(0, LIMIT)
     .map((todo) => ({
       id: todo.id,
-      text: todo.note || todo.excerpt || todo.title || '待办',
+      text: todo.note || todo.excerpt || todo.title || t('agent.hostTools.todoFallback'),
       due: todo.due,
       priority: todo.priority,
       roomName: todo.roomName,
@@ -691,7 +987,7 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
     if (tool === 'create_work_card') {
       const assertAccount = captureWorkLedgerAccount();
       const acceptance = Array.isArray(args.acceptance) ? args.acceptance.filter((item): item is string => typeof item === 'string' && !!item.trim()).map((item) => item.trim()) : [];
-      if (!acceptance.length) throw new Error('持续跟进工作必须明确至少一项验收条件');
+      if (!acceptance.length) throw new Error(t('agent.hostTools.acceptanceRequired'));
       const adoWorkItemId = typeof args.adoWorkItemId === 'number' && Number.isInteger(args.adoWorkItemId) && args.adoWorkItemId > 0 ? args.adoWorkItemId : undefined;
       const rid = optionalString(args, 'rid'); const mid = optionalString(args, 'mid');
       const card = await useWorkLedger.getState().createCard({ requestId: requiredString(args, 'requestId'), title: requiredString(args, 'title'), goal: requiredString(args, 'goal'), acceptance,
@@ -702,21 +998,21 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
       const ledger = useWorkLedger.getState();
       assertAccount();
       const workspaceRoot = optionalString(args, 'workspaceRoot');
-      if (workspaceRoot && !ledger.links.some((link) => link.todoId === card.id && link.kind === 'kanban_card' && link.externalId === card.id)) await ledger.upsertLink({ todoId: card.id, kind: 'kanban_card', externalId: card.id, project: card.state.projectKey, repo: workspaceRoot, rid: card.rid, headSha: null, title: '工作目录', webUrl: null, stateSnapshot: 'workspace' });
+      if (workspaceRoot && !ledger.links.some((link) => link.todoId === card.id && link.kind === 'kanban_card' && link.externalId === card.id)) await ledger.upsertLink({ todoId: card.id, kind: 'kanban_card', externalId: card.id, project: card.state.projectKey, repo: workspaceRoot, rid: card.rid, headSha: null, title: t('agent.hostTools.workspaceLinkTitle'), webUrl: null, stateSnapshot: 'workspace' });
       assertAccount();
       if (card.adoWorkItemId) await ledger.upsertLink({ todoId: card.id, kind: 'ado_work_item', externalId: String(card.adoWorkItemId), project: card.adoProject, repo: null, rid: card.rid, headSha: null, title: card.title, webUrl: null, stateSnapshot: null });
       assertAccount();
-      if (card.rid && card.mid) await ledger.upsertLink({ todoId: card.id, kind: 'message', externalId: card.mid, project: card.state.projectKey, repo: null, rid: card.rid, headSha: null, title: '来源消息', webUrl: null, stateSnapshot: null });
+      if (card.rid && card.mid) await ledger.upsertLink({ todoId: card.id, kind: 'message', externalId: card.mid, project: card.state.projectKey, repo: null, rid: card.rid, headSha: null, title: t('agent.hostTools.sourceMessageTitle'), webUrl: null, stateSnapshot: null });
       assertAccount();
       return response({ card, completionGate: evaluateCardCompletionGate(card, ledger.evidences) });
     }
     if (tool === 'update_work_card') {
       const todoId = requiredString(args, 'todoId');
       const card = useWorkLedger.getState().cards.find((item) => item.id === todoId);
-      if (!card) throw new Error('指定工作不存在');
+      if (!card) throw new Error(t('agent.hostTools.workMissing'));
       if (optionalString(args, 'stage') === 'done') await observeWorkArtifacts(todoId);
       const scopeChange = Object.hasOwn(args, 'goal') || Object.hasOwn(args, 'acceptance') || Object.hasOwn(args, 'boundaries') || optionalBoolean(args, 'rework') === true;
-      if (scopeChange && (typeof args.expectedRequirementsVersion !== 'number' || !Number.isInteger(args.expectedRequirementsVersion) || args.expectedRequirementsVersion < 0)) throw new Error('修改工作要求前必须提供预读的 expectedRequirementsVersion');
+      if (scopeChange && (typeof args.expectedRequirementsVersion !== 'number' || !Number.isInteger(args.expectedRequirementsVersion) || args.expectedRequirementsVersion < 0)) throw new Error(t('agent.hostTools.reqVersionRequired'));
       const updated = await useWorkLedger.getState().updateCard(todoId, {
         expectedRequirementsVersion: typeof args.expectedRequirementsVersion === 'number' ? args.expectedRequirementsVersion : card.state.requirementsVersion ?? 0,
         expectedContentVersion: typeof args.expectedContentVersion === 'number' ? args.expectedContentVersion : card.state.contentVersion ?? 0,
@@ -736,7 +1032,7 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
     if (tool === 'record_work_evidence') {
       const todoId = requiredString(args, 'todoId');
       const claimedKind = requiredString(args, 'kind');
-      if (!['test_run', 'ci_build', 'pr_status', 'diff_check', 'agent_report'].includes(claimedKind)) throw new Error('Agent 不能登记人工接受或未知证据类型');
+      if (!['test_run', 'ci_build', 'pr_status', 'diff_check', 'agent_report'].includes(claimedKind)) throw new Error(t('agent.hostTools.cannotRecordManualAck'));
       const title = requiredString(args, 'title');
       const claimedPassed = optionalBoolean(args, 'passed') ?? true;
       const ev = await useWorkLedger.getState().addEvidence({
@@ -744,7 +1040,7 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
         sessionId: null,
         kind: 'agent_report',
         title,
-        summary: `Agent 声明（未独立核对）：${claimedKind} / ${claimedPassed ? '声称通过' : '声称未通过'}。${optionalString(args, 'summary') ?? ''}`,
+        summary: t('agent.hostTools.agentReportSummary', { kind: claimedKind, claimed: claimedPassed ? t('agent.hostTools.claimedPassed') : t('agent.hostTools.claimedFailed'), summary: optionalString(args, 'summary') ?? '' }),
         headSha: optionalString(args, 'headSha') ?? null,
         workspaceRoot: null,
         webUrl: null,
@@ -759,7 +1055,7 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
       const buildId = args.buildId;
       const requirementsVersion = args.requirementsVersion;
       const contentVersion = args.contentVersion;
-      if (typeof buildId !== 'number' || !Number.isInteger(buildId) || typeof requirementsVersion !== 'number' || !Number.isInteger(requirementsVersion) || typeof contentVersion !== 'number' || !Number.isInteger(contentVersion)) throw new Error('可信 CI 核对需要准确的构建 ID 和工作版本');
+      if (typeof buildId !== 'number' || !Number.isInteger(buildId) || typeof requirementsVersion !== 'number' || !Number.isInteger(requirementsVersion) || typeof contentVersion !== 'number' || !Number.isInteger(contentVersion)) throw new Error(t('agent.hostTools.ciParamsRequired'));
       const evidence = await verifyWorkCiEvidence({ workId: requiredString(args, 'todoId'), project: requiredString(args, 'project'), buildId, requirementsVersion, contentVersion,
         criterionIds: Array.isArray(args.criterionIds) ? args.criterionIds.filter((item): item is string => typeof item === 'string') : [] });
       return response({ evidence, verification: 'ado_build_api', scope: 'ci_status_only' });
@@ -869,7 +1165,7 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
       const todoId = requiredString(args, 'todoId');
       const ledger = useWorkLedger.getState();
       const card = ledger.cards.find((item) => item.id === todoId);
-      if (!card) throw new Error('指定工作不存在');
+      if (!card) throw new Error(t('agent.hostTools.workMissing'));
       const acpSession = Object.values(useAcpAgents.getState().sessions).find((session) => session.linkedTodoId === todoId) ?? null;
       const report = buildWorkflowExecutionReport({ card, acpSession, sessions: ledger.sessions, evidences: ledger.evidences, links: ledger.links });
       const action = await publishWorkReport({ workId: todoId, rid: requiredString(args, 'rid'), reportId: requiredString(args, 'operationId'), reportTitle: report.title, reportGeneratedAt: report.generatedAt, markdown: report.markdown });
@@ -877,7 +1173,7 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
     }
     if (tool === 'work_ado_state_sync') {
       const expectedRevision = args.expectedRevision;
-      if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision <= 0) throw new Error('expectedRevision 必须是正整数');
+      if (typeof expectedRevision !== 'number' || !Number.isInteger(expectedRevision) || expectedRevision <= 0) throw new Error(t('agent.hostTools.expectedRevPositive'));
       const action = await syncWorkAdoState({ workId: requiredString(args, 'todoId'), operationId: requiredString(args, 'operationId'), expectedRevision, expectedState: requiredString(args, 'expectedState'), targetState: requiredString(args, 'targetState') });
       return response({ action, syncConfirmed: action.state === 'acknowledged' || action.state === 'completed' });
     }
@@ -908,10 +1204,20 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
       const todoId = requiredString(args, 'todoId');
       const requestId = requiredString(args, 'requestId');
       const agentId = optionalString(args, 'agentId');
+      const customTitle = optionalString(args, 'title');
+      const requestedAutonomy = optionalString(args, 'autonomyMode');
       const ledger = useWorkLedger.getState();
       const card = ledger.cards.find((item) => item.id === todoId);
-      if (!card) throw new Error('正式委派需先用 create_work_card 纳入同一件工作');
-      if (!card.state.goal?.trim() || !card.state.acceptance.length) throw new Error('请先明确工作目标和验收条件');
+      if (!card) throw new Error(t('agent.hostTools.mustCreateCardFirst'));
+      if (!card.state.goal?.trim() || !card.state.acceptance.length) throw new Error(t('agent.hostTools.goalAndAcceptanceFirst'));
+      const autonomyRank = { readonly: 0, confirm: 1, autonomous: 2 } as const;
+      const cardAutonomy = card.state.autonomyMode;
+      const validRequested = requestedAutonomy && requestedAutonomy in autonomyRank
+        ? requestedAutonomy as keyof typeof autonomyRank
+        : null;
+      const effectiveAutonomy = validRequested && autonomyRank[validRequested] < autonomyRank[cardAutonomy]
+        ? validRequested
+        : cardAutonomy;
       const workspaceRoot = optionalString(args, 'workspaceRoot') ??
         ledger.links.find((link) => link.todoId === todoId && link.kind === 'kanban_card' && link.stateSnapshot === 'workspace')?.repo ??
         ledger.sessions.find((session) => session.todoId === todoId)?.workspaceRoot ?? '';
@@ -920,29 +1226,33 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
         (agentId ? acp.agents.find((a) => a.id === agentId) : undefined) ??
         acp.agents.find((a) => a.enabled);
       if (!targetAgent) {
-        throw new Error('尚未配置或启用本地 ACP 客户端');
+        throw new Error(t('agent.hostTools.noAcpClient'));
       }
       if (!workspaceRoot) {
-        throw new Error('请提供工作区路径 workspaceRoot');
+        throw new Error(t('agent.hostTools.workspaceRootRequired'));
       }
-      const specText = renderDispatchSpec({ title: card.title, goal: `${card.state.goal}\n本次推进要求：${prompt}`,
-        acceptance: card.state.acceptance, boundaries: card.state.boundaries, evidence: card.note ? [{ label: '工作补充说明', text: card.note }] : [] });
+      const dispatchTitle = customTitle || card.title;
+      const specText = renderDispatchSpec({ title: dispatchTitle, goal: t('agent.hostTools.dispatchGoal', { goal: card.state.goal, prompt }),
+        acceptance: card.state.acceptance, boundaries: card.state.boundaries, evidence: card.note ? [{ label: t('agent.hostTools.cardNotes'), text: card.note }] : [] });
       const action = await ledger.prepareDispatchAction({
         idempotencyKey: JSON.stringify(['acp-dispatch', todoId, requestId]), todoId, actionKind: 'session_create',
         specJson: JSON.stringify({ specText, runtime: 'acp', acpAgentId: targetAgent.id, repoRootOverride: workspaceRoot,
+          ...(customTitle ? { title: customTitle } : {}),
+          autonomyMode: effectiveAutonomy,
           isolateWorktree: optionalBoolean(args, 'isolateWorktree') ?? false,
           requirementsVersion: card.state.requirementsVersion ?? 0, contentVersion: card.state.contentVersion ?? 0 }),
-        requireConfirmation: card.state.autonomyMode !== 'autonomous',
+        requireConfirmation: effectiveAutonomy !== 'autonomous',
       });
       return response({ accepted: true, todoId, actionId: action.id, state: action.state, agentId: targetAgent.id,
-        workspaceRoot, message: action.state === 'awaiting_approval' ? '工作已保留，等待本轮委派授权' : '工作已持久入队，后台将按可用资源执行；尚未宣告执行完成' });
+        title: dispatchTitle, autonomyMode: effectiveAutonomy,
+        workspaceRoot, message: action.state === 'awaiting_approval' ? t('agent.hostTools.dispatchAwaitingApproval') : t('agent.hostTools.dispatchQueued') });
     }
     if (tool === 'acp_session_status') {
       const sessionKey = optionalString(args, 'sessionKey');
       const sessions = useAcpAgents.getState().sessions;
       if (sessionKey) {
         const s = sessions[sessionKey];
-        if (!s) throw new Error(`未找到 ACP 会话 ${sessionKey}`);
+        if (!s) throw new Error(t('agent.hostTools.acpSessionMissing', { sessionKey }));
         return response({
           sessionKey: s.sessionKey,
           acpSessionId: s.acpSessionId,
@@ -968,7 +1278,586 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
         })),
       });
     }
-    throw new Error(`RocketX 不支持动态工具 ${tool || 'unknown'}`);
+    if (tool === 'delegate_specialists') {
+      const todoId = requiredString(args, 'todoId');
+      const requestId = requiredString(args, 'requestId');
+      const rawTasks = Array.isArray(args.tasks) ? args.tasks : [];
+      const ledger = useWorkLedger.getState();
+      const card = ledger.cards.find((item) => item.id === todoId);
+      if (!card) throw new Error(t('agent.hostTools.mustCreateCardFirst'));
+      if (!card.state.goal?.trim() || !card.state.acceptance.length) {
+        throw new Error(t('agent.hostTools.goalAndAcceptanceFirst'));
+      }
+      const defaultWorkspaceRoot =
+        ledger.links.find((link) => link.todoId === todoId && link.kind === 'kanban_card' && link.stateSnapshot === 'workspace')?.repo ??
+        ledger.sessions.find((session) => session.todoId === todoId)?.workspaceRoot ??
+        '';
+      const acp = useAcpAgents.getState();
+      const planned = buildSpecialistPlan({
+        tasks: rawTasks.map((entry) => {
+          const item = record(entry);
+          return {
+            role: typeof item.role === 'string' ? item.role : '',
+            title: typeof item.title === 'string' ? item.title : '',
+            prompt: typeof item.prompt === 'string' ? item.prompt : '',
+            agentId: optionalString(item, 'agentId'),
+            autonomyMode: optionalString(item, 'autonomyMode'),
+            isolateWorktree: optionalBoolean(item, 'isolateWorktree'),
+            workspaceRoot: optionalString(item, 'workspaceRoot'),
+          };
+        }),
+        parentCeiling: card.state.autonomyMode,
+        defaultWorkspaceRoot,
+        availableAgents: acp.agents.map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          preset: agent.preset,
+          enabled: agent.enabled,
+        })),
+      });
+
+      const dispatches = [];
+      for (const item of planned) {
+        const specText = renderDispatchSpec({
+          title: `[${item.role}] ${item.title}`,
+          goal: t('agent.hostTools.dispatchGoal', { goal: card.state.goal, prompt: item.enrichedPrompt }),
+          acceptance: card.state.acceptance,
+          boundaries: card.state.boundaries,
+          evidence: card.note ? [{ label: t('agent.hostTools.cardNotes'), text: card.note }] : [],
+        });
+        const action = await ledger.prepareDispatchAction({
+          idempotencyKey: JSON.stringify(['cos-delegate', todoId, requestId, item.index, item.role]),
+          todoId,
+          actionKind: 'session_create',
+          specJson: JSON.stringify({
+            specText,
+            runtime: 'acp',
+            acpAgentId: item.agentId,
+            repoRootOverride: item.workspaceRoot,
+            title: item.title,
+            specialistRole: item.role,
+            autonomyMode: item.autonomyMode,
+            isolateWorktree: item.isolateWorktree,
+            requirementsVersion: card.state.requirementsVersion ?? 0,
+            contentVersion: card.state.contentVersion ?? 0,
+          }),
+          requireConfirmation: item.autonomyMode !== 'autonomous',
+        });
+        dispatches.push({
+          index: item.index,
+          role: item.role,
+          title: item.title,
+          agentId: item.agentId,
+          agentName: item.agentName,
+          autonomyMode: item.autonomyMode,
+          isolateWorktree: item.isolateWorktree,
+          actionId: action.id,
+          state: action.state,
+        });
+      }
+
+      const summary = synthesizeDelegationSummary(
+        dispatches.map((d) => ({
+          role: d.role,
+          title: d.title,
+          agentName: d.agentName,
+          autonomyMode: d.autonomyMode,
+          status: d.state === 'awaiting_approval' ? 'awaiting_approval' : 'queued',
+        })),
+      );
+      return response({
+        delegationId: requestId,
+        todoId,
+        count: dispatches.length,
+        dispatches,
+        summary,
+      });
+    }
+    if (tool === 'github_list_prs') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const owner = requiredString(args, 'owner');
+      const repo = requiredString(args, 'repo');
+      const stateRaw = optionalString(args, 'state');
+      const state = stateRaw === 'closed' || stateRaw === 'all' ? stateRaw : 'open';
+      const limit = typeof args.limit === 'number' && Number.isInteger(args.limit) ? args.limit : 20;
+      const pulls = await butlerGithubListPrs({ owner, repo, state, limit });
+      return response({ owner, repo, state, pulls });
+    }
+    if (tool === 'github_list_issues') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const owner = requiredString(args, 'owner');
+      const repo = requiredString(args, 'repo');
+      const stateRaw = optionalString(args, 'state');
+      const state = stateRaw === 'closed' || stateRaw === 'all' ? stateRaw : 'open';
+      const limit = typeof args.limit === 'number' && Number.isInteger(args.limit) ? args.limit : 20;
+      const issues = await butlerGithubListIssues({ owner, repo, state, limit });
+      return response({ owner, repo, state, issues });
+    }
+    if (tool === 'github_get_pr_diff') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const owner = requiredString(args, 'owner');
+      const repo = requiredString(args, 'repo');
+      const number = args.number;
+      if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) {
+        throw new Error(t('agent.hostTools.invalidPrNumber'));
+      }
+      const result = await butlerGithubGetPrDiff({ owner, repo, number });
+      return response(result);
+    }
+    if (tool === 'github_get_issue') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const owner = requiredString(args, 'owner');
+      const repo = requiredString(args, 'repo');
+      const number = args.number;
+      if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) {
+        throw new Error(t('agent.hostTools.invalidIssueNumber'));
+      }
+      const commentLimit =
+        typeof args.commentLimit === 'number' && Number.isInteger(args.commentLimit)
+          ? args.commentLimit
+          : undefined;
+      const result = await butlerGithubGetIssueDetail({ owner, repo, number, commentLimit });
+      return response(result);
+    }
+    if (tool === 'github_create_comment') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const owner = requiredString(args, 'owner');
+      const repo = requiredString(args, 'repo');
+      const number = args.number;
+      if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) {
+        throw new Error(t('agent.hostTools.invalidIssueNumber'));
+      }
+      const body = requiredString(args, 'body');
+      const workspaceRoot = optionalString(args, 'workspaceRoot') ?? '';
+      if (workspaceRoot) {
+        const policyDecision = await butlerPolicyEvaluate({
+          workspaceRoot,
+          actionKind: 'external',
+          target: `https://github.com/${owner}/${repo}/issues/${number}`,
+        });
+        if (policyDecision.verdict === 'deny') {
+          throw new Error(policyDecision.reason);
+        }
+      }
+      const result = await butlerGithubCreateComment({ owner, repo, number, body });
+      return response({ ok: true, owner, repo, number, result });
+    }
+    if (tool === 'browser_inspect_url') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const url = requiredString(args, 'url');
+      const workspaceRoot = optionalString(args, 'workspaceRoot') ?? '';
+      if (workspaceRoot) {
+        const policyDecision = await butlerPolicyEvaluate({
+          workspaceRoot,
+          actionKind: 'network',
+          target: url,
+        });
+        if (policyDecision.verdict === 'deny') {
+          throw new Error(policyDecision.reason);
+        }
+      }
+      const maxChars = typeof args.maxChars === 'number' && Number.isInteger(args.maxChars) ? args.maxChars : undefined;
+      const allowInsecureLan = optionalBoolean(args, 'allowInsecureLan') ?? false;
+      const result = await butlerBrowserInspect({ url, maxChars, allowInsecureLan });
+      return response(result);
+    }
+    if (tool === 'project_policy_check') {
+      if (!isTauriRuntime()) throw new Error(t('agent.hostTools.desktopOnly'));
+      const workspaceRoot = optionalString(args, 'workspaceRoot') ?? '';
+      const actionKind = requiredString(args, 'actionKind');
+      const target = requiredString(args, 'target');
+      const decision = await butlerPolicyEvaluate({ workspaceRoot, actionKind, target });
+      return response(decision);
+    }
+    if (tool === 'read_activity_stream') {
+      const cog = useButlerCognition.getState();
+      cog.hydrate();
+      const sinceRaw = optionalString(args, 'since');
+      const sinceMs = sinceRaw ? Date.parse(sinceRaw) : NaN;
+      if (sinceRaw && !Number.isFinite(sinceMs)) {
+        throw new Error(t('agent.hostTools.sinceInvalid'));
+      }
+      const sourceFilter = optionalString(args, 'source');
+      const unconsumedOnly = optionalBoolean(args, 'unconsumedOnly') ?? false;
+      const limit = Math.min(
+        60,
+        Math.max(1, typeof args.limit === 'number' && Number.isInteger(args.limit) ? args.limit : 25),
+      );
+      const observations = cog.observations
+        .filter((o) => (!Number.isFinite(sinceMs) || o.at > sinceMs))
+        .filter((o) => (!sourceFilter || o.source === sourceFilter))
+        .filter((o) => (!unconsumedOnly || !o.consumedAt))
+        .slice(0, limit);
+      const unreadInsights = cog.insights.filter((i) => i.status === 'unread').slice(0, 15);
+      return response({
+        lastUserActivityAt: cog.lastUserActivityAt > 0 ? new Date(cog.lastUserActivityAt).toISOString() : null,
+        lastUserChannel: cog.lastUserChannel,
+        lastAmbientWakeAt: cog.lastAmbientWakeAt > 0 ? new Date(cog.lastAmbientWakeAt).toISOString() : null,
+        lastDreamDate: cog.lastDreamDate,
+        observationsCount: observations.length,
+        observations: observations.map((o) => ({
+          id: o.id,
+          at: new Date(o.at).toISOString(),
+          source: o.source,
+          kind: o.kind,
+          salience: o.salience,
+          summary: o.summary,
+          ref: o.ref ?? null,
+          consumed: Boolean(o.consumedAt),
+        })),
+        armedWatchpoints: cog.watchpoints
+          .filter((w) => w.status === 'armed')
+          .map((w) => ({
+            id: w.id,
+            reason: w.reason,
+            condition: w.condition,
+            expiresAt: new Date(w.expiresAt).toISOString(),
+          })),
+        unreadInsightsCount: unreadInsights.length,
+        unreadInsights: unreadInsights.map((i) => ({
+          id: i.id,
+          level: i.level,
+          kind: i.kind,
+          title: i.title,
+          summary: i.summary,
+          createdAt: new Date(i.createdAt).toISOString(),
+        })),
+      });
+    }
+    if (tool === 'read_room_messages') {
+      const chat = useChat.getState();
+      const rid = optionalString(args, 'rid');
+      const sinceRaw = optionalString(args, 'since');
+      const sinceMs = sinceRaw ? Date.parse(sinceRaw) : NaN;
+      if (sinceRaw && !Number.isFinite(sinceMs)) {
+        throw new Error(t('agent.hostTools.sinceInvalid'));
+      }
+      const query = optionalString(args, 'query');
+      const limit = Math.min(
+        40,
+        Math.max(1, typeof args.limit === 'number' && Number.isInteger(args.limit) ? args.limit : 20),
+      );
+      if (!rid) {
+        const subs = Object.values(chat.subscriptions)
+          .filter((s) => s.open !== false)
+          .sort((a, b) => {
+            const mentionDiff = (b.userMentions ?? 0) - (a.userMentions ?? 0);
+            if (mentionDiff !== 0) return mentionDiff;
+            const unreadDiff = (b.unread ?? 0) - (a.unread ?? 0);
+            if (unreadDiff !== 0) return unreadDiff;
+            const lmA = tsMs(chat.rooms[a.rid]?.lm ?? chat.rooms[a.rid]?.lastMessage?.ts ?? a.ls);
+            const lmB = tsMs(chat.rooms[b.rid]?.lm ?? chat.rooms[b.rid]?.lastMessage?.ts ?? b.ls);
+            return lmB - lmA;
+          })
+          .slice(0, limit);
+        return response({
+          rooms: subs.map((s) => {
+            const room = chat.rooms[s.rid];
+            const lmAt = tsMs(room?.lm ?? room?.lastMessage?.ts ?? s.ls);
+            return {
+              rid: s.rid,
+              name: s.fname || s.name || s.rid,
+              type: s.t,
+              unread: s.unread ?? 0,
+              userMentions: s.userMentions ?? 0,
+              lastMessageAt: lmAt > 0 ? new Date(lmAt).toISOString() : null,
+              lastMessagePreview: room?.lastMessage?.msg
+                ? stripAgentSessionMarker(room.lastMessage.msg).slice(0, 180)
+                : '',
+            };
+          }),
+        });
+      }
+      let roomMessages = chat.messages[rid] ?? [];
+      if (roomMessages.length === 0 && useAuth.getState().user?._id) {
+        try {
+          const roomType = chat.subscriptions[rid]?.t ?? chat.rooms[rid]?.t ?? 'p';
+          roomMessages = await rest.getHistory(rid, roomType, limit);
+        } catch {
+          roomMessages = [];
+        }
+      }
+      const filtered = roomMessages
+        .filter((m) => !Number.isFinite(sinceMs) || tsMs(m.ts) > sinceMs)
+        .filter((m) => matches(m.msg, query))
+        .slice(-limit);
+      return response({
+        rid,
+        roomName: chat.subscriptions[rid]?.fname || chat.subscriptions[rid]?.name || rid,
+        messages: filtered.map((m) => ({
+          id: m._id,
+          sender: m.u?.name || m.u?.username || 'unknown',
+          ts: new Date(tsMs(m.ts)).toISOString(),
+          text: stripAgentSessionMarker(m.msg).slice(0, 500),
+          link: permalinkOf(m.rid, m._id),
+        })),
+      });
+    }
+    if (tool === 'acp_inspect_session') {
+      const sessionKey = optionalString(args, 'sessionKey');
+      const todoId = optionalString(args, 'todoId');
+      const messageLimit = Math.min(
+        20,
+        Math.max(1, typeof args.messageLimit === 'number' && Number.isInteger(args.messageLimit) ? args.messageLimit : 6),
+      );
+      const sessions = Object.values(useAcpAgents.getState().sessions);
+      const target = sessionKey
+        ? useAcpAgents.getState().sessions[sessionKey]
+        : todoId
+          ? sessions.find((s) => s.linkedTodoId === todoId)
+          : sessions[0];
+      if (!target) {
+        throw new Error(t('agent.hostTools.acpSessionMissing', { sessionKey: sessionKey || todoId || 'any' }));
+      }
+      return response({
+        sessionKey: target.sessionKey,
+        acpSessionId: target.acpSessionId,
+        agentName: target.agentName,
+        preset: target.preset,
+        status: target.status,
+        autonomyMode: target.autonomyMode,
+        error: target.error,
+        workspaceRoot: target.workspaceRoot,
+        linkedTodoId: target.linkedTodoId,
+        turnCount: target.turnCount,
+        lastStopReason: target.lastStopReason,
+        plan: target.plan,
+        recentMessages: target.messages.slice(-messageLimit).map((m) => ({
+          id: m.id,
+          role: m.role,
+          text: m.text.slice(0, 800),
+          thoughts: m.thoughts ? m.thoughts.slice(0, 300) : undefined,
+          at: new Date(m.timestamp).toISOString(),
+        })),
+        recentToolCalls: target.toolCalls.slice(-10).map((tc) => ({
+          toolCallId: tc.toolCallId,
+          title: tc.title,
+          kind: tc.kind,
+          status: tc.status,
+        })),
+        pendingPermissions: target.pendingPermissions.map((p) => ({
+          requestId: p.requestId,
+          reason: p.reason,
+          createdAt: new Date(p.createdAt).toISOString(),
+          toolTitle: p.toolCall.title ?? '',
+          toolKind: p.toolCall.kind ?? '',
+          locations: p.toolCall.locations ?? [],
+          rawInput: p.toolCall.rawInput ?? null,
+          options: p.options.map((opt) => ({
+            optionId: opt.optionId,
+            name: opt.name,
+            kind: opt.kind,
+          })),
+        })),
+      });
+    }
+    if (tool === 'acp_steer_session') {
+      const sessionKey = requiredString(args, 'sessionKey');
+      const action = requiredString(args, 'action');
+      const acpState = useAcpAgents.getState();
+      const session = acpState.sessions[sessionKey];
+      if (!session) {
+        throw new Error(t('agent.hostTools.acpSessionMissing', { sessionKey }));
+      }
+      if (action === 'cancel') {
+        await acpState.cancelTurn(sessionKey);
+        return response({ sessionKey, action: 'cancel', ok: true });
+      }
+      if (action === 'followup') {
+        const prompt = requiredString(args, 'prompt');
+        if (session.status === 'running') {
+          const queueId = acpState.enqueuePrompt(sessionKey, prompt);
+          return response({ sessionKey, action: 'followup', queued: true, queueId });
+        }
+        void acpState.sendPrompt(sessionKey, prompt, { injectMemory: true }).catch(() => undefined);
+        return response({ sessionKey, action: 'followup', dispatched: true });
+      }
+      if (action === 'resolve_permission') {
+        const requestId = requiredString(args, 'requestId');
+        const optionId = optionalString(args, 'optionId');
+        const perm = session.pendingPermissions.find((p) => p.requestId === requestId);
+        const chosenOpt = optionId ? perm?.options.find((o) => o.optionId === optionId) : undefined;
+        const isGrant = Boolean(optionId && (!chosenOpt?.kind || chosenOpt.kind.includes('allow')));
+        const linkedCard = session.linkedTodoId
+          ? useWorkLedger.getState().cards.find((c) => c.id === session.linkedTodoId)
+          : undefined;
+        const effectiveAutonomy = linkedCard?.state.autonomyMode ?? session.autonomyMode;
+        if (isGrant && effectiveAutonomy !== 'autonomous') {
+          return response({
+            sessionKey,
+            requestId,
+            blocked: true,
+            autonomyMode: effectiveAutonomy,
+            message: t('agent.hostTools.permissionRequiresHuman'),
+          });
+        }
+        await acpState.resolvePermission(sessionKey, requestId, optionId ?? null);
+        return response({ sessionKey, requestId, optionId: optionId ?? null, resolved: true });
+      }
+      throw new Error(t('agent.hostTools.unsupportedTool', { tool: `acp_steer_session:${action}` }));
+    }
+    if (tool === 'watchpoint_manage') {
+      const cog = useButlerCognition.getState();
+      cog.hydrate();
+      const op = requiredString(args, 'op');
+      if (op === 'list') {
+        return response({
+          watchpoints: cog.watchpoints.map((w) => ({
+            id: w.id,
+            reason: w.reason,
+            condition: w.condition,
+            status: w.status,
+            createdAt: new Date(w.createdAt).toISOString(),
+            expiresAt: new Date(w.expiresAt).toISOString(),
+          })),
+        });
+      }
+      if (op === 'cancel') {
+        const id = requiredString(args, 'id');
+        return response({ id, cancelled: cog.cancelWatchpoint(id) });
+      }
+      if (op === 'set') {
+        const reason = requiredString(args, 'reason');
+        const kind = requiredString(args, 'kind');
+        const ttlMinutes = typeof args.ttlMinutes === 'number' && Number.isFinite(args.ttlMinutes)
+          ? args.ttlMinutes
+          : 24 * 60;
+        const ttlMs = ttlMinutes * 60_000;
+        let condition:
+          | { kind: 'after_timestamp'; wakeAt: number }
+          | { kind: 'acp_session_settle'; sessionKey: string }
+          | { kind: 'room_activity'; rid: string; contains?: string }
+          | { kind: 'work_card_change'; todoId: string };
+        if (kind === 'after_minutes') {
+          const mins = typeof args.afterMinutes === 'number' && Number.isFinite(args.afterMinutes)
+            ? Math.max(1, args.afterMinutes)
+            : 15;
+          condition = { kind: 'after_timestamp', wakeAt: Date.now() + mins * 60_000 };
+        } else if (kind === 'acp_session_settle') {
+          condition = { kind: 'acp_session_settle', sessionKey: requiredString(args, 'sessionKey') };
+        } else if (kind === 'room_activity') {
+          const contains = optionalString(args, 'contains');
+          condition = { kind: 'room_activity', rid: requiredString(args, 'rid'), ...(contains ? { contains } : {}) };
+        } else if (kind === 'work_card_change') {
+          condition = { kind: 'work_card_change', todoId: requiredString(args, 'todoId') };
+        } else {
+          throw new Error(t('agent.hostTools.unsupportedTool', { tool: `watchpoint:${kind}` }));
+        }
+        const wp = cog.addWatchpoint({ reason, condition, ttlMs });
+        return response(wp);
+      }
+      throw new Error(t('agent.hostTools.unsupportedTool', { tool: `watchpoint_manage:${op}` }));
+    }
+    if (tool === 'surface_proactive_insight') {
+      const cog = useButlerCognition.getState();
+      cog.hydrate();
+      const rawLevel = requiredString(args, 'level');
+      const level = rawLevel === 'silent_log' || rawLevel === 'interrupt' ? rawLevel : 'inbox';
+      const rawKind = optionalString(args, 'kind');
+      const kind = rawKind === 'progress' || rawKind === 'risk' || rawKind === 'draft' ? rawKind : 'decision';
+      const suggestedActions = Array.isArray(args.suggestedActions)
+        ? args.suggestedActions
+          .map((item) => {
+            const rec = record(item);
+            const label = typeof rec.label === 'string' ? rec.label.trim() : '';
+            if (!label) return null;
+            const prompt = typeof rec.prompt === 'string' && rec.prompt.trim() ? rec.prompt.trim() : undefined;
+            return { label, ...(prompt ? { prompt } : {}) };
+          })
+          .filter((item): item is { label: string; prompt?: string } => item !== null)
+        : undefined;
+      const rid = optionalString(args, 'rid');
+      const todoId = optionalString(args, 'todoId');
+      const sessionKey = optionalString(args, 'sessionKey');
+      const actionId = optionalString(args, 'actionId');
+      const ref = (rid || todoId || sessionKey || actionId)
+        ? {
+            ...(rid ? { rid } : {}),
+            ...(todoId ? { todoId } : {}),
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(actionId ? { actionId } : {}),
+          }
+        : undefined;
+      const insight = cog.surfaceInsight({
+        level,
+        kind,
+        title: requiredString(args, 'title'),
+        summary: requiredString(args, 'summary'),
+        ...(suggestedActions?.length ? { suggestedActions } : {}),
+        ...(ref ? { ref } : {}),
+      });
+      return response({ id: insight.id, level: insight.level, kind: insight.kind, status: insight.status });
+    }
+    if (tool === 'skill_evolve') {
+      const skillsStore = useButlerSkills.getState();
+      await skillsStore.hydrate();
+      const op = requiredString(args, 'op');
+      if (op === 'list') {
+        return response({
+          skills: skillsStore.skills.map((s) => ({
+            id: s.id,
+            slug: s.slug,
+            name: s.name,
+            category: s.category,
+            description: s.description,
+            triggers: s.triggers,
+            approvalPolicy: s.approvalPolicy,
+            runCount: s.runCount,
+          })),
+        });
+      }
+      if (op === 'read') {
+        const lookupId = optionalString(args, 'id');
+        const lookupSlug = optionalString(args, 'slug')?.replace(/^\//, '').toLowerCase();
+        const found = skillsStore.skills.find((s) =>
+          (lookupId && s.id === lookupId) || (lookupSlug && s.slug.toLowerCase() === lookupSlug),
+        );
+        if (!found) {
+          throw new Error(t('agent.hostTools.unsupportedTool', { tool: `skill:${lookupSlug || lookupId || 'missing'}` }));
+        }
+        return response({
+          id: found.id,
+          slug: found.slug,
+          name: found.name,
+          description: found.description,
+          category: found.category,
+          instructionsMd: found.instructionsMd,
+          triggers: found.triggers,
+          allowedTools: found.allowedTools,
+          approvalPolicy: found.approvalPolicy,
+          workspaceRoot: found.workspaceRoot,
+          enabled: found.enabled,
+          runCount: found.runCount,
+        });
+      }
+      if (op === 'upsert') {
+        const saved = await skillsStore.upsertSkill({
+          id: optionalString(args, 'id'),
+          slug: optionalString(args, 'slug'),
+          name: requiredString(args, 'name'),
+          description: optionalString(args, 'description') ?? '',
+          category: optionalString(args, 'category') ?? 'general',
+          instructionsMd: requiredString(args, 'instructionsMd'),
+          triggers: Array.isArray(args.triggers)
+            ? args.triggers.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+            : [],
+          allowedTools: Array.isArray(args.allowedTools)
+            ? args.allowedTools.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+            : [],
+          approvalPolicy: 'confirm_write',
+          workspaceRoot: optionalString(args, 'workspaceRoot') ?? null,
+          enabled: true,
+        });
+        return response({
+          id: saved.id,
+          slug: saved.slug,
+          name: saved.name,
+          approvalPolicy: saved.approvalPolicy,
+        });
+      }
+      throw new Error(t('agent.hostTools.unsupportedTool', { tool: `skill_evolve:${op}` }));
+    }
+    throw new Error(t('agent.hostTools.unsupportedTool', { tool: tool || 'unknown' }));
   } catch (error) {
     return response({
       status: 'unavailable',

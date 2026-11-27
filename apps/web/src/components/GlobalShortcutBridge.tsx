@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { t } from '../i18n';
 import { isTauri } from '../lib/http';
 import { showMainWindow } from '../platform/desktopCommands';
 import { registerDesktopShortcut, unregisterDesktopShortcut } from '../platform/desktopShortcut';
@@ -46,7 +47,7 @@ export default function GlobalShortcutBridge() {
         if (!cancelled) {
           setRuntimeStatus(
             'conflict',
-            error instanceof Error ? error.message : String(error ?? '快捷键注册失败'),
+            error instanceof Error ? error.message : String(error ?? t('nav.globalShortcut.registerFailed')),
           );
         }
       }

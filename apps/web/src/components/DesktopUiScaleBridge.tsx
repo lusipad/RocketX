@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { t } from '../i18n';
 import { applyDesktopUiScale } from '../lib/desktopUiScale';
 import { isTauri } from '../lib/http';
 import { stepUiScale, type UiScale } from '../lib/uiScale';
@@ -38,7 +39,7 @@ export default function DesktopUiScaleBridge() {
     if (!isTauri) return;
     let active = true;
     let sequence = applyDesktopUiScale(useUiPrefs.getState().uiScale).catch((error) => {
-      if (active) toast.error(error, '界面缩放恢复失败');
+      if (active) toast.error(error, t('nav.uiScale.restoreFailed'));
     });
 
     const onKeyDown = (event: KeyboardEvent) => {
@@ -54,7 +55,7 @@ export default function DesktopUiScaleBridge() {
           useUiPrefs.getState().setUiScale(scale);
         })
         .catch((error) => {
-          if (active) toast.error(error, '界面缩放失败');
+          if (active) toast.error(error, t('nav.uiScale.failed'));
         });
     };
 

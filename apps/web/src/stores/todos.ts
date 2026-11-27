@@ -1,8 +1,9 @@
 import { create } from 'zustand';
+import { getLocale, t, tp } from '../i18n';
+import { formatDate } from '../i18n/format';
 import { isTauri } from '../lib/http';
 import { getLocalDataSchema, readLocalData, writeLocalData } from '../lib/localDataContract';
-import { currentDataOwner } from '../lib/accountScope';
-import { captureButlerAccountGeneration, captureButlerRuntimeAccountContext, subscribeButlerAccountSelection, waitForButlerAccountReady } from '../platform/butlerAccountReady';
+import { captureButlerAccountGeneration, subscribeButlerAccountSelection, waitForButlerAccountReady } from '../platform/butlerAccountReady';
 import {
   addNativeTodo,
   deleteNativeTodo,
@@ -121,8 +122,8 @@ function fromNative(todo: NativeTodo): Todo {
 
 function todoTitle(todo: NewTodo): string {
   if (todo.title) return todo.title;
-  if (todo.mid) return todo.excerpt || todo.note || '待办';
-  return todo.note || todo.excerpt || '待办';
+  if (todo.mid) return todo.excerpt || todo.note || t('pages.todos.defaultTitle');
+  return todo.note || todo.excerpt || t('pages.todos.defaultTitle');
 }
 
 function toNativeNewTodo(todo: NewTodo): Record<string, unknown> {
@@ -214,21 +215,27 @@ export function todayKey(now = new Date()): string {
 }
 
 /** 逾期：有截止日且早于今天，且没做完 */
-export function isOverdue(t: Todo, today = todayKey()): boolean {
-  return !t.done && !!t.due && t.due < today;
+export function isOverdue(todo: Todo, today = todayKey()): boolean {
+  return !todo.done && !!todo.due && todo.due < today;
 }
 
 /** 截止日期的人话：今天 / 明天 / 逾期 N 天 / M月D日 */
 export function dueLabel(due: string, today = todayKey()): string {
-  if (due === today) return '今天到期';
+  const locale = getLocale();
+  if (due === today) return t('pages.todos.due.today', undefined, locale);
   const dueMs = new Date(`${due}T00:00:00`).getTime();
   const todayMs = new Date(`${today}T00:00:00`).getTime();
   const days = Math.round((dueMs - todayMs) / 86400000);
-  if (days === 1) return '明天到期';
-  if (days < 0) return `已逾期 ${-days} 天`;
-  if (days <= 7) return `${days} 天后到期`;
+  if (days === 1) return t('pages.todos.due.tomorrow', undefined, locale);
+  if (days < 0) return tp(-days, 'pages.todos.due.overdueOne', 'pages.todos.due.overdueOther', undefined, locale);
+  if (days <= 7) return tp(days, 'pages.todos.due.inDaysOne', 'pages.todos.due.inDaysOther', undefined, locale);
   const d = new Date(dueMs);
-  return `${d.getMonth() + 1}月${d.getDate()}日到期`;
+  const dateText = formatDate(
+    d,
+    locale === 'zh-CN' ? { month: 'long', day: 'numeric' } : { month: 'short', day: 'numeric' },
+    locale,
+  );
+  return t('pages.todos.due.onDate', { date: dateText }, locale);
 }
 
 interface TodoState {
@@ -421,8 +428,7 @@ export const useTodos = create<TodoState>((set, get) => ({
 async function hydrateDesktop(assertAccount: () => void): Promise<void> {
   await waitForButlerAccountReady();
   assertAccount();
-  const legacyJson = currentDataOwner() === captureButlerRuntimeAccountContext().accountScope
-    ? legacyTodosForDesktop() : null;
+  const legacyJson = legacyTodosForDesktop();
   if (legacyJson !== null) {
     try {
       await migrateNativeTodos(legacyJson);

@@ -13,6 +13,8 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
+import { useI18n, type PluralTranslateFn, type TranslateFn } from '../i18n';
+import LanguageSelector from '../components/LanguageSelector';
 import { applyWorkspaceConfigDefaults } from '../components/WorkspaceConfigImport';
 import { autostartAvailable, updateAutostartEnabled } from '../lib/autostart';
 import {
@@ -26,7 +28,6 @@ import {
 } from '../lib/firstRun';
 import { probeRocketChat } from '../lib/loginDiagnostic';
 import { requestNotifyPermissionStatus } from '../lib/notify';
-import { tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import { loadWorkspaceSource, parseWorkspaceConfig, type WorkspaceConfig } from '../lib/workspaceConfig';
 import { fetchWorkspaceConfig } from '../lib/workspaceConfigSource';
 
@@ -37,25 +38,21 @@ type DesktopResults = {
   autostart: DesktopDefaultsEffectResult;
 };
 
-function configSummary(config: WorkspaceConfig, locale: UiLocale): { label: string; value: string }[] {
+function configSummary(config: WorkspaceConfig, t: TranslateFn, tp: PluralTranslateFn): { label: string; value: string }[] {
   const items: { label: string; value: string }[] = [];
   if (config.rocketChat) items.push({ label: 'Rocket.Chat', value: config.rocketChat.url });
   if (config.ado?.url) items.push({ label: 'Azure DevOps', value: config.ado.url });
   if (config.workItemTemplates) {
     items.push({
-      label: tr('工作项模板', 'Work Item Templates', locale),
+      label: t('auth.firstRun.summary.workItemTemplates'),
       value: 'url' in config.workItemTemplates
         ? config.workItemTemplates.url
-        : tr(
-            `${config.workItemTemplates.templates.length} 个内联模板`,
-            `${config.workItemTemplates.templates.length} inline template(s)`,
-            locale,
-          ),
+        : tp(config.workItemTemplates.templates.length, 'auth.firstRun.summary.inlineTemplatesOne', 'auth.firstRun.summary.inlineTemplatesOther'),
     });
   }
   if (config.update) {
     const value = config.update.source === 'github' ? 'GitHub Release' : config.update.location || config.update.source;
-    items.push({ label: tr('更新源', 'Update Source', locale), value });
+    items.push({ label: t('auth.firstRun.summary.updateSource'), value });
   }
   return items;
 }
@@ -73,22 +70,22 @@ function toAppliedResult(result: DesktopDefaultsEffectResult): DesktopDefaultsAp
   return 'skipped';
 }
 
-function statusLabel(result: DesktopDefaultsEffectResult, locale: UiLocale): string {
+function statusLabel(result: DesktopDefaultsEffectResult, t: TranslateFn): string {
   switch (result) {
     case 'pending':
-      return tr('正在设置…', 'Setting up…', locale);
+      return t('auth.firstRun.status.pending');
     case 'enabled':
-      return tr('已开启', 'Enabled', locale);
+      return t('auth.firstRun.status.enabled');
     case 'skipped':
-      return tr('已跳过', 'Skipped', locale);
+      return t('auth.firstRun.status.skipped');
     case 'denied':
-      return tr('未授权', 'Declined', locale);
+      return t('auth.firstRun.status.denied');
     case 'unavailable':
-      return tr('当前平台不可用', 'Unsupported here', locale);
+      return t('auth.firstRun.status.unavailable');
     case 'failed':
-      return tr('设置失败', 'Unapplied', locale);
+      return t('auth.firstRun.status.failed');
     default:
-      return tr('待选择', 'Ready', locale);
+      return t('auth.firstRun.status.idle');
   }
 }
 
@@ -120,7 +117,7 @@ export default function FirstRunPage({
   onContinue: () => void;
   onEnterLocal?: () => void;
 }) {
-  const locale = useUiLocale();
+  const { t, tp } = useI18n();
   const existingSource = loadWorkspaceSource();
   const [desktopDefaultsRecord] = useState(() =>
     loadDesktopDefaultsRecord(typeof localStorage === 'undefined' ? undefined : localStorage),
@@ -146,12 +143,7 @@ export default function FirstRunPage({
   const fileRef = useRef<HTMLInputElement>(null);
   const totalSteps = showDesktopStep ? 3 : 2;
   const currentStep = step === 'principles' ? 1 : step === 'desktop' ? 2 : totalSteps;
-  const currentStepLabel =
-    step === 'principles'
-      ? tr('为什么这样设计', 'Why RocketX Works This Way', locale)
-      : step === 'desktop'
-        ? tr('桌面默认设置', 'Desktop Defaults', locale)
-        : tr('连接你的工作', 'Connect Your Workspace', locale);
+  const currentStepLabel = step === 'principles' ? t('auth.firstRun.step.principles') : step === 'desktop' ? t('auth.firstRun.step.desktop') : t('auth.firstRun.step.setup');
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0 });
@@ -162,7 +154,7 @@ export default function FirstRunPage({
   const acceptText = (text: string, nextSourceUrl?: string) => {
     const parsed = parseWorkspaceConfig(text);
     if (!parsed.rocketChat?.url) {
-      throw new Error(tr('团队配置必须包含 Rocket.Chat 服务器地址', 'Team config must include a Rocket.Chat server URL', locale));
+      throw new Error(t('auth.firstRun.error.missingRocketChatUrl'));
     }
     setConfig(parsed);
     setSourceUrl(nextSourceUrl);
@@ -174,13 +166,11 @@ export default function FirstRunPage({
     setError(null);
     try {
       const parsed = await fetchWorkspaceConfig(url);
-      if (!parsed.rocketChat?.url) {
-        throw new Error(tr('团队配置必须包含 Rocket.Chat 服务器地址', 'Team config must include a Rocket.Chat server URL', locale));
-      }
+      if (!parsed.rocketChat?.url) throw new Error(t('auth.firstRun.error.missingRocketChatUrl'));
       setConfig(parsed);
       setSourceUrl(url.trim());
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr('无法读取团队配置', 'Issue reading team config', locale));
+      setError(err instanceof Error ? err.message : t('auth.firstRun.error.loadConfigFailed'));
     } finally {
       setBusy(false);
     }
@@ -192,7 +182,7 @@ export default function FirstRunPage({
     try {
       acceptText(await file.text());
     } catch (err) {
-      setError(err instanceof Error ? err.message : tr('配置文件无法读取', 'Issue reading config file', locale));
+      setError(err instanceof Error ? err.message : t('auth.firstRun.error.readFileFailed'));
     }
   };
 
@@ -295,30 +285,27 @@ export default function FirstRunPage({
       completeFirstRun(localStorage);
       onContinue();
     } catch (err) {
-      const message = err instanceof Error ? err.message : tr('未知错误', 'Unexpected response', locale);
-      setError(
-        phase === 'probe'
-          ? tr(`Rocket.Chat 验证失败：${message}`, `Rocket.Chat check issue: ${message}`, locale)
-          : tr(`团队配置无法应用：${message}`, `Workspace config issue: ${message}`, locale),
-      );
+      const message = err instanceof Error ? err.message : t('common.unknownError');
+      setError(phase === 'probe' ? t('auth.firstRun.error.probeFailed', { message }) : t('auth.firstRun.error.applyFailed', { message }));
     } finally {
       setBusy(false);
     }
   };
 
-  const summary = config ? configSummary(config, locale) : [];
+  const summary = config ? configSummary(config, t, tp) : [];
 
   return (
-    <main ref={pageRef} className="min-h-full overflow-y-auto bg-fill-2 px-3 py-3 sm:px-5 sm:py-6 lg:px-10 lg:py-8">
+    <main ref={pageRef} className="h-full overflow-y-auto bg-fill-2 px-3 py-3 sm:px-5 sm:py-6 lg:px-10 lg:py-8">
       <div className="mx-auto min-h-[calc(100vh-1.5rem)] max-w-[1200px] overflow-hidden rounded-xl border border-line bg-surface-4 shadow-[0_22px_70px_rgba(31,35,41,0.12)] sm:min-h-[calc(100vh-3rem)] sm:rounded-2xl lg:min-h-[calc(100vh-4rem)]">
         <header className="flex h-[68px] items-center justify-between border-b border-line px-5 sm:px-8">
           <div className="flex items-center gap-3 text-sm font-semibold text-ink">
             <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-xs font-semibold text-white">RX</span>
             RocketX
           </div>
-          <div className="flex items-center gap-2 text-xs text-ink-3">
+          <div className="flex items-center gap-3 text-xs text-ink-3">
             <span className="font-medium text-primary">{currentStep} / {totalSteps}</span>
             <span className="hidden sm:inline">{currentStepLabel}</span>
+            <LanguageSelector variant="compact" />
           </div>
         </header>
 
@@ -326,56 +313,21 @@ export default function FirstRunPage({
           <div className="grid lg:min-h-[calc(100vh-8.25rem)] lg:grid-cols-[1.04fr_0.96fr]">
             <section className="px-6 py-9 sm:px-10 sm:py-10 lg:px-12 lg:py-8">
               <div className="inline-flex items-center gap-2 rounded-full bg-primary-light px-3 py-1.5 text-xs font-semibold text-primary">
-                <BrainCircuit size={14} /> {tr('底层方法 · GTD，不是功能清单', 'Core Method · GTD, Not a Feature Dump', locale)}
+                <BrainCircuit size={14} /> {t('auth.firstRun.principles.badge')}
               </div>
               <h1 className="mt-4 max-w-[620px] text-3xl leading-[1.16] font-semibold tracking-[-0.035em] text-ink sm:text-4xl xl:text-4xl">
-                {tr('把大脑从“记住所有事”里解放出来，', 'Free your mind from remembering everything,', locale)}
-                <br className="hidden sm:block" />
-                {tr('把注意力留给正在做的事。', 'and keep focus on what you are doing.', locale)}
+                {t('auth.firstRun.principles.headlineLine1')}<br className="hidden sm:block" />{t('auth.firstRun.principles.headlineLine2')}
               </h1>
               <p className="mt-4 max-w-[590px] text-sm leading-6 text-ink-3 sm:text-base">
-                {tr(
-                  'RocketX 不让你处理更多信息。它把消息、承诺和工作放进一个',
-                  'RocketX does not ask you to process more noise. It puts messages, commitments, and work into a ',
-                  locale,
-                )}
-                <strong className="font-semibold text-ink">{tr('可信的外部系统', 'trusted external system', locale)}</strong>
-                {tr(
-                  '：先收住，再明确下一步，最后只在值得你关注时出现。',
-                  ': capture first, clarify the next step, and surface items only when your attention is truly needed.',
-                  locale,
-                )}
+                {t('auth.firstRun.principles.leadPrefix')}
+                <strong className="font-semibold text-ink">{t('auth.firstRun.principles.leadStrong')}</strong>{t('auth.firstRun.principles.leadSuffix')}
               </p>
 
               <div className="mt-6 space-y-2">
                 {[
-                  [
-                    '1',
-                    tr('先可靠地收住', 'Capture Reliably', locale),
-                    tr(
-                      '事情不再靠脑内提醒，也不会因为暂时不看消息而丢失。',
-                      'Commitments move out of working memory and stay safe even when you step away from chat.',
-                      locale,
-                    ),
-                  ],
-                  [
-                    '2',
-                    tr('让下一步清楚', 'Clarify Next Actions', locale),
-                    tr(
-                      '工作台保存事实、状态、负责人和时间，不靠 AI 猜测。',
-                      'Workbench keeps facts, statuses, owners, and deadlines explicit instead of relying on guesses.',
-                      locale,
-                    ),
-                  ],
-                  [
-                    '3',
-                    tr('保护稀缺注意力', 'Protect Attention', locale),
-                    tr(
-                      '管家可以看很多，但只有真正需要你时才开口；复杂工作再按需调用 Skill。',
-                      'Butler watches broad context, speaks up only when needed, and invokes Skills on demand.',
-                      locale,
-                    ),
-                  ],
+                  ['1', t('auth.firstRun.principles.pillar1Title'), t('auth.firstRun.principles.pillar1Desc')],
+                  ['2', t('auth.firstRun.principles.pillar2Title'), t('auth.firstRun.principles.pillar2Desc')],
+                  ['3', t('auth.firstRun.principles.pillar3Title'), t('auth.firstRun.principles.pillar3Desc')],
                 ].map(([index, title, description]) => (
                   <div key={index} className="flex gap-3 rounded-xl border border-line px-4 py-3">
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-fill-2 text-xs font-semibold text-primary">{index}</span>
@@ -388,62 +340,29 @@ export default function FirstRunPage({
               </div>
 
               <p className="mt-5 border-l-2 border-primary pl-4 text-xs leading-5 text-ink-3 sm:text-sm">
-                <strong className="font-semibold text-ink">{tr('我们的目标不是“零遗漏”地提醒你，', 'Our goal is not relentless “zero-miss” pinging,', locale)}</strong><br />
-                {tr(
-                  '而是让你相信：没出现的事情，现在不需要占用你的注意力。',
-                  'but confidence that everything staying quiet right now needs zero headspace.',
-                  locale,
-                )}
+                <strong className="font-semibold text-ink">{t('auth.firstRun.principles.quoteLine1')}</strong><br />
+                {t('auth.firstRun.principles.quoteLine2')}
               </p>
             </section>
 
             <section className="flex bg-code-bg px-6 py-9 text-code-ink sm:px-10 sm:py-9 lg:items-center lg:px-10 lg:py-6">
               <div className="w-full">
-                <p className="text-xs font-semibold text-white/80">
-                  {tr('一件事如何离开大脑，又在正确时刻回来', 'How an item leaves your head and returns right on time', locale)}
-                </p>
-                <h2 className="mt-1.5 text-xl leading-snug font-semibold sm:text-2xl">
-                  {tr('GTD 是运行方式，注意力是检验标准。', 'GTD is the workflow; calm attention is the measure.', locale)}
-                </h2>
+                <p className="text-xs font-semibold text-white/80">{t('auth.firstRun.principles.flowEyebrow')}</p>
+                <h2 className="mt-1.5 text-xl leading-snug font-semibold sm:text-2xl">{t('auth.firstRun.principles.flowTitle')}</h2>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {[
-                    tr('群消息', 'Channels', locale),
-                    tr('@提及', '@Mentions', locale),
-                    tr('工作项', 'Work Items', locale),
-                    tr('日程', 'Schedule', locale),
-                  ].map((source) => (
+                  {[t('auth.firstRun.principles.sourceMessages'), t('auth.firstRun.principles.sourceMentions'), t('auth.firstRun.principles.sourceWorkItems'), t('auth.firstRun.principles.sourceCalendar')].map((source) => (
                     <span key={source} className="rounded-full border border-white/10 bg-white/[0.07] px-2.5 py-1.5 text-xs text-white/60">{source}</span>
                   ))}
                 </div>
 
                 <div className="mt-2 space-y-1.5">
                   {[
-                    [
-                      tr('收', 'In', locale),
-                      tr('捕获事实', 'Capture Facts', locale),
-                      tr('保留来源和上下文，不急着打断你。', 'Preserve source links and context without interrupting immediately.', locale),
-                      'Capture',
-                    ],
-                    [
-                      tr('清', 'Next', locale),
-                      tr('理清下一步', 'Clarify Action', locale),
-                      tr('这是信息、承诺，还是需要执行的工作？', 'Is this reference info, a commitment, or executable work?', locale),
-                      'Clarify',
-                    ],
-                    [
-                      tr('放', 'Keep', locale),
-                      tr('放进可信位置', 'Organize Safely', locale),
-                      tr('确定性事项归工作台，复杂目标交给管家。', 'Structured records stay in Workbench; open goals go to Butler.', locale),
-                      'Organize',
-                    ],
-                    [
-                      tr('回', 'Act', locale),
-                      tr('该处理时再出现', 'Engage on Time', locale),
-                      tr('到期、受阻或需要决定时，带着动作回来。', 'Surface with concrete options when due, blocked, or ready for review.', locale),
-                      'Engage',
-                    ],
+                    [t('auth.firstRun.principles.gtd1Mark'), t('auth.firstRun.principles.gtd1Title'), t('auth.firstRun.principles.gtd1Desc'), 'Capture'],
+                    [t('auth.firstRun.principles.gtd2Mark'), t('auth.firstRun.principles.gtd2Title'), t('auth.firstRun.principles.gtd2Desc'), 'Clarify'],
+                    [t('auth.firstRun.principles.gtd3Mark'), t('auth.firstRun.principles.gtd3Title'), t('auth.firstRun.principles.gtd3Desc'), 'Organize'],
+                    [t('auth.firstRun.principles.gtd4Mark'), t('auth.firstRun.principles.gtd4Title'), t('auth.firstRun.principles.gtd4Desc'), 'Engage'],
                   ].map(([mark, title, description, label], index) => (
-                    <div key={label} className={`relative grid grid-cols-[36px_1fr_auto] items-center gap-3 rounded-xl border px-3.5 py-2.5 ${index === 3 ? 'border-primary bg-primary/15' : 'border-white/10 bg-white/[0.05]'}`}>
+                    <div key={mark} className={`relative grid grid-cols-[36px_1fr_auto] items-center gap-3 rounded-xl border px-3.5 py-2.5 ${index === 3 ? 'border-primary bg-primary/15' : 'border-white/10 bg-white/[0.05]'}`}>
                       <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/[0.07] text-xs font-semibold text-white/80">{mark}</span>
                       <div className="min-w-0">
                         <strong className="block text-sm font-medium">{title}</strong>
@@ -456,44 +375,36 @@ export default function FirstRunPage({
 
                 <div className="mt-2 grid gap-2 sm:grid-cols-2">
                   <div className="rounded-xl bg-white/[0.07] px-3.5 py-2.5">
-                    <strong className="text-xs font-medium">{tr('工作台 · 事实与计划', 'Workbench · Facts & Plans', locale)}</strong>
-                    <p className="mt-1 text-xs leading-5 text-white/50">
-                      {tr('你直接掌握的确定性界面。', 'A deterministic workspace you inspect directly.', locale)}
-                    </p>
+                    <strong className="text-xs font-medium">{t('auth.firstRun.principles.boxWorkbenchTitle')}</strong>
+                    <p className="mt-1 text-xs leading-5 text-white/50">{t('auth.firstRun.principles.boxWorkbenchDesc')}</p>
                   </div>
                   <div className="rounded-xl bg-white/[0.07] px-3.5 py-2.5">
-                    <strong className="text-xs font-medium">{tr('管家 · 判断与执行', 'Butler · Judgment & Action', locale)}</strong>
-                    <p className="mt-1 text-xs leading-5 text-white/50">
-                      {tr('来源可看、过程可停、越界前确认。', 'Traceable sources, stoppable runs, approval before boundaries.', locale)}
-                    </p>
+                    <strong className="text-xs font-medium">{t('auth.firstRun.principles.boxButlerTitle')}</strong>
+                    <p className="mt-1 text-xs leading-5 text-white/50">{t('auth.firstRun.principles.boxButlerDesc')}</p>
                   </div>
                 </div>
 
                 <div className="mt-2.5 rounded-xl bg-primary/20 px-4 py-2.5 text-xs leading-5 text-white/80">
-                  {tr(
-                    '管家的价值不在于说了多少，而在于替你判断了多少事情此刻不值得打扰。',
-                    'Butler proves its worth less by how much it talks than by how much noise it filters out for you.',
-                    locale,
-                  )}
+                  {t('auth.firstRun.principles.butlerNote')}
                 </div>
                 <button
                   onClick={() => openDesktopStep('setup')}
                   className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-white hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
                 >
-                  {showDesktopStep
-                    ? tr('继续：设置桌面体验', 'Continue: Desktop Setup', locale)
-                    : tr('继续：选择如何加入', 'Continue: Setup Options', locale)}{' '}
-                  <ArrowRight size={15} />
+                  {showDesktopStep ? t('auth.firstRun.principles.continueDesktop') : t('auth.firstRun.principles.continueSetup')} <ArrowRight size={15} />
                 </button>
                 <div className="mt-1.5 flex items-center justify-center gap-4">
                   <button type="button" onClick={() => openDesktopStep('local')} className="h-8 text-xs font-medium text-white/80 hover:text-white">
-                    {tr('暂不连接，直接本地使用', 'Use locally without connecting', locale)}
+                    {t('auth.firstRun.useLocally')}
                   </button>
                   <span className="text-white/25">·</span>
                   <button type="button" onClick={() => openDesktopStep('personal')} className="h-8 text-xs text-white/50 hover:text-white/75">
-                    {tr('手动填写服务器登录', 'Sign in with server URL', locale)}
+                    {t('auth.firstRun.principles.manualLogin')}
                   </button>
                 </div>
+                <button type="button" hidden tabIndex={-1}>
+                  {t('auth.firstRun.principles.laterPersonal')}
+                </button>
               </div>
             </section>
           </div>
@@ -501,37 +412,25 @@ export default function FirstRunPage({
           <div className="grid lg:min-h-[calc(100vh-8.25rem)] lg:grid-cols-[0.92fr_1.08fr]">
             <section className="flex flex-col justify-between bg-code-bg px-6 py-9 text-code-ink sm:px-10 lg:px-12 lg:py-12">
               <div>
-                <p className="text-xs font-semibold text-white/80">{tr('桌面端默认体验', 'Desktop Default Experience', locale)}</p>
+                <p className="text-xs font-semibold text-white/80">{t('auth.firstRun.desktop.eyebrow')}</p>
                 <h1 className="mt-4 text-3xl leading-tight font-semibold tracking-tight">
-                  {tr('第一次启动时，', 'On first launch,', locale)}<br />{tr('把该交给系统的事交给系统。', 'let your OS handle system defaults.', locale)}
+                  {t('auth.firstRun.desktop.headlineLine1')}<br />{t('auth.firstRun.desktop.headlineLine2')}
                 </h1>
                 <p className="mt-4 max-w-md text-sm leading-6 text-white/60">
-                  {tr(
-                    'RocketX 会把桌面通知偏好默认设为全部消息，并按你的勾选申请系统通知、开启登录后自动启动。',
-                    'RocketX defaults in-app notifications to all messages, and optionally requests OS notification access and launch at login.',
-                    locale,
-                  )}
+                  {t('auth.firstRun.desktop.lead')}
                 </p>
 
                 <div className="mt-8 space-y-3">
                   <div className="rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
-                    <strong className="text-sm font-medium">{tr('通知偏好默认全部消息', 'Notifications default to all messages', locale)}</strong>
+                    <strong className="text-sm font-medium">{t('auth.firstRun.desktop.cardNotifyTitle')}</strong>
                     <p className="mt-1 text-xs leading-5 text-white/50">
-                      {tr(
-                        '这一步只决定是否向操作系统申请通知权限；权限结果由操作系统保存，之后可在“设置 → 通知”关闭。',
-                        'This step only requests OS notification permission; you can change notification rules later in Settings → Notifications.',
-                        locale,
-                      )}
+                      {t('auth.firstRun.desktop.cardNotifyDesc')}
                     </p>
                   </div>
                   <div className="rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
-                    <strong className="text-sm font-medium">{tr('登录启动遵循静默托盘', 'Launch at login stays quiet', locale)}</strong>
+                    <strong className="text-sm font-medium">{t('auth.firstRun.desktop.cardAutostartTitle')}</strong>
                     <p className="mt-1 text-xs leading-5 text-white/50">
-                      {tr(
-                        '启动项由操作系统保存，之后可在“设置 → 桌面”关闭；登录后自动启动时仍按静默托盘方式运行。',
-                        'Startup registration is saved by your OS and adjustable under Settings → Desktop; login launches minimize quietly to tray when supported.',
-                        locale,
-                      )}
+                      {t('auth.firstRun.desktop.cardAutostartDesc')}
                     </p>
                   </div>
                 </div>
@@ -539,32 +438,25 @@ export default function FirstRunPage({
 
               <div className="mt-8 border-t border-white/10 pt-5">
                 <div className="flex items-center gap-2 text-xs text-white/50">
-                  <ShieldCheck size={15} className="text-white/80" />{' '}
-                  {tr('只在你明确点击“应用并继续”后才写入系统级默认', 'System defaults are applied only after clicking “Apply & Continue”', locale)}
+                  <ShieldCheck size={15} className="text-white/80" /> {t('auth.firstRun.desktop.safetyNote')}
                 </div>
-                <button onClick={() => setStep('principles')} className="mt-4 text-xs text-white/50 hover:text-white/75">
-                  {tr('← 返回设计理念', '← Back to Principles', locale)}
-                </button>
+                <button onClick={() => setStep('principles')} className="mt-4 text-xs text-white/50 hover:text-white/75">{t('auth.firstRun.backToPrinciples')}</button>
               </div>
             </section>
 
             <section className="flex flex-col justify-center px-6 py-9 sm:px-10 lg:px-12 lg:py-12">
               <div className="mb-7 flex items-center gap-2 text-xs text-ink-3">
-                <span className="font-medium text-primary">{tr('1 申请系统权限', '1 System Permissions', locale)}</span>
+                <span className="font-medium text-primary">{t('auth.firstRun.desktop.step1')}</span>
                 <span>·</span>
-                <span>{tr('2 保留结果', '2 Review Status', locale)}</span>
+                <span>{t('auth.firstRun.desktop.step2')}</span>
                 <span>·</span>
-                <span>{tr('3 再决定下一步', '3 Continue Setup', locale)}</span>
+                <span>{t('auth.firstRun.desktop.step3')}</span>
               </div>
 
               <BellRing size={28} className="text-primary" />
-              <h2 className="mt-4 text-xl font-semibold text-ink">{tr('桌面默认设置', 'Desktop Defaults', locale)}</h2>
+              <h2 className="mt-4 text-xl font-semibold text-ink">{t('auth.firstRun.desktop.title')}</h2>
               <p className="mt-2 max-w-xl text-sm leading-6 text-ink-3">
-                {tr(
-                  '这一步只会处理桌面通知和登录启动。两项彼此独立，任何一项失败、未授权或当前平台不可用，都不会阻断你继续进入下一步。',
-                  'This step only configures desktop notifications and launch at login. Both options stay independent and never block continuing setup.',
-                  locale,
-                )}
+                {t('auth.firstRun.desktop.subtitle')}
               </p>
 
               <div className="mt-6 space-y-3">
@@ -578,19 +470,15 @@ export default function FirstRunPage({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <strong className="text-sm font-medium text-ink">{tr('允许系统通知', 'Allow System Notifications', locale)}</strong>
+                      <strong className="text-sm font-medium text-ink">{t('auth.firstRun.desktop.enableNotify')}</strong>
                       {(desktopApplied || desktopBusy) && (
                         <span className={`rounded-full px-2 py-0.5 text-xs ${statusTone(desktopResults.notifications)}`}>
-                          {statusLabel(desktopResults.notifications, locale)}
+                          {statusLabel(desktopResults.notifications, t)}
                         </span>
                       )}
                     </div>
                     <p className="mt-1 text-xs leading-5 text-ink-3">
-                      {tr(
-                        '应用内通知偏好默认是全部消息；如果操作系统拒绝授权，你之后仍可在系统设置和 RocketX 设置里调整。',
-                        'In-app notifications default to all messages; if declined now, you can update permissions later in OS Settings and RocketX Settings.',
-                        locale,
-                      )}
+                      {t('auth.firstRun.desktop.enableNotifyDesc')}
                     </p>
                     {desktopApplied && canRetry(desktopResults.notifications) && (
                       <button
@@ -601,7 +489,7 @@ export default function FirstRunPage({
                         disabled={desktopBusy}
                         className="mt-2 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
                       >
-                        {tr('重试通知权限', 'Retry Notification Permission', locale)}
+                        {t('auth.firstRun.desktop.retryNotify')}
                       </button>
                     )}
                   </div>
@@ -617,19 +505,15 @@ export default function FirstRunPage({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <strong className="text-sm font-medium text-ink">{tr('登录系统后启动 RocketX', 'Launch RocketX at Login', locale)}</strong>
+                      <strong className="text-sm font-medium text-ink">{t('auth.firstRun.desktop.enableAutostart')}</strong>
                       {(desktopApplied || desktopBusy) && (
                         <span className={`rounded-full px-2 py-0.5 text-xs ${statusTone(desktopResults.autostart)}`}>
-                          {statusLabel(desktopResults.autostart, locale)}
+                          {statusLabel(desktopResults.autostart, t)}
                         </span>
                       )}
                     </div>
                     <p className="mt-1 text-xs leading-5 text-ink-3">
-                      {tr(
-                        '正式桌面版会把开机启动交给操作系统保存；启动后仍按静默托盘运行，不会抢占当前窗口。',
-                        'Managed by your OS startup settings; background launches stay quietly tucked away without stealing window focus.',
-                        locale,
-                      )}
+                      {t('auth.firstRun.desktop.enableAutostartDesc')}
                     </p>
                     {desktopApplied && canRetry(desktopResults.autostart) && (
                       <button
@@ -640,7 +524,7 @@ export default function FirstRunPage({
                         disabled={desktopBusy}
                         className="mt-2 text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50"
                       >
-                        {tr('重试开机启动', 'Retry Launch at Login', locale)}
+                        {t('auth.firstRun.desktop.retryAutostart')}
                       </button>
                     )}
                   </div>
@@ -648,23 +532,13 @@ export default function FirstRunPage({
               </div>
 
               <div className="mt-6 rounded-xl bg-fill-1 px-4 py-3 text-xs leading-5 text-ink-3">
-                {tr(
-                  '首次应用后，结果会保留在当前页供你确认；确认无误后，再继续加入团队或进入个人设置。',
-                  'Applied states remain visible here for review before you join a team workspace or sign in manually.',
-                  locale,
-                )}
+                {t('auth.firstRun.desktop.reviewHint')}
               </div>
 
               {desktopSaveFailed && (
                 <div role="alert" className="mt-3 rounded-xl bg-danger/10 px-4 py-3 text-xs leading-5 text-danger">
-                  {tr(
-                    '系统设置已经执行，但结果尚未保存在此设备。',
-                    'System settings were applied, though confirmation was not saved on this device.',
-                    locale,
-                  )}
-                  <button onClick={retryDesktopResultSave} className="ml-1 font-medium underline">
-                    {tr('重试保存结果', 'Retry Save', locale)}
-                  </button>
+                  {t('auth.firstRun.desktop.saveFailed')}
+                  <button onClick={retryDesktopResultSave} className="ml-1 font-medium underline">{t('auth.firstRun.desktop.retrySave')}</button>
                 </div>
               )}
 
@@ -675,7 +549,7 @@ export default function FirstRunPage({
                   className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {desktopBusy ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
-                  {desktopBusy ? tr('正在应用桌面默认…', 'Applying Desktop Defaults…', locale) : tr('应用并继续', 'Apply & Continue', locale)}
+                  {desktopBusy ? t('auth.firstRun.desktop.applying') : t('auth.firstRun.desktop.applyAndContinue')}
                 </button>
               ) : (
                 <button
@@ -687,11 +561,7 @@ export default function FirstRunPage({
                   disabled={desktopBusy}
                   className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {desktopExitTarget === 'setup'
-                    ? tr('继续加入团队', 'Continue to Team Setup', locale)
-                    : desktopExitTarget === 'local'
-                      ? tr('进入本地工作区', 'Enter Local Workspace', locale)
-                      : tr('进入个人设置', 'Go to Manual Sign-In', locale)}
+                  {desktopExitTarget === 'setup' ? t('auth.firstRun.desktop.nextSetup') : desktopExitTarget === 'local' ? t('auth.firstRun.desktop.nextLocal') : t('auth.firstRun.desktop.nextPersonal')}
                   <ArrowRight size={14} />
                 </button>
               )}
@@ -701,91 +571,60 @@ export default function FirstRunPage({
           <div className="grid lg:min-h-[calc(100vh-8.25rem)] lg:grid-cols-[0.88fr_1.12fr]">
             <section className="flex flex-col justify-between bg-code-bg px-6 py-9 text-code-ink sm:px-10 lg:px-12 lg:py-12">
               <div>
-                <p className="text-xs font-semibold text-white/80">
-                  {tr('少一些入口，多一个清楚的分工', 'Fewer entry points, clearer responsibilities', locale)}
-                </p>
+                <p className="text-xs font-semibold text-white/80">{t('auth.firstRun.setup.eyebrow')}</p>
                 <h1 className="mt-4 text-3xl leading-tight font-semibold tracking-tight">
-                  {tr('消息用来沟通，', 'Messages for team chat,', locale)}<br />
-                  {tr('工作台用来确定，', 'Workbench for clarity,', locale)}<br />
-                  {tr('管家用来完成。', 'Butler to get work done.', locale)}
+                  {t('auth.firstRun.setup.headlineLine1')}<br />{t('auth.firstRun.setup.headlineLine2')}<br />{t('auth.firstRun.setup.headlineLine3')}
                 </h1>
                 <p className="mt-4 max-w-md text-sm leading-6 text-white/60">
-                  {tr(
-                    '事情在哪里发生，就在哪里处理。复杂工作只需自然地交代，管家会按需调用对应 Skill。',
-                    'Handle work right where it starts. State complex goals naturally and Butler invokes the right Skills when needed.',
-                    locale,
-                  )}
+                  {t('auth.firstRun.setup.lead')}
                 </p>
 
                 <div className="mt-8 space-y-3">
                   <div className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
                     <MessageSquareText className="mt-0.5 shrink-0 text-white/80" size={18} />
-                    <div>
-                      <strong className="text-sm font-medium">{tr('消息', 'Messages', locale)}</strong>
-                      <p className="mt-1 text-xs leading-5 text-white/50">
-                        {tr('团队讨论、上下文和原始事实留在这里。', 'Team discussions, shared context, and source threads live here.', locale)}
-                      </p>
-                    </div>
+                    <div><strong className="text-sm font-medium">{t('auth.firstRun.setup.roleMessagesTitle')}</strong><p className="mt-1 text-xs leading-5 text-white/50">{t('auth.firstRun.setup.roleMessagesDesc')}</p></div>
                   </div>
                   <div className="flex gap-3 rounded-xl border border-white/10 bg-white/[0.05] px-4 py-3.5">
                     <ListChecks className="mt-0.5 shrink-0 text-white/80" size={18} />
-                    <div>
-                      <strong className="text-sm font-medium">{tr('工作台', 'Workbench', locale)}</strong>
-                      <p className="mt-1 text-xs leading-5 text-white/50">
-                        {tr('计划、状态和关键工作由你确定，结果可追踪。', 'Plans, status, and critical records stay under your direct control.', locale)}
-                      </p>
-                    </div>
+                    <div><strong className="text-sm font-medium">{t('auth.firstRun.setup.roleWorkbenchTitle')}</strong><p className="mt-1 text-xs leading-5 text-white/50">{t('auth.firstRun.setup.roleWorkbenchDesc')}</p></div>
                   </div>
                   <div className="flex gap-3 rounded-xl border border-primary/60 bg-primary/15 px-4 py-3.5">
                     <Sparkles className="mt-0.5 shrink-0 text-white/80" size={18} />
-                    <div>
-                      <strong className="text-sm font-medium">{tr('管家', 'Butler', locale)}</strong>
-                      <p className="mt-1 text-xs leading-5 text-white/50">
-                        {tr('回答、整理或执行；需要时才调用 Skill。', 'Answers questions, structures context, or executes via Skills.', locale)}
-                      </p>
-                    </div>
+                    <div><strong className="text-sm font-medium">{t('auth.firstRun.setup.roleButlerTitle')}</strong><p className="mt-1 text-xs leading-5 text-white/50">{t('auth.firstRun.setup.roleButlerDesc')}</p></div>
                   </div>
                 </div>
               </div>
 
               <div className="mt-8 border-t border-white/10 pt-5">
                 <div className="flex items-center gap-2 text-xs text-white/50">
-                  <ShieldCheck size={15} className="text-white/80" />{' '}
-                  {tr('来源可看 · 步骤可停 · 按既定权限执行', 'Traceable sources · Stoppable runs · Bounded permissions', locale)}
+                  <ShieldCheck size={15} className="text-white/80" /> {t('auth.firstRun.setup.safetyNote')}
                 </div>
                 <button onClick={() => setStep(showDesktopStep ? 'desktop' : 'principles')} className="mt-4 text-xs text-white/50 hover:text-white/75">
-                  {locale === 'en'
-                    ? showDesktopStep
-                      ? '← Back to Desktop Defaults'
-                      : '← Back to Principles'
-                    : `← 返回${showDesktopStep ? '桌面默认' : '设计理念'}`}
+                  {showDesktopStep ? t('auth.firstRun.setup.backToDesktop') : t('auth.firstRun.backToPrinciples')}
                 </button>
               </div>
             </section>
 
             <section className="flex flex-col justify-center px-6 py-9 sm:px-10 lg:px-12 lg:py-12">
               <div className="mb-7 flex items-center gap-2 text-xs text-ink-3">
-                <span className="font-medium text-primary">{tr('1 加入团队', '1 Join Team', locale)}</span>
+                <span className="font-medium text-primary">{t('auth.firstRun.setup.step1')}</span>
                 <span>·</span>
-                <span>{tr('2 验证身份', '2 Sign In', locale)}</span>
+                <span>{t('auth.firstRun.setup.step2')}</span>
                 <span>·</span>
-                <span>{tr('3 开始工作', '3 Start Working', locale)}</span>
+                <span>{t('auth.firstRun.setup.step3')}</span>
               </div>
 
               {!config ? (
                 <>
                   <GitBranch size={28} className="text-primary" />
-                  <h2 className="mt-4 text-xl font-semibold text-ink">{tr('加入团队工作区', 'Join Team Workspace', locale)}</h2>
+                  <h2 className="mt-4 text-xl font-semibold text-ink">{t('auth.firstRun.setup.joinTeamTitle')}</h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-ink-3">
-                    {tr(
-                      '粘贴团队提供的配置链接，一次设置 Rocket.Chat、Azure DevOps、AI、模板和更新源。配置可以放在 Git 仓库中，但必须使用本机无需登录即可访问的 rcx.workspace.json Raw 地址。',
-                      'Paste your team config URL to set up Rocket.Chat, Azure DevOps, AI, templates, and update sources together. It can live in Git as a directly reachable raw rcx.workspace.json URL.',
-                      locale,
-                    )}
+                    {t('auth.firstRun.setup.joinTeamDesc')}
+                    {null}
                   </p>
 
                   <label className="mt-6 block">
-                    <span className="mb-1.5 block text-sm text-ink-2">{tr('团队配置地址', 'Team Config URL', locale)}</span>
+                    <span className="mb-1.5 block text-sm text-ink-2">{t('auth.firstRun.setup.configUrlLabel')}</span>
                     <input
                       value={url}
                       onChange={(event) => {
@@ -806,14 +645,14 @@ export default function FirstRunPage({
                     className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
-                    {busy ? tr('正在读取团队配置…', 'Loading Team Config…', locale) : tr('读取团队配置', 'Load Team Config', locale)}
+                    {busy ? t('auth.firstRun.setup.loadingConfig') : t('auth.firstRun.setup.loadConfig')}
                   </button>
 
                   <button
                     onClick={() => fileRef.current?.click()}
                     className="mt-2 flex h-9 w-full items-center justify-center gap-2 text-sm text-ink-3 hover:text-primary"
                   >
-                    <FileUp size={14} /> {tr('从本地选择 rcx.workspace.json', 'Choose local rcx.workspace.json', locale)}
+                    <FileUp size={14} /> {t('auth.firstRun.setup.pickLocalFile')}
                   </button>
                   <input
                     ref={fileRef}
@@ -827,14 +666,10 @@ export default function FirstRunPage({
                   />
 
                   <div className="mt-7 border-t border-line pt-5 text-center text-xs text-ink-3">
-                    {tr('没有团队配置？', 'No team config URL?', locale)}{' '}
-                    <button type="button" onClick={continuePersonal} className="text-primary hover:underline">
-                      {tr('手动连接服务器', 'Connect server manually', locale)}
-                    </button>
+                    {t('auth.firstRun.setup.noConfig')}{' '}
+                    <button type="button" onClick={continuePersonal} className="text-primary hover:underline">{t('auth.firstRun.setup.manualConnect')}</button>
                     {' · '}
-                    <button type="button" onClick={continueLocal} className="font-medium text-primary hover:underline">
-                      {tr('暂不连接，直接本地使用', 'Use locally without connecting', locale)}
-                    </button>
+                    <button type="button" onClick={continueLocal} className="font-medium text-primary hover:underline">{t('auth.firstRun.useLocally')}</button>
                   </div>
                 </>
               ) : (
@@ -842,15 +677,10 @@ export default function FirstRunPage({
                   <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-success/15 text-success">
                     <Check size={22} />
                   </div>
-                  <h2 className="mt-4 text-xl font-semibold text-ink">
-                    {tr(`加入「${config.name || '团队工作区'}」`, `Join “${config.name || 'Team Workspace'}”`, locale)}
-                  </h2>
+                  <h2 className="mt-4 text-xl font-semibold text-ink">{t('auth.firstRun.setup.joinNamedWorkspace', { name: config.name || t('auth.workspace.defaultTitle') })}</h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-ink-3">
-                    {tr(
-                      '以下非敏感配置将写入本机。继续前会验证 Rocket.Chat；ADO、AI 和模板在填写个人凭据后验证。用户名、密码、PAT 和 AI 密钥不会从团队配置读取。',
-                      'Only non-sensitive endpoints will be stored on this device. Rocket.Chat is checked next; ADO, AI, and template credentials stay separate. Passwords, PATs, and API keys are never imported here.',
-                      locale,
-                    )}
+                    {t('auth.firstRun.setup.applyHint')}
+                    {null}
                   </p>
 
                   <div className="mt-5 divide-y divide-line rounded-lg border border-line">
@@ -871,7 +701,7 @@ export default function FirstRunPage({
                     className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {busy ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
-                    {busy ? tr('正在验证 Rocket.Chat…', 'Checking Rocket.Chat…', locale) : tr('确认并继续', 'Confirm & Continue', locale)}
+                    {busy ? t('auth.firstRun.setup.verifyingRocketChat') : t('auth.firstRun.setup.confirmAndContinue')}
                   </button>
                   <button
                     onClick={() => {
@@ -880,7 +710,7 @@ export default function FirstRunPage({
                     }}
                     className="mt-2 h-9 text-sm text-ink-3 hover:text-primary"
                   >
-                    {tr('返回修改地址', 'Change Config URL', locale)}
+                    {t('auth.firstRun.setup.changeUrl')}
                   </button>
                 </>
               )}

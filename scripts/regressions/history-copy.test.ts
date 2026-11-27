@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import type { RcMessage } from '../../packages/rc-client/src/index';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   COPY_ALL_CAP,
   COPY_LIMITS,
@@ -149,12 +151,18 @@ test('入口：加人后的提示带「带过来」，群信息面板有复制�
 
   // 加人（DM）后给一个把历史带过来的入口，而不是只提示「记录还在」
   assert.match(chatStore, /openHistoryCopy\(\{ sourceRid: rid, targetRid \}\)/);
-  assert.match(chatStore, /action: \{ label: '带过来'/);
-  assert.match(roomInfo, /复制聊天记录到其他会话/);
+  assert.match(chatStore, /action: \{ label: t\('chat\.store\.bringHistoryAction'\)/);
+  assert.equal(zhCN['chat.store.bringHistoryAction'], '带过来');
+  assert.ok(enUS['chat.store.bringHistoryAction'].length > 0);
+  assert.match(roomInfo, /t\('panels\.roomInfo\.copyHistory'\)/);
+  assert.equal(zhCN['panels.roomInfo.copyHistory'], '复制聊天记录到其他会话');
+  assert.ok(enUS['panels.roomInfo.copyHistory'].length > 0);
   assert.match(roomInfo, /openHistoryCopy\(\{ sourceRid: rid \}\)/);
   // 弹窗挂到应用根部，任何触发点都能唤起
   assert.match(app, /<HistoryCopyDialogHost \/>/);
   // 三档都在，且说明「复制不是搬移」
   assert.match(dialog, /COPY_LIMITS\.map/);
-  assert.match(dialog, /这是转发副本/);
+  assert.match(dialog, /t\('chat\.historyCopy\.note'\)/);
+  assert.match(zhCN['chat.historyCopy.note'], /这是转发副本/);
+  assert.ok(enUS['chat.historyCopy.note'].length > 0);
 });

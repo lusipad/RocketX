@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, Download, Loader2, Maximize2, Minus, Plus, ScanText, X } from 'lucide-react';
+import { useT } from '../i18n';
 import AuthImage from './AuthImage';
 import { saveFile } from '../lib/download';
 import type { DownloadSourceV1 } from '../lib/downloadHistory';
@@ -39,6 +40,7 @@ export default function ImageLightbox({
   source?: DownloadSourceV1;
   onClose: () => void;
 }) {
+  const t = useT();
   // zoom = null 表示「适应窗口」（默认）；数值表示手动缩放倍数
   const [zoom, setZoom] = useState<number | null>(null);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -91,14 +93,14 @@ export default function ImageLightbox({
 
   const onDownload = async () => {
     if (!path.trim()) {
-      toast.error('下载链接缺失', '下载失败');
+      toast.error(t('chat.lightbox.missingUrl'), t('chat.preview.downloadFailed'));
       return;
     }
 
     try {
       await saveFile(path, fileName, source);
     } catch (error) {
-      toast.error(error, '下载失败');
+      toast.error(error, t('chat.preview.downloadFailed'));
     }
   };
 
@@ -109,7 +111,7 @@ export default function ImageLightbox({
     try {
       const result = await recognizeImageBlob(await rest.fetchFile(path));
       setOcr(result);
-      if (!result.words.length) setOcrError('图片中未识别到文字');
+      if (!result.words.length) setOcrError(t('chat.lightbox.ocrNoText'));
     } catch (error) {
       setOcr(null);
       setOcrError(error instanceof Error ? error.message : String(error));
@@ -147,7 +149,7 @@ export default function ImageLightbox({
 
   const btn =
     'flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-white transition hover:bg-white/25';
-  const ocrButtonLabel = ocr ? '重新识别文字' : '识别图片文字';
+  const ocrButtonLabel = ocr ? t('chat.lightbox.ocrRerun') : t('chat.lightbox.ocrRun');
 
   return createPortal(
     <div
@@ -167,30 +169,30 @@ export default function ImageLightbox({
         onClick={(e) => e.stopPropagation()}
       >
         <span className="mr-1 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white/80">
-          {zoom === null ? '适应窗口' : `${Math.round(zoom * 100)}%`}
+          {zoom === null ? t('chat.lightbox.fit') : `${Math.round(zoom * 100)}%`}
         </span>
         <button
-          title="缩小 (-)"
-          aria-label="缩小 (-)"
+          title={t('chat.lightbox.zoomOut')}
+          aria-label={t('chat.lightbox.zoomOut')}
           className={btn}
           onClick={() => setZoom((z) => Math.max((z ?? 1) / 1.25, MIN_ZOOM))}
         >
           <Minus size={16} />
         </button>
         <button
-          title="放大 (+)"
-          aria-label="放大 (+)"
+          title={t('chat.lightbox.zoomIn')}
+          aria-label={t('chat.lightbox.zoomIn')}
           className={btn}
           onClick={() => setZoom((z) => Math.min((z ?? 1) * 1.25, MAX_ZOOM))}
         >
           <Plus size={16} />
         </button>
-        <button title="适应窗口 (0)" aria-label="适应窗口 (0)" className={btn} onClick={fit}>
+        <button title={t('chat.lightbox.fitShortcut')} aria-label={t('chat.lightbox.fitShortcut')} className={btn} onClick={fit}>
           <Maximize2 size={14} />
         </button>
         <button
-          title="下载"
-          aria-label="下载"
+          title={t('chat.preview.download')}
+          aria-label={t('chat.preview.download')}
           className={btn}
           onClick={() => void onDownload()}
         >
@@ -209,18 +211,18 @@ export default function ImageLightbox({
         )}
         {ocr?.text && (
           <button
-            title="复制全部识别文字"
-            aria-label="复制全部识别文字"
+            title={t('chat.lightbox.copyAllOcr')}
+            aria-label={t('chat.lightbox.copyAllOcr')}
             className={btn}
             onClick={() => void navigator.clipboard.writeText(ocr.text).then(
-              () => toast.success('已复制识别文字'),
-              (error) => toast.error(error, '复制失败'),
+              () => toast.success(t('chat.lightbox.ocrCopied')),
+              (error) => toast.error(error, t('chat.common.copyFailed')),
             )}
           >
             <Copy size={16} />
           </button>
         )}
-        <button title="关闭 (Esc)" aria-label="关闭 (Esc)" className={btn} onClick={onClose}>
+        <button title={t('chat.lightbox.closeShortcut')} aria-label={t('chat.lightbox.closeShortcut')} className={btn} onClick={onClose}>
           <X size={16} />
         </button>
       </div>
@@ -260,7 +262,7 @@ export default function ImageLightbox({
             path={path}
             alt={fileName}
             className="block h-full w-full select-none rounded-md object-contain"
-            fallback={<div className="text-sm text-gray-600">图片加载失败</div>}
+            fallback={<div className="text-sm text-gray-600">{t('chat.lightbox.loadFailed')}</div>}
             onLoad={(event) => {
               const image = event.currentTarget;
               if (image.naturalWidth > 0 && image.naturalHeight > 0) {
@@ -270,7 +272,7 @@ export default function ImageLightbox({
           />
         </div>
         {ocr && (
-          <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-md" aria-label="图片识别文字">
+          <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-md" aria-label={t('chat.lightbox.ocrOverlayAria')}>
             {ocr.words.map((word, index) => (
               <span
                 key={`${index}-${word.text}`}
@@ -290,10 +292,14 @@ export default function ImageLightbox({
           <span className="rounded bg-red-950/70 px-3 py-1.5 text-red-100">{ocrError}</span>
         ) : ocr ? (
           <span>
-            已用 {ocrBackendLabel(ocr.backend)} 识别 {ocr.words.length} 处文字（{ocr.language}） · 拖选复制 · Alt+拖拽平移
+            {t('chat.lightbox.ocrResultHint', {
+              backend: ocrBackendLabel(ocr.backend),
+              count: ocr.words.length,
+              language: ocr.language,
+            })}
           </span>
         ) : (
-          <span>滚轮缩放 · 拖拽平移 · 点击空白或 Esc 关闭</span>
+          <span>{t('chat.lightbox.footerHint')}</span>
         )}
       </div>
     </div>,

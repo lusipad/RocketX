@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Stdio},
@@ -8,10 +8,12 @@ use std::{
         Arc, Mutex,
     },
     thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
+use tauri_plugin_http::reqwest;
 
 #[path = "pi_bundle.rs"]
 mod bundle;
@@ -55,10 +57,114 @@ struct ManagedPiProcess {
     runtime_source: CodexRuntimeSource,
     managed_skill_roots: Vec<String>,
     attachments_dir: PathBuf,
+    config_fingerprint: Mutex<String>,
+    manual_path: Mutex<Option<String>>,
     child: Arc<Mutex<Child>>,
     stdin: Arc<Mutex<ChildStdin>>,
     stopping: Arc<AtomicBool>,
     recent_stderr: Arc<Mutex<Vec<String>>>,
+}
+
+pub(crate) fn compute_pi_runtime_fingerprint(
+    config: &PiConfigRecord,
+    mcp_secrets: &HashMap<String, HashMap<String, String>>,
+) -> String {
+    let mut server_keys: Vec<(&String, &HashMap<String, String>)> = mcp_secrets.iter().collect();
+    server_keys.sort_by(|a, b| a.0.cmp(b.0));
+    let canonical_secrets: Vec<(String, Vec<(String, String)>)> = server_keys
+        .into_iter()
+        .map(|(srv, env)| {
+            let mut pairs: Vec<(String, String)> =
+                env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            pairs.sort_by(|a, b| a.0.cmp(&b.0));
+            (srv.clone(), pairs)
+        })
+        .collect();
+    let secrets_json = serde_json::to_string(&canonical_secrets).unwrap_or_default();
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        config.provider,
+        config.api_protocol,
+        config.base_url,
+        config.api_key.trim(),
+        config.default_model,
+        config.manual_path.as_deref().unwrap_or(""),
+        secrets_json
+    )
+}
+
+pub(crate) fn broadcast_pi_runtime_reload(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<PiAppServerState>() else {
+        return;
+    };
+    let Ok(config_path) = pi_config_path(app) else {
+        return;
+    };
+    let config = load_pi_config_effective(&config_path);
+    let mcp_secrets = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| crate::mcp_registry::load_enabled_secret_envs(&dir))
+        .unwrap_or_default();
+    let next_fingerprint = compute_pi_runtime_fingerprint(&config, &mcp_secrets);
+
+    let notification = serde_json::json!({
+        "method": "rocketx/runtimeConfigUpdated",
+        "params": {
+            "apiKey": config.api_key.trim(),
+            "mcpSecrets": mcp_secrets,
+        }
+    });
+    let Ok(payload_bytes) = encode_json_line(notification) else {
+        return;
+    };
+
+    let snapshot: Vec<(String, Arc<ManagedPiProcess>)> = {
+        let Ok(mut map) = state.processes.lock() else {
+            return;
+        };
+        map.retain(|_, proc| {
+            proc.child
+                .lock()
+                .ok()
+                .and_then(|mut c| c.try_wait().ok())
+                .is_some_and(|s| s.is_none())
+        });
+        map.iter()
+            .map(|(id, p)| (id.clone(), Arc::clone(p)))
+            .collect()
+    };
+
+    for (process_id, proc) in snapshot {
+        let manual_changed = proc
+            .manual_path
+            .lock()
+            .ok()
+            .is_some_and(|guard| *guard != config.manual_path);
+        let notify_ok = !manual_changed
+            && proc.stdin.lock().ok().is_some_and(|mut stdin| {
+                stdin
+                    .write_all(&payload_bytes)
+                    .and_then(|_| stdin.flush())
+                    .is_ok()
+            });
+
+        if notify_ok {
+            if let Ok(mut fp) = proc.config_fingerprint.lock() {
+                *fp = next_fingerprint.clone();
+            }
+        } else {
+            if let Ok(mut map) = state.processes.lock() {
+                map.remove(&process_id);
+            }
+            proc.stopping.store(true, Ordering::Release);
+            if let Ok(mut child) = proc.child.lock() {
+                let _ = kill_and_wait(&mut child);
+            }
+            let _ = std::fs::remove_dir_all(&proc.attachments_dir);
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -82,6 +188,8 @@ pub struct PiExitEvent {
 pub struct PiConfigRecord {
     #[serde(default = "default_pi_provider")]
     pub provider: String,
+    #[serde(default = "default_pi_api_protocol")]
+    pub api_protocol: String,
     #[serde(default = "default_pi_base_url")]
     pub base_url: String,
     #[serde(default)]
@@ -98,6 +206,7 @@ impl Default for PiConfigRecord {
     fn default() -> Self {
         Self {
             provider: default_pi_provider(),
+            api_protocol: default_pi_api_protocol(),
             base_url: default_pi_base_url(),
             api_key: String::new(),
             default_model: default_pi_model(),
@@ -109,6 +218,10 @@ impl Default for PiConfigRecord {
 
 fn default_pi_provider() -> String {
     "deepseek".to_string()
+}
+
+fn default_pi_api_protocol() -> String {
+    "auto".to_string()
 }
 
 fn default_pi_base_url() -> String {
@@ -123,6 +236,7 @@ fn default_pi_model() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct PiConfigWriteInput {
     pub provider: Option<String>,
+    pub api_protocol: Option<String>,
     pub base_url: Option<String>,
     /// `None` preserves existing key; `Some("")` clears key; `Some(v)` updates key.
     pub api_key: Option<String>,
@@ -135,6 +249,7 @@ pub struct PiConfigWriteInput {
 #[serde(rename_all = "camelCase")]
 pub struct PiConfigView {
     pub provider: String,
+    pub api_protocol: String,
     pub base_url: String,
     pub has_api_key: bool,
     pub api_key_hint: Option<String>,
@@ -175,6 +290,19 @@ fn normalize_pi_provider(raw: &str) -> &'static str {
         "openrouter" => "openrouter",
         "google" => "google",
         _ => "deepseek",
+    }
+}
+
+fn normalize_pi_api_protocol(raw: &str) -> &'static str {
+    match raw.trim() {
+        "openai-responses" => "openai-responses",
+        "openai-completions" => "openai-completions",
+        "anthropic-messages" => "anthropic-messages",
+        "google-generative-ai" => "google-generative-ai",
+        "azure-openai-responses" => "azure-openai-responses",
+        "mistral-conversations" => "mistral-conversations",
+        "bedrock-converse-stream" => "bedrock-converse-stream",
+        _ => "auto",
     }
 }
 
@@ -230,8 +358,48 @@ fn pi_data_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(root)
 }
 
+const PI_KEYRING_SERVICE: &str = "com.lusipad.rocketx.pi-provider";
+
 fn pi_config_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(pi_data_root(app)?.join(PI_CONFIG_FILENAME))
+}
+
+fn pi_keyring_entry(provider: &str) -> Result<keyring::Entry, String> {
+    let service = crate::credential_scope::service_name(PI_KEYRING_SERVICE)?;
+    let normalized = normalize_pi_provider(provider);
+    keyring::Entry::new(&service, normalized)
+        .map_err(|error| format!("无法初始化 Pi 凭据保险库：{error}"))
+}
+
+fn read_pi_provider_key(provider: &str) -> Result<Option<String>, String> {
+    let entry = pi_keyring_entry(provider)?;
+    match entry.get_password() {
+        Ok(secret) => {
+            let trimmed = secret.trim().to_string();
+            Ok((!trimmed.is_empty()).then_some(trimmed))
+        }
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("无法读取系统密钥链中的 Pi API Key：{error}")),
+    }
+}
+
+fn delete_pi_provider_key(provider: &str) -> Result<(), String> {
+    let entry = pi_keyring_entry(provider)?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(format!("无法清除系统密钥链中的 Pi API Key：{error}")),
+    }
+}
+
+fn save_pi_provider_key(provider: &str, api_key: &str) -> Result<(), String> {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        return delete_pi_provider_key(provider);
+    }
+    let entry = pi_keyring_entry(provider)?;
+    entry
+        .set_password(trimmed)
+        .map_err(|error| format!("无法将 Pi API Key 保存到系统密钥链：{error}"))
 }
 
 fn read_pi_config_from_file(path: &Path) -> PiConfigRecord {
@@ -242,6 +410,7 @@ fn read_pi_config_from_file(path: &Path) -> PiConfigRecord {
         return PiConfigRecord::default();
     };
     parsed.provider = normalize_pi_provider(&parsed.provider).to_string();
+    parsed.api_protocol = normalize_pi_api_protocol(&parsed.api_protocol).to_string();
     if parsed.base_url.trim().is_empty() {
         parsed.base_url = default_base_url_for_provider(&parsed.provider).to_string();
     }
@@ -261,10 +430,36 @@ fn write_pi_config_to_file(path: &Path, record: &PiConfigRecord) -> Result<(), S
     std::fs::write(path, bytes).map_err(|error| format!("无法保存 Pi 配置：{error}"))
 }
 
+fn load_pi_config_effective(path: &Path) -> PiConfigRecord {
+    let mut record = read_pi_config_from_file(path);
+    let legacy_key = record.api_key.trim().to_string();
+    if !legacy_key.is_empty() {
+        if save_pi_provider_key(&record.provider, &legacy_key).is_ok() {
+            let mut scrubbed = record.clone();
+            scrubbed.api_key.clear();
+            let _ = write_pi_config_to_file(path, &scrubbed);
+        }
+        record.api_key = legacy_key;
+        return record;
+    }
+    if let Ok(Some(secret)) = read_pi_provider_key(&record.provider) {
+        record.api_key = secret;
+    }
+    record
+}
+
+fn save_pi_config_effective(path: &Path, record: &PiConfigRecord) -> Result<(), String> {
+    save_pi_provider_key(&record.provider, &record.api_key)?;
+    let mut scrubbed = record.clone();
+    scrubbed.api_key.clear();
+    write_pi_config_to_file(path, &scrubbed)
+}
+
 fn config_to_view(record: &PiConfigRecord) -> PiConfigView {
     let hint = mask_api_key(&record.api_key);
     PiConfigView {
         provider: record.provider.clone(),
+        api_protocol: normalize_pi_api_protocol(&record.api_protocol).to_string(),
         base_url: record.base_url.clone(),
         has_api_key: hint.is_some(),
         api_key_hint: hint,
@@ -277,7 +472,7 @@ fn config_to_view(record: &PiConfigRecord) -> PiConfigView {
 #[tauri::command]
 pub fn pi_config_read(app: tauri::AppHandle) -> Result<PiConfigView, String> {
     let path = pi_config_path(&app)?;
-    Ok(config_to_view(&read_pi_config_from_file(&path)))
+    Ok(config_to_view(&load_pi_config_effective(&path)))
 }
 
 #[tauri::command]
@@ -286,11 +481,12 @@ pub fn pi_config_write(
     input: PiConfigWriteInput,
 ) -> Result<PiConfigView, String> {
     let path = pi_config_path(&app)?;
-    let mut current = read_pi_config_from_file(&path);
+    let mut current = load_pi_config_effective(&path);
+    let mut provider_changed = false;
 
     if let Some(provider) = input.provider {
         let normalized = normalize_pi_provider(&provider).to_string();
-        let provider_changed = normalized != current.provider;
+        provider_changed = normalized != current.provider;
         current.provider = normalized;
         if provider_changed && input.base_url.is_none() {
             current.base_url = default_base_url_for_provider(&current.provider).to_string();
@@ -298,6 +494,19 @@ pub fn pi_config_write(
         if provider_changed && input.default_model.is_none() {
             current.default_model = default_model_for_provider(&current.provider).to_string();
         }
+    }
+
+    if let Some(api_protocol) = input.api_protocol {
+        current.api_protocol = normalize_pi_api_protocol(&api_protocol).to_string();
+    } else if provider_changed {
+        current.api_protocol = default_pi_api_protocol();
+    }
+
+    if provider_changed && input.api_key.is_none() {
+        current.api_key = read_pi_provider_key(&current.provider)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
     }
 
     if let Some(base_url) = input.base_url {
@@ -354,7 +563,8 @@ pub fn pi_config_write(
         }
     }
 
-    write_pi_config_to_file(&path, &current)?;
+    save_pi_config_effective(&path, &current)?;
+    broadcast_pi_runtime_reload(&app);
     Ok(config_to_view(&current))
 }
 
@@ -518,46 +728,44 @@ fn collect_pi_package_candidates(
         ));
     }
 
-    #[cfg(debug_assertions)]
-    {
-        // Source and development staging directories must not mask missing installed resources.
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                candidates.push((exe_dir.join("pi-runtime"), CodexRuntimeSource::Bundled));
-                // exe_dir = apps/desktop/src-tauri/target/release -> ../../../.. = repo root
-                let mut ancestor = Some(exe_dir);
-                for _ in 0..6 {
-                    if let Some(dir) = ancestor {
-                        let repo_pi = dir.join("apps").join("pi-runtime");
-                        if repo_pi.is_dir() {
-                            candidates.push((repo_pi, CodexRuntimeSource::Bundled));
-                        }
-                        let staged_pi = dir.join("pi-runtime");
-                        if staged_pi.is_dir() {
-                            candidates.push((staged_pi, CodexRuntimeSource::Bundled));
-                        }
-                        ancestor = dir.parent();
+    // Local build / workspace candidates (supports both `tauri dev` and `target/release/rocketx.exe`)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push((exe_dir.join("pi-runtime"), CodexRuntimeSource::Bundled));
+            // exe_dir = apps/desktop/src-tauri/target/release -> ../../../.. = repo root
+            let mut ancestor = Some(exe_dir);
+            for _ in 0..6 {
+                if let Some(dir) = ancestor {
+                    let repo_pi = dir.join("apps").join("pi-runtime");
+                    if repo_pi.is_dir() {
+                        candidates.push((repo_pi, CodexRuntimeSource::Bundled));
                     }
+                    let staged_pi = dir.join("pi-runtime");
+                    if staged_pi.is_dir() {
+                        candidates.push((staged_pi, CodexRuntimeSource::Bundled));
+                    }
+                    ancestor = dir.parent();
                 }
             }
         }
+    }
 
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    candidates.push((
+        manifest_dir.join("target").join("pi-runtime"),
+        CodexRuntimeSource::Bundled,
+    ));
+    if let Some(repo_root) = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    {
         candidates.push((
-            manifest_dir.join("target").join("pi-runtime"),
+            repo_root.join("apps").join("pi-runtime"),
             CodexRuntimeSource::Bundled,
         ));
-        if let Some(repo_root) = manifest_dir
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-        {
-            candidates.push((
-                repo_root.join("apps").join("pi-runtime"),
-                CodexRuntimeSource::Bundled,
-            ));
-        }
     }
+
     // Global npm / pnpm installations
     #[cfg(windows)]
     {
@@ -626,33 +834,30 @@ fn resolve_pi_bridge_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         candidates.push(resource_dir.join(PI_BRIDGE_FILENAME));
         candidates.push(resource_dir.join("pi-runtime").join(PI_BRIDGE_FILENAME));
     }
-    #[cfg(debug_assertions)]
-    {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                candidates.push(exe_dir.join(PI_BRIDGE_FILENAME));
-                let mut ancestor = Some(exe_dir);
-                for _ in 0..6 {
-                    if let Some(dir) = ancestor {
-                        candidates.push(
-                            dir.join("apps")
-                                .join("desktop")
-                                .join("src-tauri")
-                                .join("src")
-                                .join(PI_BRIDGE_FILENAME),
-                        );
-                        candidates.push(dir.join("src").join(PI_BRIDGE_FILENAME));
-                        ancestor = dir.parent();
-                    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join(PI_BRIDGE_FILENAME));
+            let mut ancestor = Some(exe_dir);
+            for _ in 0..6 {
+                if let Some(dir) = ancestor {
+                    candidates.push(
+                        dir.join("apps")
+                            .join("desktop")
+                            .join("src-tauri")
+                            .join("src")
+                            .join(PI_BRIDGE_FILENAME),
+                    );
+                    candidates.push(dir.join("src").join(PI_BRIDGE_FILENAME));
+                    ancestor = dir.parent();
                 }
             }
         }
-        candidates.push(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join(PI_BRIDGE_FILENAME),
-        );
     }
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join(PI_BRIDGE_FILENAME),
+    );
     for candidate in candidates {
         if candidate.is_file() {
             let canonical = std::fs::canonicalize(&candidate).unwrap_or(candidate);
@@ -724,6 +929,12 @@ fn resolve_pi_skill_roots(app: &tauri::AppHandle) -> Result<Vec<String>, String>
         );
     }
 
+    // Always include user/Dream-evolved skills under app local data so Pi loads them natively.
+    let user_skills = pi_data_root(app)?.join("user-skills");
+    std::fs::create_dir_all(&user_skills)
+        .map_err(|error| format!("无法准备 Pi 用户 Skill 目录：{error}"))?;
+    push_if_dir(user_skills);
+
     if found.is_empty() {
         // Create an empty fallback skill root under Pi data dir so AppServerController contract holds.
         let fallback = pi_data_root(app)?.join("skills");
@@ -758,7 +969,7 @@ fn probe_pi_runtime_blocking(
     manual_override: Option<String>,
 ) -> PiRuntimeProbe {
     let config = pi_config_path(app)
-        .map(|p| read_pi_config_from_file(&p))
+        .map(|p| load_pi_config_effective(&p))
         .unwrap_or_default();
     let effective_manual = manual_override
         .as_deref()
@@ -830,6 +1041,895 @@ fn probe_pi_runtime_blocking(
             reason: Some(reason),
         },
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NormalizedEndpointHint {
+    normalized_base_url: String,
+    preferred_protocol: &'static str,
+    candidate_protocols: Vec<&'static str>,
+    normalized_note: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeOutcome {
+    Verified,
+    SupportedNeedsAuthOrModel,
+    Unsupported,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiEndpointProbeInput {
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub provider: Option<String>,
+    pub api_protocol: Option<String>,
+    pub preferred_model: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiProtocolProbeDetail {
+    pub protocol: String,
+    pub status: String,
+    pub http_status: Option<u16>,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiEndpointProbeResult {
+    pub ok: bool,
+    pub normalized_base_url: String,
+    pub detected_protocol: String,
+    pub supported_protocols: Vec<String>,
+    pub probe_details: Vec<PiProtocolProbeDetail>,
+    pub discovered_models: Vec<String>,
+    pub suggested_model: Option<String>,
+    pub latency_ms: u64,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiLocalGatewayCandidate {
+    pub id: String,
+    pub label: String,
+    pub base_url: String,
+    pub protocol: String,
+    pub models: Vec<String>,
+    pub latency_ms: u64,
+}
+
+fn is_azure_openai_host(lower_url: &str) -> bool {
+    lower_url.contains(".openai.azure.com")
+        || lower_url.contains(".cognitiveservices.azure.com")
+        || lower_url.contains(".ai.azure.com")
+}
+
+fn strip_case_insensitive_suffix(value: &str, suffix: &str) -> Option<String> {
+    let trimmed = value.trim().trim_end_matches('/');
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.ends_with(suffix) {
+        let cut = trimmed.len() - suffix.len();
+        Some(trimmed[..cut].trim_end_matches('/').to_string())
+    } else {
+        None
+    }
+}
+
+fn normalize_endpoint_input(
+    raw_base_url: &str,
+    api_key: &str,
+    provider_hint: Option<&str>,
+) -> NormalizedEndpointHint {
+    let trimmed_key = api_key.trim();
+    let provider = provider_hint
+        .map(normalize_pi_provider)
+        .unwrap_or("custom-openai");
+    let raw_trimmed = raw_base_url.trim().trim_end_matches('/');
+    let mut url = if raw_trimmed.is_empty() {
+        default_base_url_for_provider(provider).to_string()
+    } else {
+        raw_trimmed.to_string()
+    };
+    let mut note: Option<String> = None;
+    let mut preferred: Option<&'static str> = None;
+
+    if let Some(stripped) = strip_case_insensitive_suffix(&url, "/responses") {
+        url = stripped;
+        preferred = Some(if is_azure_openai_host(&url.to_ascii_lowercase()) {
+            "azure-openai-responses"
+        } else {
+            "openai-responses"
+        });
+        note = Some("已自动移除尾部 /responses 路径".to_string());
+    } else if let Some(stripped) = strip_case_insensitive_suffix(&url, "/chat/completions") {
+        url = stripped;
+        preferred = Some("openai-completions");
+        note = Some("已自动移除尾部 /chat/completions 路径".to_string());
+    } else if let Some(stripped) = strip_case_insensitive_suffix(&url, "/v1/messages") {
+        url = stripped;
+        preferred = Some("anthropic-messages");
+        note = Some("已自动移除尾部 /v1/messages 路径".to_string());
+    } else if let Some(stripped) = strip_case_insensitive_suffix(&url, "/messages") {
+        url = stripped;
+        preferred = Some("anthropic-messages");
+        note = Some("已自动移除尾部 /messages 路径".to_string());
+    }
+
+    let lower = url.to_ascii_lowercase();
+    if is_azure_openai_host(&lower) {
+        if let Ok(mut parsed) = reqwest::Url::parse(&url) {
+            let path = parsed.path().trim_end_matches('/');
+            if path.is_empty() || path == "/openai" {
+                parsed.set_path("/openai/v1");
+            }
+            parsed.set_query(None);
+            url = parsed.to_string().trim_end_matches('/').to_string();
+        }
+        preferred.get_or_insert("azure-openai-responses");
+    } else if lower.contains("generativelanguage.googleapis.com") {
+        if lower.contains("/openai") {
+            preferred.get_or_insert("openai-completions");
+        } else {
+            if !lower.contains("/v1beta") && !lower.contains("/v1alpha") && !lower.ends_with("/v1")
+            {
+                url = format!("{url}/v1beta");
+            }
+            preferred.get_or_insert("google-generative-ai");
+        }
+    } else if lower.contains("api.anthropic.com") || trimmed_key.starts_with("sk-ant-") {
+        if lower.contains("api.anthropic.com") {
+            if let Some(root) = strip_case_insensitive_suffix(&url, "/v1") {
+                url = root;
+            }
+        }
+        preferred.get_or_insert("anthropic-messages");
+    } else if lower.contains("api.openai.com") {
+        preferred.get_or_insert("openai-responses");
+    } else if lower.contains("api.mistral.ai") {
+        preferred.get_or_insert("mistral-conversations");
+    } else if trimmed_key.starts_with("AIza") {
+        preferred.get_or_insert("google-generative-ai");
+    } else if lower.contains(":11434") || provider == "ollama" {
+        preferred.get_or_insert("openai-completions");
+    }
+
+    let resolved_preferred = preferred.unwrap_or(match provider {
+        "openai" => "openai-responses",
+        "anthropic" => "anthropic-messages",
+        _ => "openai-responses",
+    });
+
+    let mut candidates = Vec::new();
+    let push_unique = |list: &mut Vec<&'static str>, item: &'static str| {
+        if !list.contains(&item) {
+            list.push(item);
+        }
+    };
+    push_unique(&mut candidates, resolved_preferred);
+    for proto in [
+        "openai-responses",
+        "openai-completions",
+        "anthropic-messages",
+        "google-generative-ai",
+    ] {
+        push_unique(&mut candidates, proto);
+    }
+    if is_azure_openai_host(&url.to_ascii_lowercase()) {
+        push_unique(&mut candidates, "azure-openai-responses");
+    }
+
+    NormalizedEndpointHint {
+        normalized_base_url: url,
+        preferred_protocol: resolved_preferred,
+        candidate_protocols: candidates,
+        normalized_note: note,
+    }
+}
+
+fn looks_like_route_or_html_error(body_lower: &str) -> bool {
+    body_lower.contains("<html")
+        || body_lower.contains("<!doctype html")
+        || body_lower.contains("404 page not found")
+        || body_lower.contains("cannot post ")
+        || body_lower.contains("cannot get ")
+        || body_lower.contains("route not found")
+        || body_lower.contains("unknown path")
+        || body_lower.contains("unsupported endpoint")
+        || body_lower.contains("no route matches")
+        || body_lower.contains("does not exist")
+        || body_lower.contains("not implemented")
+        || body_lower.contains("invalid url")
+}
+
+fn classify_probe_http_response(_protocol: &str, status: u16, body: &str) -> ProbeOutcome {
+    let lower = body.trim().to_ascii_lowercase();
+    let looks_html_or_route = looks_like_route_or_html_error(&lower);
+    match status {
+        200..=299 => {
+            if looks_html_or_route {
+                ProbeOutcome::Unsupported
+            } else {
+                ProbeOutcome::Verified
+            }
+        }
+        401 | 403 => {
+            if looks_html_or_route {
+                ProbeOutcome::Unsupported
+            } else {
+                ProbeOutcome::SupportedNeedsAuthOrModel
+            }
+        }
+        400 | 422 => {
+            if looks_html_or_route
+                || lower.contains("404")
+                || lower.contains("not found") && !lower.contains("model")
+            {
+                ProbeOutcome::Unsupported
+            } else {
+                ProbeOutcome::SupportedNeedsAuthOrModel
+            }
+        }
+        _ => ProbeOutcome::Unsupported,
+    }
+}
+
+fn build_probe_http_client(timeout_ms: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|error| format!("无法初始化探测 HTTP 客户端：{error}"))
+}
+
+fn extract_models_from_json(payload: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |raw: &str| {
+        let clean = raw.trim().strip_prefix("models/").unwrap_or(raw.trim());
+        if !clean.is_empty() && seen.insert(clean.to_string()) {
+            out.push(clean.to_string());
+        }
+    };
+
+    if let Some(arr) = payload.get("data").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                push(id);
+            }
+        }
+    }
+    if let Some(arr) = payload.get("models").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(name) = item
+                .get("name")
+                .or_else(|| item.get("id"))
+                .or_else(|| item.get("model"))
+                .and_then(|v| v.as_str())
+            {
+                push(name);
+            }
+        }
+    }
+    out.truncate(60);
+    out
+}
+
+fn url_origin(raw_url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(raw_url).ok()?;
+    let host = parsed.host_str()?;
+    let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+    Some(format!("{}://{}{}", parsed.scheme(), host, port))
+}
+
+fn ensure_openai_v1_base(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    if trimmed.to_ascii_lowercase().ends_with("/v1") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1")
+    }
+}
+
+fn derive_gemini_base(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(stripped) = strip_case_insensitive_suffix(trimmed, "/openai") {
+        stripped
+    } else if lower.contains("/v1beta") || lower.contains("/v1alpha") || lower.ends_with("/v1") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1beta")
+    }
+}
+
+async fn try_fetch_models_json(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &[(&'static str, String)],
+) -> Vec<String> {
+    let mut req = client.get(url);
+    for (k, v) in headers {
+        req = req.header(*k, v);
+    }
+    let Ok(resp) = req.send().await else {
+        return Vec::new();
+    };
+    if !resp.status().is_success() {
+        return Vec::new();
+    }
+    let Ok(json) = resp.json::<serde_json::Value>().await else {
+        return Vec::new();
+    };
+    extract_models_from_json(&json)
+}
+
+async fn discover_models_for_endpoint(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    preferred_protocol: &str,
+) -> (Vec<String>, Option<String>) {
+    let mut discovered = Vec::new();
+    let mut upgraded_base: Option<String> = None;
+    let bearer_headers: Vec<(&'static str, String)> = if !api_key.is_empty() {
+        vec![("authorization", format!("Bearer {api_key}"))]
+    } else {
+        Vec::new()
+    };
+
+    if preferred_protocol == "google-generative-ai"
+        || base_url
+            .to_ascii_lowercase()
+            .contains("generativelanguage.googleapis.com")
+    {
+        let gemini_base = derive_gemini_base(base_url);
+        let gemini_headers: Vec<(&'static str, String)> = if !api_key.is_empty() {
+            vec![("x-goog-api-key", api_key.to_string())]
+        } else {
+            Vec::new()
+        };
+        discovered.extend(
+            try_fetch_models_json(client, &format!("{gemini_base}/models"), &gemini_headers).await,
+        );
+    }
+
+    if discovered.is_empty()
+        && (preferred_protocol == "anthropic-messages"
+            || base_url.to_ascii_lowercase().contains("anthropic.com"))
+    {
+        let root = strip_case_insensitive_suffix(base_url, "/v1")
+            .unwrap_or_else(|| base_url.trim_end_matches('/').to_string());
+        let mut anthropic_headers = vec![("anthropic-version", "2023-06-01".to_string())];
+        if !api_key.is_empty() {
+            anthropic_headers.push(("x-api-key", api_key.to_string()));
+        }
+        discovered.extend(
+            try_fetch_models_json(client, &format!("{root}/v1/models"), &anthropic_headers).await,
+        );
+    }
+
+    if discovered.is_empty() {
+        let direct =
+            try_fetch_models_json(client, &format!("{base_url}/models"), &bearer_headers).await;
+        if !direct.is_empty() {
+            discovered.extend(direct);
+        } else if !base_url.to_ascii_lowercase().ends_with("/v1")
+            && !is_azure_openai_host(&base_url.to_ascii_lowercase())
+        {
+            let v1_base = ensure_openai_v1_base(base_url);
+            let via_v1 =
+                try_fetch_models_json(client, &format!("{v1_base}/models"), &bearer_headers).await;
+            if !via_v1.is_empty() {
+                discovered.extend(via_v1);
+                upgraded_base = Some(v1_base);
+            }
+        }
+    }
+
+    if discovered.is_empty() {
+        if let Some(origin) = url_origin(base_url) {
+            discovered
+                .extend(try_fetch_models_json(client, &format!("{origin}/api/tags"), &[]).await);
+        }
+    }
+
+    let mut seen = HashSet::new();
+    discovered.retain(|item| seen.insert(item.clone()));
+    discovered.truncate(60);
+    (discovered, upgraded_base)
+}
+
+async fn send_protocol_probe(
+    client: &reqwest::Client,
+    base_url: &str,
+    protocol: &'static str,
+    api_key: &str,
+    probe_model: &str,
+) -> (PiProtocolProbeDetail, Option<String>) {
+    let mut upgraded_base: Option<String> = None;
+
+    let (status, body) = match protocol {
+        "openai-responses" => {
+            let mut resp_url = format!("{base_url}/responses");
+            let payload = serde_json::json!({
+                "model": probe_model,
+                "input": "ping",
+                "max_output_tokens": 16,
+                "stream": false
+            });
+            let mut req = client.post(&resp_url).json(&payload);
+            if !api_key.is_empty() {
+                req = req.header("authorization", format!("Bearer {api_key}"));
+            }
+            match req.send().await {
+                Ok(mut r) => {
+                    let code = r.status().as_u16();
+                    let text = r.text().await.unwrap_or_default();
+                    if (code == 404 || code == 405)
+                        && !base_url.to_ascii_lowercase().ends_with("/v1")
+                    {
+                        let v1_base = ensure_openai_v1_base(base_url);
+                        let v1_url = format!("{v1_base}/responses");
+                        let mut v1_req = client.post(&v1_url).json(&payload);
+                        if !api_key.is_empty() {
+                            v1_req = v1_req.header("authorization", format!("Bearer {api_key}"));
+                        }
+                        if let Ok(r2) = v1_req.send().await {
+                            let code2 = r2.status().as_u16();
+                            let text2 = r2.text().await.unwrap_or_default();
+                            if !matches!(
+                                classify_probe_http_response(protocol, code2, &text2),
+                                ProbeOutcome::Unsupported
+                            ) {
+                                upgraded_base = Some(v1_base);
+                                resp_url = v1_url;
+                                let _ = resp_url;
+                                (Ok(code2), text2)
+                            } else {
+                                (Ok(code), text)
+                            }
+                        } else {
+                            (Ok(code), text)
+                        }
+                    } else {
+                        (Ok(code), text)
+                    }
+                }
+                Err(err) => (Err(err.to_string()), String::new()),
+            }
+        }
+        "openai-completions" => {
+            let payload = serde_json::json!({
+                "model": probe_model,
+                "messages": [{ "role": "user", "content": "ping" }],
+                "max_tokens": 1,
+                "stream": false
+            });
+            let mut req = client
+                .post(format!("{base_url}/chat/completions"))
+                .json(&payload);
+            if !api_key.is_empty() {
+                req = req.header("authorization", format!("Bearer {api_key}"));
+            }
+            match req.send().await {
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    let text = r.text().await.unwrap_or_default();
+                    if (code == 404 || code == 405)
+                        && !base_url.to_ascii_lowercase().ends_with("/v1")
+                    {
+                        let v1_base = ensure_openai_v1_base(base_url);
+                        let mut v1_req = client
+                            .post(format!("{v1_base}/chat/completions"))
+                            .json(&payload);
+                        if !api_key.is_empty() {
+                            v1_req = v1_req.header("authorization", format!("Bearer {api_key}"));
+                        }
+                        if let Ok(r2) = v1_req.send().await {
+                            let code2 = r2.status().as_u16();
+                            let text2 = r2.text().await.unwrap_or_default();
+                            if !matches!(
+                                classify_probe_http_response(protocol, code2, &text2),
+                                ProbeOutcome::Unsupported
+                            ) {
+                                upgraded_base = Some(v1_base);
+                                (Ok(code2), text2)
+                            } else {
+                                (Ok(code), text)
+                            }
+                        } else {
+                            (Ok(code), text)
+                        }
+                    } else {
+                        (Ok(code), text)
+                    }
+                }
+                Err(err) => (Err(err.to_string()), String::new()),
+            }
+        }
+        "anthropic-messages" => {
+            let root = strip_case_insensitive_suffix(base_url, "/v1")
+                .unwrap_or_else(|| base_url.trim_end_matches('/').to_string());
+            let payload = serde_json::json!({
+                "model": probe_model,
+                "max_tokens": 1,
+                "messages": [{ "role": "user", "content": "ping" }]
+            });
+            let mut req = client
+                .post(format!("{root}/v1/messages"))
+                .header("anthropic-version", "2023-06-01")
+                .json(&payload);
+            if !api_key.is_empty() {
+                req = req.header("x-api-key", api_key);
+            }
+            match req.send().await {
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    let text = r.text().await.unwrap_or_default();
+                    (Ok(code), text)
+                }
+                Err(err) => (Err(err.to_string()), String::new()),
+            }
+        }
+        "google-generative-ai" => {
+            let gemini_base = derive_gemini_base(base_url);
+            let mut req = client.get(format!("{gemini_base}/models"));
+            if !api_key.is_empty() {
+                req = req.header("x-goog-api-key", api_key);
+            }
+            match req.send().await {
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    let text = r.text().await.unwrap_or_default();
+                    (Ok(code), text)
+                }
+                Err(err) => (Err(err.to_string()), String::new()),
+            }
+        }
+        "azure-openai-responses" => {
+            let payload = serde_json::json!({
+                "model": probe_model,
+                "input": "ping",
+                "max_output_tokens": 16,
+                "stream": false
+            });
+            let azure_base = if base_url.to_ascii_lowercase().contains("/openai/v1") {
+                base_url.to_string()
+            } else {
+                format!("{}/openai/v1", base_url.trim_end_matches('/'))
+            };
+            let mut req = client
+                .post(format!("{azure_base}/responses?api-version=v1"))
+                .json(&payload);
+            if !api_key.is_empty() {
+                req = req.header("api-key", api_key);
+            }
+            match req.send().await {
+                Ok(r) => {
+                    let code = r.status().as_u16();
+                    let text = r.text().await.unwrap_or_default();
+                    (Ok(code), text)
+                }
+                Err(err) => (Err(err.to_string()), String::new()),
+            }
+        }
+        _ => (Err("protocol probe skipped".to_string()), String::new()),
+    };
+
+    let detail = match status {
+        Ok(code) => {
+            let outcome = classify_probe_http_response(protocol, code, &body);
+            let status_label = match outcome {
+                ProbeOutcome::Verified => "verified",
+                ProbeOutcome::SupportedNeedsAuthOrModel => "detected",
+                ProbeOutcome::Unsupported => "unsupported",
+            };
+            PiProtocolProbeDetail {
+                protocol: protocol.to_string(),
+                status: status_label.to_string(),
+                http_status: Some(code),
+                message: None,
+            }
+        }
+        Err(msg) => PiProtocolProbeDetail {
+            protocol: protocol.to_string(),
+            status: "error".to_string(),
+            http_status: None,
+            message: Some(msg),
+        },
+    };
+    (detail, upgraded_base)
+}
+
+#[tauri::command]
+pub async fn pi_endpoint_probe(
+    app: tauri::AppHandle,
+    input: PiEndpointProbeInput,
+) -> Result<PiEndpointProbeResult, String> {
+    let started = Instant::now();
+    let raw_key = input.api_key.as_deref().map(str::trim).unwrap_or("");
+    let effective_key = if !raw_key.is_empty() {
+        raw_key.to_string()
+    } else if let Ok(cfg_path) = pi_config_path(&app) {
+        load_pi_config_effective(&cfg_path).api_key
+    } else {
+        String::new()
+    };
+
+    let mut hint =
+        normalize_endpoint_input(&input.base_url, &effective_key, input.provider.as_deref());
+
+    if hint.normalized_base_url.len() > 2048
+        || hint.normalized_base_url.chars().any(char::is_control)
+    {
+        return Err("模型网关地址无效".to_string());
+    }
+    let parsed_url = reqwest::Url::parse(&hint.normalized_base_url)
+        .map_err(|error| format!("模型网关地址格式无效：{error}"))?;
+    if !matches!(parsed_url.scheme(), "http" | "https") || parsed_url.host_str().is_none() {
+        return Err("仅支持 http:// 或 https:// 模型网关地址".to_string());
+    }
+
+    let explicit_protocol = input
+        .api_protocol
+        .as_deref()
+        .map(normalize_pi_api_protocol)
+        .filter(|proto| *proto != "auto");
+    if let Some(proto) = explicit_protocol {
+        hint.candidate_protocols.retain(|item| *item != proto);
+        hint.candidate_protocols.insert(0, proto);
+    }
+
+    let client = build_probe_http_client(3200)?;
+    let (discovered_models, v1_upgrade) = discover_models_for_endpoint(
+        &client,
+        &hint.normalized_base_url,
+        &effective_key,
+        explicit_protocol.unwrap_or(hint.preferred_protocol),
+    )
+    .await;
+    if let Some(upgraded) = v1_upgrade {
+        hint.normalized_base_url = upgraded;
+    }
+
+    let probe_model = input
+        .preferred_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| discovered_models.first().cloned())
+        .unwrap_or_else(
+            || match explicit_protocol.unwrap_or(hint.preferred_protocol) {
+                "anthropic-messages" => "claude-3-5-haiku-latest".to_string(),
+                "google-generative-ai" => "gemini-2.0-flash".to_string(),
+                _ => "gpt-4o-mini".to_string(),
+            },
+        );
+
+    let probe_responses = send_protocol_probe(
+        &client,
+        &hint.normalized_base_url,
+        "openai-responses",
+        &effective_key,
+        &probe_model,
+    );
+    let probe_completions = send_protocol_probe(
+        &client,
+        &hint.normalized_base_url,
+        "openai-completions",
+        &effective_key,
+        &probe_model,
+    );
+    let probe_anthropic = send_protocol_probe(
+        &client,
+        &hint.normalized_base_url,
+        "anthropic-messages",
+        &effective_key,
+        &probe_model,
+    );
+    let probe_google = send_protocol_probe(
+        &client,
+        &hint.normalized_base_url,
+        "google-generative-ai",
+        &effective_key,
+        &probe_model,
+    );
+
+    let ((r_resp, u_resp), (r_comp, u_comp), (r_anth, _), (r_goog, _)) = tokio::join!(
+        probe_responses,
+        probe_completions,
+        probe_anthropic,
+        probe_google
+    );
+
+    if let Some(upgraded) = u_resp.or(u_comp) {
+        hint.normalized_base_url = upgraded;
+    }
+
+    let mut details = vec![r_resp, r_comp, r_anth, r_goog];
+    if hint.candidate_protocols.contains(&"azure-openai-responses") {
+        let (r_azure, _) = send_protocol_probe(
+            &client,
+            &hint.normalized_base_url,
+            "azure-openai-responses",
+            &effective_key,
+            &probe_model,
+        )
+        .await;
+        details.push(r_azure);
+    }
+
+    // Reorder details cleanly so candidate preference order is preserved.
+    let mut ordered_details = Vec::new();
+    for proto in &hint.candidate_protocols {
+        if let Some(pos) = details.iter().position(|d| d.protocol == *proto) {
+            ordered_details.push(details.remove(pos));
+        }
+    }
+    ordered_details.extend(details);
+
+    let mut supported_protocols = Vec::new();
+    for detail in &ordered_details {
+        if detail.status == "verified" {
+            supported_protocols.push(detail.protocol.clone());
+        }
+    }
+    for detail in &ordered_details {
+        if detail.status == "detected" && !supported_protocols.contains(&detail.protocol) {
+            supported_protocols.push(detail.protocol.clone());
+        }
+    }
+
+    let detected_protocol = ordered_details
+        .iter()
+        .find(|d| d.status == "verified")
+        .or_else(|| ordered_details.iter().find(|d| d.status == "detected"))
+        .map(|d| d.protocol.clone())
+        .unwrap_or_else(|| {
+            explicit_protocol
+                .unwrap_or(hint.preferred_protocol)
+                .to_string()
+        });
+
+    let ok = !supported_protocols.is_empty() || !discovered_models.is_empty();
+    let suggested_model = discovered_models.first().cloned();
+    let latency_ms = started.elapsed().as_millis() as u64;
+
+    let mut summary_parts = Vec::new();
+    if let Some(note) = hint.normalized_note {
+        summary_parts.push(note);
+    }
+    if ok {
+        summary_parts.push(format!("已识别协议：{detected_protocol}"));
+        if !discovered_models.is_empty() {
+            summary_parts.push(format!("发现 {} 个模型", discovered_models.len()));
+        }
+    } else {
+        summary_parts.push("未探测到可用协议，请检查地址或密钥".to_string());
+    }
+
+    Ok(PiEndpointProbeResult {
+        ok,
+        normalized_base_url: hint.normalized_base_url,
+        detected_protocol,
+        supported_protocols,
+        probe_details: ordered_details,
+        discovered_models,
+        suggested_model,
+        latency_ms,
+        summary: summary_parts.join(" · "),
+    })
+}
+
+async fn scan_single_local_gateway(
+    client: &reqwest::Client,
+    id: &'static str,
+    label: &'static str,
+    base_url: &'static str,
+    is_ollama: bool,
+    check_responses: bool,
+) -> Option<PiLocalGatewayCandidate> {
+    let started = Instant::now();
+    let models = if is_ollama {
+        let origin = base_url.trim_end_matches("/v1");
+        let resp = client.get(format!("{origin}/api/tags")).send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        let json = resp.json::<serde_json::Value>().await.ok()?;
+        extract_models_from_json(&json)
+    } else {
+        let resp = client.get(format!("{base_url}/models")).send().await.ok()?;
+        let status = resp.status().as_u16();
+        if status >= 500 || status == 404 {
+            return None;
+        }
+        let json = resp.json::<serde_json::Value>().await.unwrap_or_default();
+        extract_models_from_json(&json)
+    };
+
+    let mut protocol = "openai-completions".to_string();
+    if check_responses {
+        if let Ok(resp) = client
+            .post(format!("{base_url}/responses"))
+            .json(&serde_json::json!({ "model": models.first().cloned().unwrap_or_else(|| "gpt-4o-mini".to_string()), "input": "ping", "max_output_tokens": 16, "stream": false }))
+            .send()
+            .await
+        {
+            let code = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            if !matches!(
+                classify_probe_http_response("openai-responses", code, &text),
+                ProbeOutcome::Unsupported
+            ) {
+                protocol = "openai-responses".to_string();
+            }
+        }
+    }
+
+    Some(PiLocalGatewayCandidate {
+        id: id.to_string(),
+        label: label.to_string(),
+        base_url: base_url.to_string(),
+        protocol,
+        models,
+        latency_ms: started.elapsed().as_millis() as u64,
+    })
+}
+
+#[tauri::command]
+pub async fn pi_local_gateways_scan() -> Result<Vec<PiLocalGatewayCandidate>, String> {
+    let client = build_probe_http_client(700)?;
+    let (magpie, ollama, lmstudio, vllm, litellm) = tokio::join!(
+        scan_single_local_gateway(
+            &client,
+            "magpie",
+            "Magpie",
+            "http://127.0.0.1:3425/v1",
+            false,
+            true
+        ),
+        scan_single_local_gateway(
+            &client,
+            "ollama",
+            "Ollama",
+            "http://127.0.0.1:11434/v1",
+            true,
+            false
+        ),
+        scan_single_local_gateway(
+            &client,
+            "lmstudio",
+            "LM Studio",
+            "http://127.0.0.1:1234/v1",
+            false,
+            false
+        ),
+        scan_single_local_gateway(
+            &client,
+            "vllm",
+            "vLLM / LocalAI",
+            "http://127.0.0.1:8000/v1",
+            false,
+            false
+        ),
+        scan_single_local_gateway(
+            &client,
+            "litellm",
+            "LiteLLM",
+            "http://127.0.0.1:4000/v1",
+            false,
+            true
+        ),
+    );
+    Ok([magpie, ollama, lmstudio, vllm, litellm]
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 #[tauri::command]
@@ -1008,7 +2108,21 @@ pub async fn pi_app_server_start(
         let resolved_workspace = resolve_pi_workspace_directory(&start_app, &workspace_root)?;
         let workspace_str = host_path(&resolved_workspace);
 
-        // Reuse existing active process if session_id + workspace_root match
+        let config_path = pi_config_path(&start_app)?;
+        if !config_path.exists() {
+            write_pi_config_to_file(&config_path, &PiConfigRecord::default())?;
+        }
+        let config = load_pi_config_effective(&config_path);
+        let mcp_secrets = start_app
+            .path()
+            .app_data_dir()
+            .ok()
+            .map(|dir| crate::mcp_registry::load_enabled_secret_envs(&dir))
+            .unwrap_or_default();
+        let fingerprint = compute_pi_runtime_fingerprint(&config, &mcp_secrets);
+
+        // Reuse existing active process if session_id + workspace_root + manual_path match
+        let mut stale_to_remove: Option<(String, Arc<ManagedPiProcess>)> = None;
         if let Ok(mut map) = processes.lock() {
             map.retain(|_, proc| {
                 proc.child
@@ -1019,16 +2133,52 @@ pub async fn pi_app_server_start(
             });
             for (existing_id, proc) in map.iter() {
                 if proc.session_id == session_id && proc.workspace_root == workspace_str {
-                    return Ok((existing_id.clone(), Arc::clone(proc), None, None));
+                    let manual_same = proc
+                        .manual_path
+                        .lock()
+                        .ok()
+                        .is_some_and(|g| *g == config.manual_path);
+                    if manual_same {
+                        let fp_same = proc
+                            .config_fingerprint
+                            .lock()
+                            .ok()
+                            .is_some_and(|g| *g == fingerprint);
+                        if !fp_same {
+                            let notification = serde_json::json!({
+                                "method": "rocketx/runtimeConfigUpdated",
+                                "params": {
+                                    "apiKey": config.api_key.trim(),
+                                    "mcpSecrets": mcp_secrets,
+                                }
+                            });
+                            if let Ok(bytes) = encode_json_line(notification) {
+                                if let Ok(mut stdin) = proc.stdin.lock() {
+                                    let _ = stdin.write_all(&bytes).and_then(|_| stdin.flush());
+                                }
+                            }
+                            if let Ok(mut g) = proc.config_fingerprint.lock() {
+                                *g = fingerprint.clone();
+                            }
+                        }
+                        return Ok((existing_id.clone(), Arc::clone(proc), None, None));
+                    }
+                    stale_to_remove = Some((existing_id.clone(), Arc::clone(proc)));
+                    break;
                 }
             }
+            if let Some((ref stale_id, _)) = stale_to_remove {
+                map.remove(stale_id);
+            }
+        }
+        if let Some((_, stale_proc)) = stale_to_remove {
+            stale_proc.stopping.store(true, Ordering::Release);
+            if let Ok(mut child) = stale_proc.child.lock() {
+                let _ = kill_and_wait(&mut child);
+            }
+            let _ = std::fs::remove_dir_all(&stale_proc.attachments_dir);
         }
 
-        let config_path = pi_config_path(&start_app)?;
-        if !config_path.exists() {
-            write_pi_config_to_file(&config_path, &PiConfigRecord::default())?;
-        }
-        let config = read_pi_config_from_file(&config_path);
         let (node_exe, _) = resolve_node_executable(&start_app)?;
         let (pkg_dir, version, runtime_source) =
             resolve_pi_package(&start_app, config.manual_path.as_deref())?;
@@ -1059,6 +2209,14 @@ pub async fn pi_app_server_start(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if !config.api_key.trim().is_empty() {
+            command.env("ROCKETX_PI_API_KEY", config.api_key.trim());
+        }
+        if !mcp_secrets.is_empty() {
+            if let Ok(serialized) = serde_json::to_string(&mcp_secrets) {
+                command.env("ROCKETX_PI_MCP_SECRETS", serialized);
+            }
+        }
 
         let mut child = command
             .spawn()
@@ -1085,6 +2243,8 @@ pub async fn pi_app_server_start(
             runtime_source,
             managed_skill_roots,
             attachments_dir,
+            config_fingerprint: Mutex::new(fingerprint),
+            manual_path: Mutex::new(config.manual_path.clone()),
             child: Arc::new(Mutex::new(child)),
             stdin: Arc::new(Mutex::new(stdin)),
             stopping: Arc::new(AtomicBool::new(false)),
@@ -1210,6 +2370,17 @@ fn safe_attachment_path(relative_path: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+fn resolve_pi_attachments_dir<'a, I>(entries: I, session_id: &str) -> Result<PathBuf, String>
+where
+    I: IntoIterator<Item = (&'a str, &'a PathBuf)>,
+{
+    entries
+        .into_iter()
+        .find(|(proc_session_id, _)| *proc_session_id == session_id)
+        .map(|(_, dir)| dir.clone())
+        .ok_or_else(|| "找不到对应的运行中 Pi 会话".to_string())
+}
+
 #[tauri::command]
 pub fn pi_agent_attachment_write(
     state: tauri::State<'_, PiAppServerState>,
@@ -1240,12 +2411,12 @@ pub fn pi_agent_attachment_write(
             .processes
             .lock()
             .map_err(|_| "Pi 进程注册表不可用".to_string())?;
-        processes
-            .values()
-            .find(|proc| proc.session_id == metadata.session_id)
-            .or_else(|| processes.values().next())
-            .map(|proc| proc.attachments_dir.clone())
-            .ok_or_else(|| "Pi 会话未运行".to_string())?
+        resolve_pi_attachments_dir(
+            processes
+                .values()
+                .map(|proc| (proc.session_id.as_str(), &proc.attachments_dir)),
+            &metadata.session_id,
+        )?
     };
     let target = attachments_dir.join(&relative);
     let parent = target
@@ -1320,6 +2491,7 @@ mod tests {
 
         let mut record = PiConfigRecord {
             provider: "ollama".to_string(),
+            api_protocol: "auto".to_string(),
             base_url: String::new(),
             api_key: String::new(),
             default_model: String::new(),
@@ -1332,12 +2504,14 @@ mod tests {
 
         let loaded = read_pi_config_from_file(&cfg_path);
         assert_eq!(loaded.provider, "ollama");
+        assert_eq!(loaded.api_protocol, "auto");
         assert_eq!(loaded.base_url, "http://127.0.0.1:11434/v1");
         assert_eq!(loaded.default_model, "qwen3-coder");
         assert!(has_effective_credentials(&loaded));
 
         let google_defaults = PiConfigRecord {
             provider: "google".to_string(),
+            api_protocol: "google-generative-ai".to_string(),
             base_url: default_base_url_for_provider("google").to_string(),
             api_key: String::new(),
             default_model: default_model_for_provider("google").to_string(),
@@ -1345,6 +2519,11 @@ mod tests {
             manual_path: None,
         };
         assert_eq!(google_defaults.default_model, "gemini-4-argon");
+        assert_eq!(
+            normalize_pi_api_protocol("openai-responses"),
+            "openai-responses"
+        );
+        assert_eq!(normalize_pi_api_protocol("unknown-proto"), "auto");
         assert_eq!(default_model_for_provider("deepseek"), "deepseek-v4-flash");
         assert_eq!(default_model_for_provider("anthropic"), "claude-sonnet-5.5");
         assert_eq!(default_model_for_provider("openai"), "gpt-6.1-sol");
@@ -1353,14 +2532,129 @@ mod tests {
     }
 
     #[test]
-    fn standalone_pi_package_is_discoverable() {
-        let root = std::env::temp_dir().join(format!("rocketx-pi-test-{}", uuid::Uuid::new_v4()));
-        let pkg = root.join("node_modules/@earendil-works/pi-coding-agent");
-        std::fs::create_dir_all(pkg.join("dist")).unwrap();
-        std::fs::write(pkg.join("dist/index.js"), "").unwrap();
-        std::fs::write(pkg.join("package.json"), r#"{"version":"1.5.0"}"#).unwrap();
-        let (_, version) = normalize_pi_package_candidate(&root).unwrap();
-        std::fs::remove_dir_all(root).unwrap();
+    fn endpoint_normalization_and_probe_classification_work_like_magpie() {
+        let resp_hint = normalize_endpoint_input(
+            "https://proxy.example.com/v1/responses/",
+            "",
+            Some("custom-openai"),
+        );
+        assert_eq!(
+            resp_hint.normalized_base_url,
+            "https://proxy.example.com/v1"
+        );
+        assert_eq!(resp_hint.preferred_protocol, "openai-responses");
+
+        let chat_hint = normalize_endpoint_input(
+            "https://proxy.example.com/v1/chat/completions",
+            "",
+            Some("custom-openai"),
+        );
+        assert_eq!(
+            chat_hint.normalized_base_url,
+            "https://proxy.example.com/v1"
+        );
+        assert_eq!(chat_hint.preferred_protocol, "openai-completions");
+
+        let anth_hint =
+            normalize_endpoint_input("https://api.anthropic.com/v1/messages", "sk-ant-123", None);
+        assert_eq!(anth_hint.normalized_base_url, "https://api.anthropic.com");
+        assert_eq!(anth_hint.preferred_protocol, "anthropic-messages");
+
+        let gemini_native = normalize_endpoint_input(
+            "https://generativelanguage.googleapis.com",
+            "AIzaSy-test",
+            None,
+        );
+        assert_eq!(
+            gemini_native.normalized_base_url,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(gemini_native.preferred_protocol, "google-generative-ai");
+
+        let azure_hint = normalize_endpoint_input("https://my-res.openai.azure.com", "", None);
+        assert_eq!(
+            azure_hint.normalized_base_url,
+            "https://my-res.openai.azure.com/openai/v1"
+        );
+        assert_eq!(azure_hint.preferred_protocol, "azure-openai-responses");
+
+        assert_eq!(
+            classify_probe_http_response("openai-responses", 200, "{\"id\":\"resp_1\"}"),
+            ProbeOutcome::Verified
+        );
+        assert_eq!(
+            classify_probe_http_response(
+                "openai-responses",
+                200,
+                "<!doctype html><html>Login</html>"
+            ),
+            ProbeOutcome::Unsupported
+        );
+        assert_eq!(
+            classify_probe_http_response(
+                "openai-responses",
+                400,
+                "{\"error\":{\"message\":\"Invalid model\"}}"
+            ),
+            ProbeOutcome::SupportedNeedsAuthOrModel
+        );
+        assert_eq!(
+            classify_probe_http_response("openai-responses", 404, "{\"error\":\"not found\"}"),
+            ProbeOutcome::Unsupported
+        );
+    }
+
+    #[test]
+    fn workspace_pi_package_is_discoverable() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let workspace_pi = repo_root.join("apps").join("pi-runtime");
+        let resolved = normalize_pi_package_candidate(&workspace_pi);
+        assert!(
+            resolved.is_some(),
+            "expected workspace apps/pi-runtime to resolve"
+        );
+        let (_, version) = resolved.unwrap();
         assert_eq!(version, "1.5.0");
+    }
+
+    #[test]
+    fn runtime_fingerprint_changes_with_protocol_key_or_mcp_secrets() {
+        let mut cfg = PiConfigRecord::default();
+        let mut secrets = HashMap::new();
+        let base_fp = compute_pi_runtime_fingerprint(&cfg, &secrets);
+
+        cfg.api_protocol = "openai-responses".to_string();
+        let proto_fp = compute_pi_runtime_fingerprint(&cfg, &secrets);
+        assert_ne!(base_fp, proto_fp);
+
+        cfg.api_key = "sk-test-new".to_string();
+        let key_fp = compute_pi_runtime_fingerprint(&cfg, &secrets);
+        assert_ne!(proto_fp, key_fp);
+
+        let mut srv = HashMap::new();
+        srv.insert("API_TOKEN".to_string(), "tok_1".to_string());
+        secrets.insert("github".to_string(), srv);
+        let mcp_fp = compute_pi_runtime_fingerprint(&cfg, &secrets);
+        assert_ne!(key_fp, mcp_fp);
+    }
+
+    #[test]
+    fn pi_attachment_dir_requires_matching_session_id() {
+        let dir_a = PathBuf::from("session-a");
+        let dir_b = PathBuf::from("session-b");
+        let entries = vec![("sess-a", &dir_a), ("sess-b", &dir_b)];
+        assert_eq!(
+            resolve_pi_attachments_dir(entries.clone(), "sess-b").unwrap(),
+            dir_b
+        );
+        let err = resolve_pi_attachments_dir(entries, "missing-session").unwrap_err();
+        assert!(err.contains("找不到对应的运行中 Pi 会话"));
     }
 }

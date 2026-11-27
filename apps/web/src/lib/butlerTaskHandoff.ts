@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { useChat } from '../stores/chat';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
@@ -53,10 +54,10 @@ export async function handoffToButlerTaskWith(
   options: ButlerTaskHandoffOptions = {},
 ): Promise<ButlerTaskHandoffResult> {
   const prompt = text.trim();
-  if (!prompt) throw new Error('任务内容不能为空');
+  if (!prompt) throw new Error(t('butler.handoff.emptyPrompt'));
   const trimmedTitle = title.trim().slice(0, 80);
   const provider = deps.getProvider();
-  if (provider === 'none') throw new Error('当前未启用 AI，请先在设置中启用 Pi');
+  if (provider === 'none') throw new Error(t('butler.handoff.aiDisabled'));
 
   if (options.preferRoomPanel && options.rid) {
     deps.draftHostedRoomPrompt(options.rid, prompt);

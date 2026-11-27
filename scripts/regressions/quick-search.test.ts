@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import type { RcMessage } from '../../packages/rc-client/src/index';
 import {
   clearMessageSearchCache,
@@ -373,7 +375,9 @@ test('快捷搜索按 Rocket.Chat 契约探测提供器并显式请求全局消�
   assert.match(source, /rest\.searchMessages\(rid, searchKeyword, count, offset\)/);
   assert.match(source, /onScroll=\{handleResultsScroll\}/);
   assert.match(source, /searchMoreMessages\(/);
-  assert.match(source, /搜索全部/);
+  assert.match(source, /t\('nav\.search\.searchAll'\)/);
+  assert.equal(zhCN['nav.search.searchAll'], '搜索全部');
+  assert.ok(enUS['nav.search.searchAll'].length > 0);
   assert.match(source, /setMessageSearchAllKeyword\(q\)/);
   assert.match(source, /shownMessages\.map/);
   assert.match(source, /conversations\.map\(\(conversation\) => conversation\.rid\)/);

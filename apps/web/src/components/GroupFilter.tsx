@@ -21,6 +21,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { buildConversations, useChat } from '../stores/chat';
+import { useT, type MessageKey } from '../i18n';
 import { inFolder, useFolders } from '../stores/folders';
 import { useUI, type ConvFilter } from '../stores/ui';
 import { toast } from '../stores/toast';
@@ -28,18 +29,18 @@ import ContextMenu, { type MenuItem } from './ContextMenu';
 import { ConfirmDialog, useDialogBehavior } from './Dialog';
 import FolderRulesDialog from './FolderRulesDialog';
 
-const FILTERS: { key: ConvFilter; label: string; icon: typeof AtSign }[] = [
-  { key: 'all', label: '消息', icon: MessageSquareText },
-  { key: 'unread', label: '未读', icon: RefreshCw },
-  { key: 'mentions', label: '@我', icon: AtSign },
+const FILTERS: { key: ConvFilter; labelKey: MessageKey; icon: typeof AtSign }[] = [
+  { key: 'all', labelKey: 'chat.filter.all', icon: MessageSquareText },
+  { key: 'unread', labelKey: 'chat.filter.unread', icon: RefreshCw },
+  { key: 'mentions', labelKey: 'chat.filter.mentions', icon: AtSign },
   // 图钉在本应用里已经代表「置顶」，收藏改用星标，两个概念别共用一个图标
-  { key: 'favorites', label: '收藏', icon: Star },
-  { key: 'dm', label: '单聊', icon: User },
-  { key: 'multi', label: '多人聊天', icon: UsersRound },
-  { key: 'groups', label: '群组', icon: Hash },
-  { key: 'teams', label: '团队', icon: Users },
-  { key: 'discussions', label: '讨论', icon: MessagesSquare },
-  { key: 'hidden', label: '隐藏', icon: EyeOff },
+  { key: 'favorites', labelKey: 'chat.filter.favorites', icon: Star },
+  { key: 'dm', labelKey: 'chat.filter.dm', icon: User },
+  { key: 'multi', labelKey: 'chat.filter.multi', icon: UsersRound },
+  { key: 'groups', labelKey: 'chat.filter.groups', icon: Hash },
+  { key: 'teams', labelKey: 'chat.filter.teams', icon: Users },
+  { key: 'discussions', labelKey: 'chat.filter.discussions', icon: MessagesSquare },
+  { key: 'hidden', labelKey: 'chat.filter.hidden', icon: EyeOff },
 ];
 
 /** 新建 / 重命名分组弹窗 */
@@ -54,6 +55,7 @@ function FolderDialog({
   onSubmit: (name: string) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState(initial ?? '');
   const dialogRef = useDialogBehavior(onClose);
   return (
@@ -82,7 +84,7 @@ function FolderDialog({
               onClose();
             } else if (e.key === 'Escape') onClose();
           }}
-          placeholder="分组名称，如「核心项目」"
+          placeholder={t('chat.groupFilter.folderPlaceholder')}
           maxLength={20}
           className="h-9 w-full rounded-md border border-line px-3 text-sm outline-none focus:border-primary"
         />
@@ -91,7 +93,7 @@ function FolderDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => {
@@ -103,7 +105,7 @@ function FolderDialog({
             disabled={!name.trim()}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-40"
           >
-            确定
+            {t('common.ok')}
           </button>
         </div>
       </div>
@@ -119,6 +121,7 @@ export default function GroupFilter({
   collapsed: boolean;
   onCollapse: () => void;
 }) {
+  const t = useT();
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
   const filter = useUI((s) => s.convFilter);
@@ -176,12 +179,12 @@ export default function GroupFilter({
   }, [subscriptions, rooms, folders]);
 
   const folderMenuItems = (id: string): MenuItem[] => [
-    { label: '重命名', icon: Pencil, onClick: () => setDialog({ mode: 'rename', id }) },
-    { label: '分组规则…', icon: Wand2, onClick: () => setRulesFor(id) },
-    { label: '上移', icon: ChevronUp, onClick: () => move(id, -1) },
-    { label: '下移', icon: ChevronDown, onClick: () => move(id, 1) },
+    { label: t('chat.groupFilter.rename'), icon: Pencil, onClick: () => setDialog({ mode: 'rename', id }) },
+    { label: t('chat.groupFilter.rules'), icon: Wand2, onClick: () => setRulesFor(id) },
+    { label: t('chat.groupFilter.moveUp'), icon: ChevronUp, onClick: () => move(id, -1) },
+    { label: t('chat.groupFilter.moveDown'), icon: ChevronDown, onClick: () => move(id, 1) },
     {
-      label: '删除分组',
+      label: t('chat.groupFilter.deleteFolder'),
       icon: Trash2,
       danger: true,
       onClick: () => setConfirmDelete(id),
@@ -250,7 +253,7 @@ export default function GroupFilter({
           }}
           {...dragProps}
           title={folder.name}
-          aria-label={`分组：${folder.name}`}
+          aria-label={t('chat.groupFilter.folderAriaLabel', { name: folder.name })}
           className={`${compactBtnCls(active)} ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
         >
           <FolderIcon size={16} />
@@ -268,7 +271,7 @@ export default function GroupFilter({
         }}
         {...dragProps}
         className={`${btnCls(active)} ${isDragOver ? 'ring-2 ring-primary ring-inset' : ''}`}
-        title="把会话拖到这里加入分组；右键管理"
+        title={t('chat.groupFilter.folderTooltip')}
       >
         <FolderIcon size={14} className={active ? 'text-primary' : ''} />
         <span className="min-w-0 truncate">{folder.name}</span>
@@ -285,7 +288,8 @@ export default function GroupFilter({
       {collapsed ? (
         <>
           <div className="flex flex-col items-center gap-0.5">
-            {FILTERS.map(({ key, label, icon: Icon }) => {
+            {FILTERS.map(({ key, labelKey, icon: Icon }) => {
+              const label = t(labelKey);
               const active = !activeFolder && key === filter;
               const count = counts[key];
               const highlight = key === 'unread' || key === 'mentions';
@@ -294,7 +298,11 @@ export default function GroupFilter({
                   key={key}
                   onClick={() => selectFilter(key)}
                   title={label}
-                  aria-label={`${label}${highlight && count > 0 ? `，${count} 个未读` : ''}`}
+                  aria-label={
+                    highlight && count > 0
+                      ? t('chat.groupFilter.unreadFilterAria', { label, count })
+                      : label
+                  }
                   className={compactBtnCls(active)}
                 >
                   <Icon size={16} />
@@ -312,16 +320,16 @@ export default function GroupFilter({
 
           <div className="mt-auto flex flex-col items-center gap-1 border-t border-line pt-2">
             <button
-              title="展开分组栏"
-              aria-label="展开分组栏"
+              title={t('chat.groupFilter.expand')}
+              aria-label={t('chat.groupFilter.expand')}
               onClick={onCollapse}
               className="flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-primary"
             >
               <PanelLeftOpen size={16} />
             </button>
             <button
-              title="新建分组"
-              aria-label="新建分组"
+              title={t('chat.groupFilter.newFolder')}
+              aria-label={t('chat.groupFilter.newFolder')}
               onClick={() => setDialog({ mode: 'create' })}
               className="flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-fill-hover hover:text-primary"
             >
@@ -332,19 +340,19 @@ export default function GroupFilter({
       ) : (
         <>
           <div className="flex items-center justify-between px-2 pb-2">
-            <span className="text-xs font-medium text-ink">分组</span>
+            <span className="text-xs font-medium text-ink">{t('chat.groupFilter.title')}</span>
             <div className="flex items-center gap-0.5">
               <button
-                title="收起分组栏"
-                aria-label="收起分组栏"
+                title={t('chat.groupFilter.collapse')}
+                aria-label={t('chat.groupFilter.collapse')}
                 onClick={onCollapse}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
                 <PanelLeftClose size={14} />
               </button>
               <button
-                title="新建分组"
-                aria-label="新建分组"
+                title={t('chat.groupFilter.newFolder')}
+                aria-label={t('chat.groupFilter.newFolder')}
                 onClick={() => setDialog({ mode: 'create' })}
                 className="flex h-6 w-6 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-primary"
               >
@@ -354,7 +362,8 @@ export default function GroupFilter({
           </div>
 
           <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
-            {FILTERS.map(({ key, label, icon: Icon }) => {
+            {FILTERS.map(({ key, labelKey, icon: Icon }) => {
+              const label = t(labelKey);
               const active = !activeFolder && key === filter;
               const count = counts[key];
               const highlight = (key === 'unread' || key === 'mentions') && count > 0;
@@ -375,12 +384,12 @@ export default function GroupFilter({
 
             {/* 自定义分组：可拖拽会话进来 */}
             {folders.length > 0 && (
-              <div className="mt-2 px-2 pb-1 text-xs text-ink-3">我的分组</div>
+              <div className="mt-2 px-2 pb-1 text-xs text-ink-3">{t('chat.groupFilter.myFolders')}</div>
             )}
             {folders.map((folder) => renderFolderButton(folder, false))}
 
             {folders.length === 0 && (
-              <div className="mt-2 px-2 text-xs text-ink-3">暂无自定义分组</div>
+              <div className="mt-2 px-2 text-xs text-ink-3">{t('chat.groupFilter.noCustomFolders')}</div>
             )}
           </div>
         </>
@@ -388,7 +397,7 @@ export default function GroupFilter({
 
       {dialog && (
         <FolderDialog
-          title={dialog.mode === 'create' ? '新建分组' : '重命名分组'}
+          title={dialog.mode === 'create' ? t('chat.groupFilter.newFolder') : t('chat.groupFilter.renameFolder')}
           initial={dialog.mode === 'rename' ? folders.find((f) => f.id === dialog.id)?.name : ''}
           onSubmit={(name) => {
             if (dialog.mode === 'create') {
@@ -417,13 +426,15 @@ export default function GroupFilter({
       )}
       {confirmDelete && (
         <ConfirmDialog
-          title="删除分组"
-          message={`确定删除分组「${folders.find((f) => f.id === confirmDelete)?.name}」吗？分组里的会话不会被删除，只是不再归入该分组。`}
-          confirmLabel="删除"
+          title={t('chat.groupFilter.deleteFolder')}
+          message={t('chat.groupFilter.deleteConfirm', {
+            name: folders.find((f) => f.id === confirmDelete)?.name ?? '',
+          })}
+          confirmLabel={t('common.delete')}
           onConfirm={() => {
             remove(confirmDelete);
             if (activeFolder === confirmDelete) setActiveFolder(null);
-            toast.success('分组已删除');
+            toast.success(t('chat.groupFilter.deletedToast'));
           }}
           onClose={() => setConfirmDelete(null)}
         />

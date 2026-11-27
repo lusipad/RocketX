@@ -3,6 +3,8 @@ import { Loader2, MessagesSquare } from 'lucide-react';
 import { normalizeDiscussionName, stripQuotePrefix } from '../stores/chat';
 import type { RcMessage, RcRoom } from '@rcx/rc-client';
 import Dialog from './Dialog';
+import { useT } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 
 /**
  * 创建讨论的通用弹窗。
@@ -27,6 +29,7 @@ export default function CreateDiscussionDialog({
   onCreate: (name: string) => Promise<void>;
   onClose: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState(() => {
     const seed = message ? stripQuotePrefix(message.msg) : '';
     return (seed || defaultName || '').slice(0, 40);
@@ -34,7 +37,8 @@ export default function CreateDiscussionDialog({
   const [busy, setBusy] = useState(false);
   // 讨论名支持中文与空格（issue #397，服务端跳过 slug 校验）。
   const fallback = message ? stripQuotePrefix(message.msg) : defaultName ?? '';
-  const finalName = normalizeDiscussionName(name.trim() || fallback || '讨论', '讨论');
+  const defaultDisc = t('chat.discussion.defaultName');
+  const finalName = normalizeDiscussionName(name.trim() || fallback || defaultDisc, defaultDisc);
 
   const submit = async () => {
     if (busy) return;
@@ -49,11 +53,13 @@ export default function CreateDiscussionDialog({
 
   return (
     <Dialog
-      title="创建讨论"
+      title={t('chat.discussion.createTitle')}
       hint={
         message
-          ? '给这条消息创建一个可持续讨论的子会话。'
-          : `在${roomName ? `「${roomName}」` : '当前房间'}里创建一个可持续讨论的子会话。`
+          ? t('chat.discussion.fromMessageHint')
+          : roomName
+            ? t('chat.discussion.inNamedRoomHint', { roomName })
+            : t('chat.discussion.inCurrentRoomHint')
       }
       onClose={busy ? () => {} : onClose}
       footer={
@@ -63,7 +69,7 @@ export default function CreateDiscussionDialog({
             disabled={busy}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void submit()}
@@ -71,24 +77,24 @@ export default function CreateDiscussionDialog({
             className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <MessagesSquare size={14} />}
-            {busy ? '创建中…' : '创建讨论'}
+            {busy ? t('chat.common.creating') : t('chat.discussion.createTitle')}
           </button>
         </>
       }
     >
       <label className="block px-5 pb-4 text-sm text-ink-2">
-        讨论名称
+        {t('chat.discussion.nameLabel')}
         <input
           autoFocus
           value={name}
           maxLength={40}
           onChange={(event) => setName(event.target.value)}
-          placeholder="不填则按来源自动生成"
+          placeholder={t('chat.discussion.namePlaceholder')}
           className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-3 outline-none focus:border-primary"
         />
         {finalName !== name.trim() && (
           <span className="mt-1 block text-xs text-ink-3">
-            讨论名称将创建为 {finalName}
+            {t('chat.discussion.finalNamePreview', { name: finalName })}
           </span>
         )}
       </label>
@@ -112,5 +118,5 @@ export function discussionParents(
     .filter((room) => !room.prid)
     .filter((room) => !!subscriptions[room._id])
     .map((room) => ({ rid: room._id, label: room.fname || room.name || room._id }))
-    .sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+    .sort((left, right) => compareLocaleText(left.label, right.label));
 }

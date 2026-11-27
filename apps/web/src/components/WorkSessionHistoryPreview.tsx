@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { useI18n } from '../i18n';
+import { formatDateTime } from '../i18n/format';
 import { parseWorkSessionProviderMeta, workSessionImportIdentity } from '../agent/superAgentBridge';
 import { acpLocalSessionMessages, type LocalSessionMessage, type NativeWorkSessionRecord } from '../platform/desktopCommands';
 import { useAuth } from '../stores/auth';
@@ -9,6 +11,7 @@ export default function WorkSessionHistoryPreview({ session, onClose }: {
   session: NativeWorkSessionRecord;
   onClose: () => void;
 }) {
+  const { t, locale } = useI18n();
   const accountScope = useAuth(() => resolveButlerAccountScope());
   const owner = useRef(accountScope);
   const accountChanged = useRef(false);
@@ -44,7 +47,7 @@ export default function WorkSessionHistoryPreview({ session, onClose }: {
     setMessages([]); setError(null); setLoadedIdentity(identity);
     if (owner.current !== accountScope) { setLoading(false); onClose(); return; }
     if (session.accountScope && session.accountScope !== accountScope) {
-      setLoading(false); setError('该会话不属于当前账号，请重新选择。'); return;
+      setLoading(false); setError(t('agent.sessionPreview.wrongAccount')); return;
     }
     setLoading(true);
     void acpLocalSessionMessages({ provider: meta.provider, sessionId: session.nativeSessionId,
@@ -58,7 +61,7 @@ export default function WorkSessionHistoryPreview({ session, onClose }: {
 
   if (owner.current !== accountScope) return null;
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-3 sm:p-6" onClick={onClose}>
-    <div ref={dialog} role="dialog" aria-modal="true" aria-label="会话记录" tabIndex={-1}
+    <div ref={dialog} role="dialog" aria-modal="true" aria-label={t('agent.sessionPreview.dialogLabel')} tabIndex={-1}
       className="flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl border border-line bg-surface-1 shadow-2xl outline-none"
       onClick={(event) => event.stopPropagation()} onKeyDown={(event) => {
         if (event.key === 'Escape') { event.stopPropagation(); onClose(); }
@@ -71,24 +74,24 @@ export default function WorkSessionHistoryPreview({ session, onClose }: {
       }}>
       <div className="flex items-start gap-3 border-b border-line p-4">
         <div className="min-w-0 flex-1">
-          <h2 className="break-words font-semibold text-ink">{session.title || '未命名会话'}</h2>
-          <p className="mt-1 text-xs text-ink-3">{meta.label} · 只读预览，最多最近 24 条可读消息，不是完整历史。</p>
-          <p className="mt-1 break-all text-xs text-ink-3">{session.workspaceRoot || '未记录项目目录'}</p>
+          <h2 className="break-words font-semibold text-ink">{session.title || t('agent.sessionPreview.untitledSession')}</h2>
+          <p className="mt-1 text-xs text-ink-3">{t('agent.sessionPreview.subtitle', { label: meta.label })}</p>
+          <p className="mt-1 break-all text-xs text-ink-3">{session.workspaceRoot || t('agent.sessionPreview.noWorkspace')}</p>
         </div>
-        <button type="button" aria-label="关闭会话记录" onClick={onClose} className="rounded p-1.5 text-ink-3 hover:bg-surface-3"><X size={18} /></button>
+        <button type="button" aria-label={t('agent.sessionPreview.closeLabel')} onClick={onClose} className="rounded p-1.5 text-ink-3 hover:bg-surface-3"><X size={18} /></button>
       </div>
       <div className="min-h-24 flex-1 overflow-y-auto p-4">
-        {loading && <p role="status" className="text-sm text-ink-3">正在读取本机会话记录…</p>}
-        {error && <div role="alert" className="text-sm text-danger"><p className="break-words">读取失败：{error}</p>
-          <button type="button" onClick={() => setAttempt((value) => value + 1)} className="mt-2 text-primary hover:underline">重试读取</button></div>}
-        {!loading && !error && !messages.length && <p className="text-sm text-ink-3">此来源没有返回可读消息；这不表示原会话没有历史。</p>}
+        {loading && <p role="status" className="text-sm text-ink-3">{t('agent.sessionPreview.loading')}</p>}
+        {error && <div role="alert" className="text-sm text-danger"><p className="break-words">{t('agent.sessionPreview.loadFailed', { error })}</p>
+          <button type="button" onClick={() => setAttempt((value) => value + 1)} className="mt-2 text-primary hover:underline">{t('agent.sessionPreview.retryRead')}</button></div>}
+        {!loading && !error && !messages.length && <p className="text-sm text-ink-3">{t('agent.sessionPreview.emptyMessages')}</p>}
         {!loading && !error && loadedIdentity === identity && messages.map((message, index) => <article key={`${message.id}:${index}`} className="mb-4 rounded-lg border border-line p-3 last:mb-0">
-          <div className="mb-2 text-xs text-ink-3">{message.role === 'user' ? '你' : message.role === 'assistant' ? meta.label : message.role}
-            {message.timestamp > 0 && <> · {new Date(message.timestamp < 100_000_000_000 ? message.timestamp * 1000 : message.timestamp).toLocaleString()}</>}</div>
+          <div className="mb-2 text-xs text-ink-3">{message.role === 'user' ? t('agent.sessionPreview.youSpeaker') : message.role === 'assistant' ? meta.label : message.role}
+            {message.timestamp > 0 && <> · {formatDateTime(message.timestamp < 100_000_000_000 ? message.timestamp * 1000 : message.timestamp, undefined, locale)}</>}</div>
           <div className="whitespace-pre-wrap break-words text-sm text-ink [overflow-wrap:anywhere]">{message.text}</div>
         </article>)}
       </div>
-      <p className="border-t border-line px-4 py-3 text-xs text-ink-3">查看记录不会启动模型、接管原会话或发送消息。</p>
+      <p className="border-t border-line px-4 py-3 text-xs text-ink-3">{t('agent.sessionPreview.footerNote')}</p>
     </div>
   </div>;
 }

@@ -39,6 +39,8 @@ import {
   setSuperAgentRuntimeDriversForTests,
   syncLiveSessionsIntoLedger,
 } from '../../apps/web/src/agent/superAgentBridge';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import type { DiscoveredLocalSession } from '../../apps/web/src/platform/desktopCommands';
 import { useAcpAgents } from '../../apps/web/src/stores/acpAgents';
 import { useCodexWorkspace } from '../../apps/web/src/stores/codexWorkspace';
@@ -89,8 +91,15 @@ test('能力矩阵与 bridge 历史恢复：ACP_CAPABILITIES.discoverHistory 为
     'apps/web/src/components/WorkCardPortal.tsx',
     'utf8',
   );
-  assert.match(portalSrc, /会话/);
-  assert.match(portalSrc, /解除绑定/);
+  assert.match(portalSrc, /t\('agent\.portal\.moreSessions'/);
+  assert.match(portalSrc, /sessions:\s*'agent\.portal\.subtabSessions'/);
+  assert.match(portalSrc, /t\('agent\.portal\.unbindSessionBtn'\)/);
+  assert.match(zhCN['agent.portal.moreSessions'], /会话/);
+  assert.match(zhCN['agent.portal.subtabSessions'], /会话/);
+  assert.equal(zhCN['agent.portal.unbindSessionBtn'], '解除绑定');
+  assert.ok(enUS['agent.portal.moreSessions'].length > 0);
+  assert.ok(enUS['agent.portal.subtabSessions'].length > 0);
+  assert.ok(enUS['agent.portal.unbindSessionBtn'].length > 0);
 });
 
 test('明确开启近期加入：运行中进 executing、7 天内进 ready，同工作区和标题仍保留独立身份', async () => {

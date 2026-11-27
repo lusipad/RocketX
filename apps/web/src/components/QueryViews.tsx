@@ -1,5 +1,7 @@
 import { useMemo, useState, type DragEvent } from 'react';
 import { Bot, ChevronDown, ChevronRight } from 'lucide-react';
+import { useI18n, useT } from '../i18n';
+import { formatDate } from '../i18n/format';
 import {
   adoDateToLocal,
   isWorkItemDone,
@@ -27,7 +29,8 @@ function TypeDot({ type }: { type: string }) {
 }
 
 function Empty() {
-  return <div className="py-12 text-center text-sm text-ink-3">这个查询现在一条都没有。可能筛选条件太窄——去 Azure DevOps 里改改这个查询。</div>;
+  const t = useT();
+  return <div className="py-12 text-center text-sm text-ink-3">{t('workbench.queryViews.empty')}</div>;
 }
 
 /**
@@ -43,6 +46,7 @@ export function WorkItemBoard({
   onMove?: (item: WorkItem, toState: string) => void;
   onAssignToAi?: (item: WorkItem) => void;
 }) {
+  const { t, locale } = useI18n();
   const today = todayKey();
   const columns = useMemo(() => boardColumns(items, today), [items, today]);
   const [dragOverState, setDragOverState] = useState<string | null>(null);
@@ -115,12 +119,12 @@ export function WorkItemBoard({
                       )}
                       {due && (
                         <span className={overdue ? 'font-medium text-danger' : ''}>
-                          {overdue ? '逾期 ' : ''}
-                          {due.slice(5).replace('-', '/')}
+                          {overdue ? t('workbench.queryViews.overduePrefix') : ''}
+                          {formatDate(new Date(`${due}T12:00:00`), { month: '2-digit', day: '2-digit' }, locale)}
                         </span>
                       )}
                       <span className="ml-auto max-w-[40%] truncate" title={w.assignedTo}>
-                        {w.assignedTo ?? '未分配'}
+                        {w.assignedTo ?? t('workbench.common.unassigned')}
                       </span>
                     </div>
                   </a>
@@ -134,11 +138,11 @@ export function WorkItemBoard({
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
                       className="absolute right-2 top-2 flex h-7 items-center gap-1 rounded-md bg-primary-light px-2 text-xs font-medium text-primary opacity-100 transition hover:bg-primary/15 md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100"
-                      title={`排给 AI：工作项 #${w.id}`}
-                      aria-label={`排给 AI：工作项 #${w.id}`}
+                      title={t('workbench.queryViews.assignToAiAria', { id: w.id })}
+                      aria-label={t('workbench.queryViews.assignToAiAria', { id: w.id })}
                     >
                       <Bot size={13} aria-hidden="true" />
-                      排给 AI
+                      {t('workbench.queryViews.assignToAi')}
                     </button>
                   ) : null}
                 </div>
@@ -152,17 +156,24 @@ export function WorkItemBoard({
 }
 
 function RiskChips({ overdue, stale, unassigned }: { overdue: number; stale: number; unassigned: number }) {
+  const t = useT();
   if (overdue + stale + unassigned === 0) return null;
   return (
     <span className="flex shrink-0 items-center gap-1 text-xs">
       {overdue > 0 && (
-        <span className="rounded bg-danger/10 px-1.5 py-0.5 font-medium text-danger">逾期 {overdue}</span>
+        <span className="rounded bg-danger/10 px-1.5 py-0.5 font-medium text-danger">
+          {t('workbench.queryViews.riskOverdue', { count: overdue })}
+        </span>
       )}
       {stale > 0 && (
-        <span className="rounded bg-warning/10 px-1.5 py-0.5 text-warning">停滞 {stale}</span>
+        <span className="rounded bg-warning/10 px-1.5 py-0.5 text-warning">
+          {t('workbench.queryViews.riskStale', { count: stale })}
+        </span>
       )}
       {unassigned > 0 && (
-        <span className="rounded bg-fill-2 px-1.5 py-0.5 text-ink-3">未指派 {unassigned}</span>
+        <span className="rounded bg-fill-2 px-1.5 py-0.5 text-ink-3">
+          {t('workbench.queryViews.riskUnassigned', { count: unassigned })}
+        </span>
       )}
     </span>
   );
@@ -170,6 +181,7 @@ function RiskChips({ overdue, stale, unassigned }: { overdue: number; stale: num
 
 /** WBS：父子树 + 子树进度汇总 + 规则化风险信号 */
 export function WorkItemWbs({ items }: { items: WorkItem[] }) {
+  const t = useT();
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   const stats = useMemo(() => wbsStats(items), [items]);
   const summary = useMemo(() => wbsSummary(items), [items]);
@@ -196,7 +208,11 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
           <div className="h-full rounded-full bg-success" style={{ width: `${percent}%` }} />
         </div>
         <span className="text-xs text-ink-2">
-          整体进度 {summary.done}/{summary.total} · {percent}%
+          {t('workbench.queryViews.overallProgress', {
+            done: summary.done,
+            total: summary.total,
+            percent,
+          })}
         </span>
         <RiskChips overdue={summary.overdue} stale={summary.stale} unassigned={summary.unassigned} />
       </div>
@@ -221,8 +237,10 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
                     type="button"
                     onClick={() => toggleCollapsed(w.id)}
                     className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-3 hover:text-ink"
-                    title={isCollapsed ? '展开子项' : '折叠子项'}
-                    aria-label={isCollapsed ? `展开工作项 #${w.id}` : `折叠工作项 #${w.id}`}
+                    title={isCollapsed ? t('workbench.tree.expandChildren') : t('workbench.tree.collapseChildren')}
+                    aria-label={isCollapsed
+                      ? t('workbench.tree.expandWorkItemAria', { id: w.id })
+                      : t('workbench.tree.collapseWorkItemAria', { id: w.id })}
                   >
                     {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                   </button>
@@ -264,7 +282,7 @@ export function WorkItemWbs({ items }: { items: WorkItem[] }) {
                   {w.state}
                 </span>
                 <span className="w-24 shrink-0 truncate text-right text-xs text-ink-3" title={w.assignedTo}>
-                  {w.assignedTo ?? '未分配'}
+                  {w.assignedTo ?? t('workbench.common.unassigned')}
                 </span>
               </a>
             </div>

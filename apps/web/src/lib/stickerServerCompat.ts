@@ -1,4 +1,5 @@
 import type { StickerEntry } from './stickerManifest';
+import { t } from '../i18n';
 
 const SAFE_STICKER_ID_RE = /^[a-z0-9_-]+$/;
 const STATIC_STICKER_PREFIX = 'rocketx_sticker_twemoji_';
@@ -102,7 +103,7 @@ export async function sendBuiltinStickerWithServerCompat(
     return;
   }
   const unreachable: never = created;
-  throw new Error(`未知贴纸兼容结果: ${unreachable}`);
+  throw new Error(t('chat.sticker.unknownCompatResult', { result: String(unreachable) }));
 }
 
 export async function pickComposerStickerWithServerCompat(

@@ -63,6 +63,41 @@ pub struct NativeWorkRuntime {
     connections: Mutex<HashMap<String, Arc<NativeConnection>>>,
 }
 
+impl NativeWorkRuntime {
+    pub fn shutdown(&self) {
+        let drained: Vec<Arc<NativeConnection>> = {
+            let mut map = self
+                .connections
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            map.drain().map(|(_, conn)| conn).collect()
+        };
+        for native in drained {
+            native.closed.store(true, Ordering::Release);
+            if let Some(rpc) = native.rpc.get() {
+                rpc.disconnect("应用正在退出，已停止原生工作监听");
+            }
+            if let Some(handle) = native
+                .worker_handle
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take()
+            {
+                let _ = handle.join();
+            }
+            if let Some(process_id) = native.process_id.get() {
+                let _ = crate::proc::stop_native_codex(&native.app, process_id);
+            }
+        }
+    }
+}
+
+pub fn shutdown_native_work_runtime(app: &tauri::AppHandle) {
+    if let Some(runtime) = app.try_state::<NativeWorkRuntime>() {
+        runtime.shutdown();
+    }
+}
+
 #[derive(Clone)]
 struct Binding {
     todo_id: String,
@@ -259,6 +294,7 @@ struct NativeConnection {
     process_id: OnceLock<String>,
     resume_action_id: OnceLock<String>,
     closed: AtomicBool,
+    worker_handle: Mutex<Option<thread::JoinHandle<()>>>,
     sequence: AtomicI64,
     profile_fingerprint: String,
     resource_directory: PathBuf,
@@ -1107,15 +1143,14 @@ pub async fn butler_native_work_resume(
             .connections
             .lock()
             .map_err(|_| "原生工作注册表不可用")?;
+        connections.retain(|_, existing| !existing.closed.load(Ordering::Acquire));
         if let Some(existing) = connections.get(&key) {
-            if !existing.closed.load(Ordering::Acquire) {
-                return Ok(existing
-                    .core
-                    .lock()
-                    .map_err(|_| "原生投影不可用")?
-                    .view
-                    .clone());
-            }
+            return Ok(existing
+                .core
+                .lock()
+                .map_err(|_| "原生投影不可用")?
+                .view
+                .clone());
         }
         let connection = admitted.lock().map_err(|_| "账号数据库不可用")?;
         connection
@@ -1153,6 +1188,7 @@ pub async fn butler_native_work_resume(
                 process_id: OnceLock::new(),
                 resume_action_id: OnceLock::new(),
                 closed: AtomicBool::new(false),
+                worker_handle: Mutex::new(None),
                 sequence: AtomicI64::new(1),
                 profile_fingerprint,
                 resource_directory: db.directory.clone(),
@@ -1237,7 +1273,7 @@ pub async fn butler_native_work_resume(
                 if matches!(status,"completed"|"failed"|"interrupted") {core.terminals.insert(id.into(),json!({"threadId":native.binding.binding.native_thread_id,"turn":turn}));}
             }
         }
-        let control_verified=matches!(handle.info.version.as_str(),"0.144.4"|"0.165.0");
+        let control_verified=crate::native::codex_contract::is_supported_codex_version(&handle.info.version);
         core.view.runtime_version=Some(handle.info.version.clone());core.view.connection_status="connected".into();
         core.view.capabilities=NativeWorkCapabilities {resume:false,prompt:control_verified,steer:control_verified,interrupt:control_verified,answer:control_verified,external_live_attach:false};
         if !control_verified {core.view.error=Some(format!("Codex {} 尚未验证写控制；已载入原记录，暂不开放发送",handle.info.version));}
@@ -1327,7 +1363,10 @@ pub async fn butler_native_work_resume(
         return Err(error);
     }
     let worker = Arc::clone(&native);
-    thread::spawn(move || worker.run());
+    let handle = thread::spawn(move || worker.run());
+    if let Ok(mut slot) = native.worker_handle.lock() {
+        *slot = Some(handle);
+    }
     let view = native
         .core
         .lock()

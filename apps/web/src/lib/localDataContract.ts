@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 /**
  * RocketX 本地领域数据合同。
  *
@@ -317,12 +319,12 @@ function parseLocalDataRecord(
   const parsed: unknown = JSON.parse(raw);
   if (isEnvelope(parsed)) {
     if (!Number.isInteger(parsed.version) || parsed.version < 0) {
-      throw new Error(`本地数据 ${schema.domain} 的版本无效`);
+      throw new Error(t('nav.localData.invalidVersion', { domain: schema.domain }));
     }
     return { value: parsed.data, version: parsed.version, scope: parsed.scope };
   }
   if (schema.legacy !== 'raw') {
-    throw new Error(`本地数据 ${schema.domain} 缺少版本 envelope`);
+    throw new Error(t('nav.localData.missingEnvelope', { domain: schema.domain }));
   }
   return { value: parsed, version: keyVersion ?? schema.version };
 }
@@ -334,23 +336,23 @@ function planLocalDataMigrationKey(
   scope?: string,
 ): LocalDataMigrationPlanEntry {
   const registered = schemaForKey(schemas, key);
-  if (!registered) return { key, action: 'unknown', reason: '未注册的本地数据 key' };
+  if (!registered) return { key, action: 'unknown', reason: t('nav.localData.unregisteredKey') };
   const { schema, keyVersion } = registered;
-  if (raw === null) return { key, domain: schema.domain, action: 'unchanged', reason: '记录不存在' };
+  if (raw === null) return { key, domain: schema.domain, action: 'unchanged', reason: t('nav.localData.recordNotFound') };
   try {
     const record = parseLocalDataRecord(raw, schema, keyVersion);
     if (scope !== undefined && record.scope !== undefined && record.scope !== scope) {
-      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: 'scope 不匹配' };
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: t('nav.localData.scopeMismatch') };
     }
     if (record.version > schema.version) {
-      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: '记录来自未来版本' };
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: t('nav.localData.futureVersion') };
     }
     const migrated = migrateValue(record.value, record.version, schema.version, schema.migrations);
     if (!migrated) {
-      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: '缺少连续迁移步骤' };
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: t('nav.localData.missingMigration') };
     }
     if (schema.validate && !schema.validate(migrated.value)) {
-      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: '迁移结果未通过 schema 校验' };
+      return { key, domain: schema.domain, action: 'rejected', fromVersion: record.version, toVersion: schema.version, reason: t('nav.localData.schemaValidationFailed') };
     }
     return {
       key,
@@ -407,12 +409,12 @@ export function executeLocalDataMigrations(options: LocalDataMigrationOptions = 
       if (entry.action !== 'migrate') continue;
       const registered = schemaForKey(options.schemas ?? LOCAL_DATA_SCHEMAS, entry.key);
       const schema = registered?.schema;
-      if (!schema) throw new Error(`迁移 key 未注册：${entry.key}`);
+      if (!schema) throw new Error(t('nav.localData.migrationKeyUnregistered', { key: entry.key }));
       const raw = storage.getItem(entry.key);
-      if (raw === null) throw new Error(`迁移记录不存在：${entry.key}`);
+      if (raw === null) throw new Error(t('nav.localData.migrationRecordMissing', { key: entry.key }));
       const record = parseLocalDataRecord(raw, schema, registered.keyVersion);
       const migrated = migrateValue(record.value, record.version, schema.version, schema.migrations);
-      if (!migrated) throw new Error(`迁移步骤失效：${entry.key}`);
+      if (!migrated) throw new Error(t('nav.localData.migrationStepFailed', { key: entry.key }));
       previous.set(entry.key, raw);
       writeLocalData(entry.key, schema.version, migrated.value, {
         storage,
@@ -464,16 +466,16 @@ export function backupLocalData(options: LocalDataBackupOptions = {}): string {
 export function parseLocalDataBackup(input: string | LocalDataBackup): LocalDataBackup {
   const value: unknown = typeof input === 'string' ? JSON.parse(input) : input;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('本地数据备份格式无效');
+    throw new Error(t('nav.localData.invalidBackupFormat'));
   }
   const backup = value as Partial<LocalDataBackup>;
   if (backup.format !== 'rocketx-local-data-backup' || backup.version !== 1
     || !backup.records || typeof backup.records !== 'object' || Array.isArray(backup.records)) {
-    throw new Error('本地数据备份版本不受支持');
+    throw new Error(t('nav.localData.unsupportedBackupVersion'));
   }
   const records: Record<string, string> = {};
   for (const [key, raw] of Object.entries(backup.records)) {
-    if (!key || typeof raw !== 'string') throw new Error('本地数据备份记录无效');
+    if (!key || typeof raw !== 'string') throw new Error(t('nav.localData.invalidBackupRecord'));
     records[key] = raw;
   }
   return {

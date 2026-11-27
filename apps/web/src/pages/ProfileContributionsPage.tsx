@@ -8,6 +8,8 @@ import {
   X,
 } from 'lucide-react';
 import ContributionHeatmap from '../components/ContributionHeatmap';
+import { useI18n, useT, type ResolvedLocale } from '../i18n';
+import { formatDate, formatDateTime, formatNumber } from '../i18n/format';
 import {
   type ContributionEvent,
   type ContributionSourceStatus,
@@ -23,22 +25,27 @@ function initials(name: string): string {
   return (name.trim().slice(0, 2) || '?').toUpperCase();
 }
 
-function formatTime(value: string): string {
+function formatContributionTime(value: string, locale: ResolvedLocale): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
+  return formatDateTime(
+    date,
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    },
+    locale,
+  );
 }
 
 function SourceWarnings({ statuses }: { statuses: ContributionSourceStatus[] }) {
+  const t = useT();
   const warnings = statuses.filter((status) => status.state !== 'complete');
   if (warnings.length === 0) return null;
   return (
-    <div className="space-y-2" aria-label="数据覆盖说明">
+    <div className="space-y-2" aria-label={t('pages.contributions.coverageAria')}>
       {warnings.map((status) => (
         <div
           key={status.type}
@@ -47,10 +54,9 @@ function SourceWarnings({ statuses }: { statuses: ContributionSourceStatus[] }) 
           <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
           <p>
             <span className="font-medium text-ink">
-              创建 PR
-              {status.state === 'unavailable' ? '不可用' : '仅部分覆盖'}：
+              {t(status.state === 'unavailable' ? 'pages.contributions.prUnavailableLabel' : 'pages.contributions.prPartialLabel')}
             </span>{' '}
-            {status.warnings.join('；') || '当前服务器或权限未能提供完整数据。'}
+            {status.warnings.join(t('pages.contributions.warningSeparator')) || t('pages.contributions.partialFallback')}
           </p>
         </div>
       ))}
@@ -59,31 +65,38 @@ function SourceWarnings({ statuses }: { statuses: ContributionSourceStatus[] }) 
 }
 
 function DayDetails({ day, events, onClose }: { day: string; events: ContributionEvent[]; onClose: () => void }) {
-  const dateLabel = new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    weekday: 'short',
-  }).format(new Date(`${day}T12:00:00`));
+  const { t, tp, locale } = useI18n();
+  const dateLabel = formatDate(
+    new Date(`${day}T12:00:00`),
+    {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'short',
+    },
+    locale,
+  );
 
   return (
-    <section className="rounded-xl border border-line bg-surface-3" aria-label={`${dateLabel}的贡献明细`}>
+    <section className="rounded-xl border border-line bg-surface-3" aria-label={t('pages.contributions.dayDetailsAria', { date: dateLabel })}>
       <header className="flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-ink">{dateLabel}</h2>
-          <p className="mt-0.5 text-xs text-ink-3">{events.length} 项活动</p>
+          <p className="mt-0.5 text-xs text-ink-3">
+            {tp(events.length, 'pages.contributions.dayActivityCountOne', 'pages.contributions.dayActivityCountOther')}
+          </p>
         </div>
         <button
           type="button"
           onClick={onClose}
-          aria-label="关闭日期明细"
+          aria-label={t('pages.contributions.closeDayDetailsAria')}
           className="rounded-md p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"
         >
           <X size={16} />
         </button>
       </header>
       {events.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-ink-3">这一天没有符合当前筛选的活动</p>
+        <p className="px-4 py-8 text-center text-sm text-ink-3">{t('pages.contributions.emptyDay')}</p>
       ) : (
         <ul className="divide-y divide-line">
           {events.map((event) => {
@@ -100,9 +113,9 @@ function DayDetails({ day, events, onClose }: { day: string; events: Contributio
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <span className="text-xs font-medium text-primary">创建 PR</span>
+                      <span className="text-xs font-medium text-primary">{t('pages.contributions.prCreated')}</span>
                       <time className="text-xs text-ink-3" dateTime={event.occurredAt}>
-                        {formatTime(event.occurredAt)}
+                        {formatContributionTime(event.occurredAt, locale)}
                       </time>
                     </span>
                     <span className="mt-1 block text-sm font-medium text-ink">{event.title}</span>
@@ -126,6 +139,7 @@ function DayDetails({ day, events, onClose }: { day: string; events: Contributio
 }
 
 export default function ProfileContributionsPage() {
+  const { t, locale } = useI18n();
   const identity = useProfileContributions((state) => state.identity);
   const events = useProfileContributions((state) => state.events);
   const statuses = useProfileContributions((state) => state.statuses);
@@ -165,7 +179,7 @@ export default function ProfileContributionsPage() {
   const hasIncompleteCoverage = statuses.some((status) => status.state !== 'complete');
 
   return (
-    <main className="h-full min-w-0 flex-1 overflow-y-auto bg-surface-2" aria-label="贡献概览">
+    <main className="h-full min-w-0 flex-1 overflow-y-auto bg-surface-2" aria-label={t('pages.contributions.overviewAria')}>
       <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-4 px-5 py-5 lg:px-8">
         <header className="flex flex-col gap-4 rounded-xl border border-line bg-surface-3 p-5 md:flex-row md:items-center md:justify-between">
           <div className="flex min-w-0 items-center gap-3">
@@ -182,18 +196,18 @@ export default function ProfileContributionsPage() {
             )}
             <div className="min-w-0">
               <h1 className="truncate text-lg font-semibold text-ink">
-                {identity?.displayName || '贡献概览'}
+                {identity?.displayName || t('pages.contributions.overviewTitle')}
               </h1>
               <p className="truncate text-sm text-ink-3">
-                {identity?.account || 'Azure DevOps 个人活动'}
+                {identity?.account || t('pages.contributions.accountFallback')}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3 md:text-right">
             <div>
-              <p className="text-2xl font-semibold tabular-nums text-ink">{events.length}</p>
+              <p className="text-2xl font-semibold tabular-nums text-ink">{formatNumber(events.length, undefined, locale)}</p>
               <p className="text-xs text-ink-3">
-                {hasIncompleteCoverage ? '已读取的 ADO PR' : '当前范围内创建的 ADO PR'}
+                {t(hasIncompleteCoverage ? 'pages.contributions.countPartialLabel' : 'pages.contributions.countCompleteLabel')}
               </p>
             </div>
             {loading ? (
@@ -202,7 +216,7 @@ export default function ProfileContributionsPage() {
                 onClick={cancel}
                 className="h-9 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover"
               >
-                取消加载
+                {t('pages.contributions.cancelLoading')}
               </button>
             ) : (
               <button
@@ -211,15 +225,15 @@ export default function ProfileContributionsPage() {
                 className="flex h-9 items-center gap-1.5 rounded-md border border-line px-3 text-sm text-ink-2 hover:bg-fill-hover"
               >
                 <RefreshCw size={14} aria-hidden="true" />
-                刷新
+                {t('common.refresh')}
               </button>
             )}
           </div>
         </header>
 
-        <section className="grid gap-3 rounded-xl border border-line bg-surface-3 p-4 sm:grid-cols-3" aria-label="贡献筛选">
+        <section className="grid gap-3 rounded-xl border border-line bg-surface-3 p-4 sm:grid-cols-3" aria-label={t('pages.contributions.filtersAria')}>
           <label className="text-xs font-medium text-ink-2">
-            开始日期
+            {t('pages.contributions.fromDate')}
             <input
               type="date"
               value={range.from}
@@ -231,7 +245,7 @@ export default function ProfileContributionsPage() {
             />
           </label>
           <label className="text-xs font-medium text-ink-2">
-            结束日期
+            {t('pages.contributions.toDate')}
             <input
               type="date"
               value={range.to}
@@ -243,13 +257,13 @@ export default function ProfileContributionsPage() {
             />
           </label>
           <label className="text-xs font-medium text-ink-2">
-            项目
+            {t('pages.contributions.project')}
             <select
               value={filters.project ?? ''}
               onChange={(event) => setFilters({ project: event.target.value || undefined })}
               className="mt-1 h-9 w-full rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none focus:border-primary"
             >
-              <option value="">全部项目</option>
+              <option value="">{t('pages.contributions.allProjects')}</option>
               {projects.map((project) => <option key={project} value={project}>{project}</option>)}
             </select>
           </label>
@@ -264,19 +278,19 @@ export default function ProfileContributionsPage() {
 
         {statuses.length > 0 && (
           <section
-            aria-label="ADO PR 总数"
+            aria-label={t('pages.contributions.totalPrsAria')}
             className="grid grid-cols-2 gap-2 sm:grid-cols-3"
           >
             {statuses.map((status) => (
               <div key={status.type} className="rounded-lg border border-line bg-surface-3 px-3 py-2.5">
                 <p className="text-lg font-semibold tabular-nums text-ink">
                   {status.state === 'complete'
-                    ? status.count
+                    ? formatNumber(status.count, undefined, locale)
                     : status.state === 'partial' && status.count > 0
                       ? `≥${status.count}`
                       : '—'}
                 </p>
-                <p className="truncate text-xs text-ink-3">创建 PR</p>
+                <p className="truncate text-xs text-ink-3">{t('pages.contributions.prCreated')}</p>
               </div>
             ))}
           </section>
@@ -292,7 +306,7 @@ export default function ProfileContributionsPage() {
           {loading && events.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center rounded-xl bg-surface-3/80" role="status">
               <RefreshCw size={18} className="mr-2 animate-spin text-primary" aria-hidden="true" />
-              <span className="text-sm text-ink-2">正在统计 Azure DevOps PR…</span>
+              <span className="text-sm text-ink-2">{t('pages.contributions.loadingPrs')}</span>
             </div>
           )}
         </div>
@@ -300,19 +314,34 @@ export default function ProfileContributionsPage() {
         {!loading && !error && events.length === 0 && (
           <section className="rounded-xl border border-dashed border-line bg-surface-3 px-5 py-10 text-center">
             <CalendarDays size={28} className="mx-auto text-ink-3" aria-hidden="true" />
-            <h2 className="mt-3 text-sm font-medium text-ink">当前范围内没有创建 PR</h2>
-            <p className="mt-1 text-xs text-ink-3">可以扩大日期范围或清除项目筛选。</p>
+            <h2 className="mt-3 text-sm font-medium text-ink">{t('pages.contributions.emptyRangeTitle')}</h2>
+            <p className="mt-1 text-xs text-ink-3">{t('pages.contributions.emptyRangeHint')}</p>
           </section>
         )}
 
         {selectedDay ? (
           <DayDetails day={selectedDay} events={selectedEvents} onClose={() => selectDay(null)} />
         ) : events.length > 0 ? (
-          <p className="text-center text-xs text-ink-3">选择热力图中的日期查看当天明细</p>
+          <p className="text-center text-xs text-ink-3">{t('pages.contributions.selectDayPrompt')}</p>
         ) : null}
 
         <footer className="pb-2 text-right text-xs text-ink-3">
-          {lastUpdated ? `上次更新：${new Date(lastUpdated).toLocaleString('zh-CN')}` : '尚未完成更新'}
+          {lastUpdated
+            ? t('pages.contributions.lastUpdated', {
+                time: formatDateTime(
+                  lastUpdated,
+                  {
+                    year: 'numeric',
+                    month: 'numeric',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  },
+                  locale,
+                ),
+              })
+            : t('pages.contributions.notUpdatedYet')}
         </footer>
       </div>
     </main>

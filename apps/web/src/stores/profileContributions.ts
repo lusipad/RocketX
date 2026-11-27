@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import {
   defaultContributionRange,
   loadAdoContributions,
@@ -63,7 +64,7 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
     if (!connection) {
       set({
         loading: false,
-        error: '请先在设置中连接 Azure DevOps。',
+        error: t('pages.contributions.connectAdoFirst'),
         identity: null,
         events: [],
         statuses: [],
@@ -113,7 +114,7 @@ export const useProfileContributions = create<ProfileContributionsState>((set, g
         });
       } catch (err) {
         if (!current()) return;
-        set({ error: err instanceof Error ? err.message : String(err ?? '加载贡献数据失败') });
+        set({ error: err instanceof Error ? err.message : String(err ?? t('pages.contributions.loadFailed')) });
       } finally {
         if (activeLoad === request) activeLoad = null;
         if (current()) {

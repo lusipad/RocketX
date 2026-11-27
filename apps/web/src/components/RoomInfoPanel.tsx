@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { RcRoomRole } from '@rcx/rc-client';
+import { tsMs, type RcRoomRole } from '@rcx/rc-client';
 import {
   Archive,
   ArchiveRestore,
@@ -30,7 +30,8 @@ import { useAuth } from '../stores/auth';
 import { buildConversations, useChat } from '../stores/chat';
 import { displayName, useAliases } from '../stores/aliases';
 import { canManageRoom, canTransferOwnership } from '../lib/roomAdmin';
-import { fmtDayDivider } from '../lib/format';
+import { useI18n, useT } from '../i18n';
+import { formatDate } from '../i18n/format';
 import AliasDialog from './AliasDialog';
 import Avatar from './Avatar';
 import { ConfirmDialog, default as Dialog } from './Dialog';
@@ -67,6 +68,7 @@ function EditableField({
   readOnly?: boolean;
   onSave: (next: string) => Promise<void>;
 }) {
+  const t = useT();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
   const [busy, setBusy] = useState(false);
@@ -101,7 +103,7 @@ function EditableField({
           <button
             onClick={() => setEditing(true)}
             className="text-ink-3 transition hover:text-primary"
-            title={`编辑${label}`}
+            title={t('panels.roomInfo.editFieldTitle', { label })}
           >
             <Pencil size={12} />
           </button>
@@ -153,14 +155,14 @@ function EditableField({
               }}
               className="h-7 rounded border border-line px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               onClick={() => void save()}
               disabled={busy}
               className="h-7 rounded bg-primary px-2.5 text-xs text-white hover:bg-primary-hover disabled:opacity-50"
             >
-              {busy ? '保存中…' : '保存'}
+              {busy ? t('panels.roomInfo.saving') : t('common.save')}
             </button>
           </div>
         </div>
@@ -203,6 +205,7 @@ function ActionRow({
  * 单聊显示对方资料，其余显示群资料。
  */
 export default function RoomInfoPanel() {
+  const { t, tp, locale } = useI18n();
   const rid = useChat((s) => s.activeRid);
   const subscriptions = useChat((s) => s.subscriptions);
   const rooms = useChat((s) => s.rooms);
@@ -299,7 +302,11 @@ export default function RoomInfoPanel() {
           : UsersRound;
 
   return (
-    <PanelShell title={isDM && !conv.isMultiDM ? '联系人信息' : '群信息'}>
+    <PanelShell
+      title={
+        isDM && !conv.isMultiDM ? t('panels.roomInfo.contactTitle') : t('panels.roomInfo.roomTitle')
+      }
+    >
       <div className="flex-1 overflow-y-auto">
         {/* 头部：头像 + 名称 */}
         <div className="flex flex-col items-center gap-2 border-b border-line px-4 py-5">
@@ -315,14 +322,16 @@ export default function RoomInfoPanel() {
               {shownName}
             </div>
             {currentAlias && nameFormat === 'alias' && (
-              <div className="mt-0.5 text-xs text-ink-3">原名：{conv.name}</div>
+              <div className="mt-0.5 text-xs text-ink-3">
+                {t('panels.roomInfo.originalName', { name: conv.name })}
+              </div>
             )}
             {count !== undefined && !(isDM && !conv.isMultiDM) && (
               <button
                 onClick={() => setPanel({ kind: 'members' })}
                 className="mt-1 text-xs text-primary hover:underline"
               >
-                {count} 名成员 →
+                {tp(count, 'panels.roomInfo.memberCountArrow.one', 'panels.roomInfo.memberCountArrow.other')}
               </button>
             )}
           </div>
@@ -337,36 +346,36 @@ export default function RoomInfoPanel() {
               <>
                 {canManage && (
                   <EditableField
-                    label="群名称"
+                    label={t('panels.roomInfo.field.name')}
                     icon={Type}
                     value={info?.fname ?? info?.name}
-                    placeholder="未命名"
+                    placeholder={t('panels.roomInfo.field.namePlaceholder')}
                     onSave={(v) => saveRoomSettings(rid, { name: v })}
                   />
                 )}
                 {/* 公告/话题/介绍：普通成员看得见，但改不了（服务端也只让管理员改） */}
                 <EditableField
-                  label="群公告"
+                  label={t('panels.roomInfo.field.announcement')}
                   icon={Megaphone}
                   value={info?.announcement}
-                  placeholder="未设置公告"
+                  placeholder={t('panels.roomInfo.field.announcementPlaceholder')}
                   multiline
                   readOnly={!canManage}
                   onSave={(v) => saveRoomSettings(rid, { announcement: v })}
                 />
                 <EditableField
-                  label="群话题"
+                  label={t('panels.roomInfo.field.topic')}
                   icon={Tag}
                   value={info?.topic}
-                  placeholder="未设置话题（显示在聊天窗顶部）"
+                  placeholder={t('panels.roomInfo.field.topicPlaceholder')}
                   readOnly={!canManage}
                   onSave={(v) => saveRoomSettings(rid, { topic: v })}
                 />
                 <EditableField
-                  label="群介绍"
+                  label={t('panels.roomInfo.field.description')}
                   icon={Pencil}
                   value={info?.description}
-                  placeholder="未填写介绍"
+                  placeholder={t('panels.roomInfo.field.descriptionPlaceholder')}
                   multiline
                   readOnly={!canManage}
                   onSave={(v) => saveRoomSettings(rid, { description: v })}
@@ -380,58 +389,61 @@ export default function RoomInfoPanel() {
                 {info?.ro && (
                   <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-2">
                     <MessageSquareOff size={12} />
-                    只读群：仅群主和管理员可发言
+                    {t('panels.roomInfo.readOnlyBadge')}
                   </span>
                 )}
                 {info?.archived && (
                   <span className="flex items-center gap-1 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-2">
                     <Archive size={12} />
-                    已归档
+                    {t('panels.roomInfo.archivedBadge')}
                   </span>
                 )}
               </div>
             )}
 
-            {info?.u && (
-              <div className="border-b border-line px-4 py-3 text-xs text-ink-3">
-                由 {info.u.name || info.u.username} 创建
-                {info.ts ? ` · ${fmtDayDivider(new Date(info.ts as string).getTime())}` : ''}
-              </div>
-            )}
+            {info?.u && (() => {
+              const createdMs = info.ts ? tsMs(info.ts) : 0;
+              return (
+                <div className="border-b border-line px-4 py-3 text-xs text-ink-3">
+                  {t('panels.roomInfo.createdBy', { name: info.u.name || info.u.username })}
+                  {createdMs ? ` · ${formatDate(createdMs, { year: 'numeric', month: 'short', day: 'numeric' }, locale)}` : ''}
+                </div>
+              );
+            })()}
 
             {/* 操作 */}
             <ActionRow
               icon={Tag}
-              label={currentAlias ? '修改备注名' : '设置备注名'}
+              label={currentAlias ? t('panels.roomInfo.editAlias') : t('panels.roomInfo.setAlias')}
               onClick={() => setAliasOpen(true)}
             />
             <ActionRow
               icon={conv.favorite ? PinOff : Pin}
-              label={conv.favorite ? '取消收藏' : '收藏会话'}
+              label={conv.favorite ? t('panels.roomInfo.unfavorite') : t('panels.roomInfo.favorite')}
               onClick={() => void toggleFavorite(conv)}
             />
             <ActionRow
               icon={conv.muted ? Bell : BellOff}
-              label={conv.muted ? '取消免打扰' : '消息免打扰'}
+              label={conv.muted ? t('panels.roomInfo.unmute') : t('panels.roomInfo.mute')}
               onClick={() => void toggleMute(conv)}
             />
             {!(isDM && !conv.isMultiDM) && (
               <ActionRow
                 icon={Users}
-                label="查看群成员"
+                label={t('panels.roomInfo.viewMembers')}
                 onClick={() => setPanel({ kind: 'members' })}
               />
             )}
             <ActionRow
               icon={Files}
-              label="查看文件"
+              label={t('panels.roomInfo.viewFiles')}
               onClick={() => setPanel({ kind: 'files' })}
             />
             {/* 私聊「加人」会新建一个空会话，历史留在原处（RC 没有搬迁消息的接口），
                 所以给一个把记录带到别的会话去的入口 */}
             <ActionRow
               icon={Copy}
-              label="复制聊天记录到其他会话"
+              label={t('panels.roomInfo.copyHistory')}
               onClick={() => openHistoryCopy({ sourceRid: rid })}
             />
 
@@ -443,11 +455,11 @@ export default function RoomInfoPanel() {
             {discussionsEnabled && (conv.type === 'c' || conv.type === 'p') && !conv.isDiscussion && (
               <>
                 <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-xs text-ink-3">
-                  讨论
+                  {t('panels.roomInfo.sectionDiscussions')}
                 </div>
                 <ActionRow
                   icon={MessagesSquare}
-                  label="在此房间创建讨论"
+                  label={t('panels.roomInfo.createDiscussion')}
                   onClick={() => setDiscussionOpen(true)}
                 />
               </>
@@ -458,18 +470,18 @@ export default function RoomInfoPanel() {
             {(conv.type === 'c' || conv.type === 'p') && (
               <>
                 <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-xs text-ink-3">
-                  团队
+                  {t('panels.roomInfo.sectionTeam')}
                 </div>
                 {conv.teamId ? (
                   <ActionRow
                     icon={Users}
-                    label="管理所属团队"
+                    label={t('panels.roomInfo.manageTeam')}
                     onClick={() => openTeamPanel({ teamId: conv.teamId })}
                   />
                 ) : (
                   <ActionRow
                     icon={ArrowUpRight}
-                    label="把这个频道转换为团队"
+                    label={t('panels.roomInfo.convertToTeam')}
                     onClick={() => setConvertTeamOpen(true)}
                   />
                 )}
@@ -480,22 +492,22 @@ export default function RoomInfoPanel() {
             {canManage && (
               <>
                 <div className="border-b border-line bg-fill-1 px-4 py-1.5 text-xs text-ink-3">
-                  群管理
+                  {t('panels.roomInfo.sectionAdmin')}
                 </div>
                 <ActionRow
                   icon={MessageSquareOff}
-                  label={info?.ro ? '取消只读' : '设为只读群'}
+                  label={info?.ro ? t('panels.roomInfo.disableReadOnly') : t('panels.roomInfo.enableReadOnly')}
                   onClick={() => void setRoomReadOnly(rid, !info?.ro)}
                 />
                 <ActionRow
                   icon={info?.archived ? ArchiveRestore : Archive}
-                  label={info?.archived ? '取消归档' : '归档群组'}
+                  label={info?.archived ? t('panels.roomInfo.unarchive') : t('panels.roomInfo.archive')}
                   onClick={() => void archiveConv(rid, !info?.archived)}
                 />
                 {canDelete && (
                   <ActionRow
                     icon={Trash2}
-                    label="解散并删除群"
+                    label={t('panels.roomInfo.deleteRoom')}
                     danger
                     onClick={() => setConfirmDelete(true)}
                   />
@@ -506,14 +518,14 @@ export default function RoomInfoPanel() {
             {!isDM && (
               <ActionRow
                 icon={CalendarClock}
-                label="团队值班表"
+                label={t('panels.roomInfo.oncallSchedule')}
                 onClick={() => setPanel({ kind: 'oncall' })}
               />
             )}
 
             <ActionRow
               icon={isDM ? X : LogOut}
-              label={isDM ? '隐藏会话' : '退出群组'}
+              label={isDM ? t('panels.roomInfo.hideChat') : t('panels.roomInfo.leaveRoom')}
               danger
               onClick={() => setConfirmLeave(true)}
             />
@@ -523,7 +535,7 @@ export default function RoomInfoPanel() {
 
       {aliasOpen && (
         <AliasDialog
-          title={aliasIsUser ? '给联系人设置备注' : '给会话设置备注'}
+          title={aliasIsUser ? t('panels.roomInfo.setContactAliasTitle') : t('panels.roomInfo.setRoomAliasTitle')}
           originalName={conv.name}
           current={currentAlias}
           onSubmit={(alias) =>
@@ -534,22 +546,22 @@ export default function RoomInfoPanel() {
       )}
       {confirmDelete && (
         <ConfirmDialog
-          title="解散并删除群"
-          message={`「${shownName}」和它的全部聊天记录会被永久删除，所有成员都会失去这个群。这个操作无法撤销。`}
-          confirmLabel="永久删除"
+          title={t('panels.roomInfo.deleteRoom')}
+          message={t('panels.roomInfo.deleteConfirmMessage', { name: shownName })}
+          confirmLabel={t('panels.roomInfo.deleteConfirmLabel')}
           onConfirm={() => void deleteConv(rid)}
           onClose={() => setConfirmDelete(false)}
         />
       )}
       {confirmLeave && (
         <ConfirmDialog
-          title={isDM ? '隐藏会话' : '退出群组'}
+          title={isDM ? t('panels.roomInfo.hideChat') : t('panels.roomInfo.leaveRoom')}
           message={
             isDM
-              ? `「${shownName}」会从列表消失，收到新消息时会自动回来，聊天记录不会丢。`
-              : `退出「${shownName}」后将不再接收该群消息，需要重新被邀请才能回来。`
+              ? t('panels.roomInfo.hideConfirmMessage', { name: shownName })
+              : t('panels.roomInfo.leaveConfirmMessage', { name: shownName })
           }
-          confirmLabel={isDM ? '隐藏' : '退出'}
+          confirmLabel={isDM ? t('panels.roomInfo.hideConfirmLabel') : t('panels.roomInfo.leaveConfirmLabel')}
           onConfirm={() => void leaveConv(conv)}
           onClose={() => setConfirmLeave(false)}
         />
@@ -581,13 +593,15 @@ function ConvertToTeamDialog({
   onSubmit: () => Promise<void>;
   onClose: () => void;
 }) {
+  const t = useT();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
+  const errorMessage = error ? (error.message ?? t('panels.roomInfo.convertTeamFailed')) : null;
 
   return (
     <Dialog
-      title="转换为团队"
-      hint="本频道会成为团队的主频道，之后可以在团队下继续新建频道、统一管理成员。"
+      title={t('panels.roomInfo.convertTeamDialogTitle')}
+      hint={t('panels.roomInfo.convertTeamDialogHint')}
       onClose={busy ? () => {} : onClose}
       footer={
         <>
@@ -596,7 +610,7 @@ function ConvertToTeamDialog({
             disabled={busy}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             disabled={busy}
@@ -605,26 +619,25 @@ function ConvertToTeamDialog({
               setError(null);
               void onSubmit()
                 .then(onClose)
-                .catch((err) => setError(err instanceof Error ? err.message : '转换失败'))
+                .catch((err) => setError(err instanceof Error ? { message: err.message } : {}))
                 .finally(() => setBusy(false));
             }}
             className="flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Users size={14} />}
-            {busy ? '转换中…' : '转换为团队'}
+            {busy ? t('panels.roomInfo.converting') : t('panels.roomInfo.convertTeamDialogTitle')}
           </button>
         </>
       }
     >
       <div className="space-y-3 px-5 pb-4">
         <div className="text-sm text-ink-2">
-          将转换：<span className="text-ink">{defaultName}</span>
+          {t('panels.roomInfo.convertingTarget')}<span className="text-ink">{defaultName}</span>
         </div>
         <div className="text-xs leading-relaxed text-ink-3">
-          Rocket.Chat 的转换接口不接受自定义团队名，团队会直接使用当前频道名
-          「{defaultName}」。需要别的名字请先改频道名。
+          {t('panels.roomInfo.convertTeamNameNote', { name: defaultName })}
         </div>
-        {error && <div className="text-xs text-danger">{error}</div>}
+        {errorMessage && <div className="text-xs text-danger">{errorMessage}</div>}
       </div>
     </Dialog>
   );

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useT } from '../i18n';
 import Dialog from './Dialog';
 import { toast } from '../stores/toast';
 
@@ -20,18 +21,19 @@ export default function AliasDialog({
   onSubmit: (alias: string) => void;
   onClose: () => void;
 }) {
+  const t = useT();
   const [value, setValue] = useState(current ?? '');
 
   const submit = () => {
     onSubmit(value);
-    toast.success(value.trim() ? `备注已设为「${value.trim()}」` : '备注已清除');
+    toast.success(value.trim() ? t('nav.aliasDialog.saved', { alias: value.trim() }) : t('nav.aliasDialog.cleared'));
     onClose();
   };
 
   return (
     <Dialog
       title={title}
-      hint={`原名：${originalName}。备注会同步到你的账号，换设备登录后依然有效。`}
+      hint={t('nav.aliasDialog.hint', { name: originalName })}
       onClose={onClose}
       footer={
         <>
@@ -39,13 +41,13 @@ export default function AliasDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={submit}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover"
           >
-            {value.trim() ? '保存' : '清除备注'}
+            {value.trim() ? t('common.save') : t('nav.aliasDialog.clear')}
           </button>
         </>
       }
@@ -58,11 +60,11 @@ export default function AliasDialog({
           onKeyDown={(e) => {
             if (e.key === 'Enter') submit();
           }}
-          placeholder="留空则清除备注"
+          placeholder={t('nav.aliasDialog.placeholder')}
           maxLength={30}
           className="h-9 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
         />
-        <div className="mt-2 text-xs text-ink-3">备注名同样支持拼音搜索。</div>
+        <div className="mt-2 text-xs text-ink-3">{t('nav.aliasDialog.pinyinHint')}</div>
       </div>
     </Dialog>
   );

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { useT } from '../i18n';
 import { shouldRestoreDialogFocus } from '../lib/focus';
 
 const FOCUSABLE = [
@@ -94,6 +95,7 @@ export default function Dialog({
   footer?: ReactNode;
   children: ReactNode;
 }) {
+  const t = useT();
   const dialogRef = useDialogBehavior(onClose);
 
   return (
@@ -119,7 +121,7 @@ export default function Dialog({
           </div>
           <button
             onClick={onClose}
-            aria-label={`关闭${title}`}
+            aria-label={t('nav.dialog.closeAria', { title })}
             className="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <X size={16} />
@@ -136,7 +138,7 @@ export default function Dialog({
 export function ConfirmDialog({
   title,
   message,
-  confirmLabel = '确定',
+  confirmLabel,
   danger = true,
   extra,
   onConfirm,
@@ -151,6 +153,8 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
+  const resolvedConfirmLabel = confirmLabel ?? t('common.ok');
   return (
     <Dialog
       title={title}
@@ -162,7 +166,7 @@ export function ConfirmDialog({
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => {
@@ -173,7 +177,7 @@ export function ConfirmDialog({
               danger ? 'bg-danger' : 'bg-primary'
             }`}
           >
-            {confirmLabel}
+            {resolvedConfirmLabel}
           </button>
         </>
       }

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { useUI } from '../stores/ui';
 
@@ -11,10 +12,10 @@ export async function handoffToCodexTask(
   title: string,
 ): Promise<CodexTaskHandoffResult> {
   const prompt = text.trim();
-  if (!prompt) throw new Error('任务内容不能为空');
+  if (!prompt) throw new Error(t('agent.codexHandoff.emptyPrompt'));
   const provider = useUI.getState().aiRuntimeProvider;
   if (provider !== 'pi') {
-    throw new Error('当前未启用 Pi 运行时');
+    throw new Error(t('agent.codexHandoff.piDisabled'));
   }
   useUI.getState().openButlerConversation();
 

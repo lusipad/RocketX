@@ -22,13 +22,13 @@ import {
   SquareKanban,
 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import type { AgentSessionStatus } from '../agent/session';
 import { openCodexNewThread, openCodexSurface } from '../agent/codexTransfer';
+import { useI18n, type MessageKey, type TranslateFn } from '../i18n';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import { pinyinMatch, usePinyinReady } from '../lib/pinyin';
-import { localizeDynamicText, tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import { openDesktopDialog } from '../platform/desktopDialog';
 import {
-  HOSTED_SESSION_STATUS_LABEL,
   type HostedSessionItem,
   useHostedSessionItems,
 } from '../lib/hostedSessions';
@@ -39,6 +39,8 @@ import {
   useAgentEnvironments,
 } from '../stores/agentEnvironments';
 import { useAuth } from '../stores/auth';
+import { useAcpAgents } from '../stores/acpAgents';
+import { useButlerCognition } from '../stores/butlerCognition';
 import { resolveButlerAccountScope } from '../stores/butlerMemory';
 import { useChat } from '../stores/chat';
 import { isSystemCodexWorkspace, useCodexWorkspace } from '../stores/codexWorkspace';
@@ -51,6 +53,15 @@ import { ConfirmDialog } from './Dialog';
 
 const THREAD_PREVIEW_LIMIT = 5;
 
+const HOSTED_SESSION_STATUS_KEYS: Record<AgentSessionStatus, MessageKey> = {
+  starting: 'butler.history.hosted.status.starting',
+  ready: 'butler.history.hosted.status.ready',
+  running: 'butler.history.hosted.status.running',
+  'waiting-approval': 'butler.history.hosted.status.waitingApproval',
+  interrupted: 'butler.history.hosted.status.interrupted',
+  ended: 'butler.history.hosted.status.ended',
+};
+
 interface HostedSessionGroup {
   key: string;
   label: string;
@@ -60,8 +71,8 @@ interface HostedSessionGroup {
   activeCount: number;
 }
 
-function threadTitle(name: string | null, preview: string, locale: UiLocale): string {
-  return name?.trim() || preview.trim() || tr('新对话', 'New chat', locale);
+function threadTitle(name: string | null, preview: string, t: TranslateFn): string {
+  return name?.trim() || preview.trim() || t('butler.history.newChatFallback');
 }
 
 function workspaceName(path: string): string {
@@ -72,46 +83,16 @@ function workspaceKey(path: string): string {
   return normalizeEnvironmentPath(path);
 }
 
-function ageLabel(timestamp: number, locale: UiLocale): string {
+function ageLabel(timestamp: number, t: TranslateFn): string {
   const elapsed = Math.max(0, Date.now() - timestamp * 1_000);
-  if (elapsed < 60_000) return tr('刚刚', 'Just now', locale);
-  if (elapsed < 3_600_000) {
-    const mins = Math.floor(elapsed / 60_000);
-    return locale === 'zh' ? `${mins} 分钟` : `${mins}m`;
-  }
-  if (elapsed < 86_400_000) {
-    const hours = Math.floor(elapsed / 3_600_000);
-    return locale === 'zh' ? `${hours} 小时` : `${hours}h`;
-  }
-  const days = Math.floor(elapsed / 86_400_000);
-  return locale === 'zh' ? `${days} 天` : `${days}d`;
-}
-
-function displayModelName(name: string | undefined, fallback: string, locale: UiLocale): string {
-  const raw = name || fallback;
-  if (!raw || locale === 'zh') return raw;
-  return raw
-    .replace(/\(深度推理\)/g, '(Deep Reasoning)')
-    .replace(/\(兼容推理\)/g, '(Compatible Reasoning)')
-    .replace(/\(推理\)/g, '(Reasoning)')
-    .replace(/\(兼容\)/g, '(Compatible)');
-}
-
-const HOSTED_SESSION_STATUS_LABEL_EN: Record<HostedSessionItem['status'], string> = {
-  starting: 'Starting',
-  ready: 'Ready',
-  running: 'Running',
-  'waiting-approval': 'Awaiting Approval',
-  interrupted: 'Interrupted',
-  ended: 'Ended',
-};
-
-function hostedStatusLabel(status: HostedSessionItem['status'], locale: UiLocale): string {
-  return locale === 'zh' ? HOSTED_SESSION_STATUS_LABEL[status] : HOSTED_SESSION_STATUS_LABEL_EN[status];
+  if (elapsed < 60_000) return t('butler.history.justNow');
+  if (elapsed < 3_600_000) return t('butler.history.ageMinutes', { count: Math.floor(elapsed / 60_000) });
+  if (elapsed < 86_400_000) return t('butler.history.ageHours', { count: Math.floor(elapsed / 3_600_000) });
+  return t('butler.history.ageDays', { count: Math.floor(elapsed / 86_400_000) });
 }
 
 export default function ButlerConversationHistory({ onNavigate }: { onNavigate?: () => void }) {
-  const locale = useUiLocale();
+  const { t, tp, locale } = useI18n();
   const userId = useAuth((state) => state.user?._id);
   const localMode = useAuth((state) => state.localMode);
   const activeView = useUI((state) => state.butlerView);
@@ -139,6 +120,10 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const selectedModel = useCodexWorkspace((state) => state.selectedModel);
   const activeModel = models.find((model) => model.model === selectedModel || model.id === selectedModel);
   const activeCardCount = useWorkLedger((state) => state.cards.filter((c) => !c.done).length);
+  const acpSessions = useAcpAgents((state) => state.sessions);
+  const cognitionInsights = useButlerCognition((state) => state.insights);
+  const pendingInsightCount = cognitionInsights.filter((i) => i.status === 'unread' && i.level !== 'silent_log').length;
+  const acpAttentionCount = Object.values(acpSessions).filter((s) => s.pendingPermissions.length > 0).length;
   const hydrate = useCodexWorkspace((state) => state.hydrate);
   const ensureDefaultWorkspace = useCodexWorkspace((state) => state.ensureDefaultWorkspace);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
@@ -271,11 +256,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       return {
         path,
         kind: systemDefault ? 'temporary' : systemButler ? 'butler' : 'hosting',
-        label: systemDefault
-          ? tr('临时会话', 'Scratchpad', locale)
-          : systemButler
-            ? tr('管家会话', 'Butler Workspace', locale)
-            : workspaceName(path),
+        label: systemDefault ? t('butler.workspace.tempSession') : systemButler ? t('butler.workspace.butlerSession') : workspaceName(path),
         tooltipPath: undefined,
         removable: false,
         configurable: false,
@@ -301,8 +282,8 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
     defaultWorkspaceRoot,
     environments,
     hostingProjectPaths,
-    locale,
     systemWorkspaceRoots,
+    t,
   ]);
   const visibleProjectEntries = projectEntries.filter((entry) => entry.kind === 'hosting'
     || (threadCounts.get(entry.path) ?? 0) > 0
@@ -313,10 +294,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
 
     for (const session of hostedSessions) {
       const projectPath = session.projectPath?.trim();
+      const normalizedProjectName = session.project.trim().toLocaleLowerCase(locale);
       const key = projectPath
         ? `path:${workspaceKey(projectPath)}`
-        : `name:${session.project.trim().toLocaleLowerCase('zh-CN') || '未指定项目'}`;
-      const label = session.project.trim() || session.projectPath?.split(/[\\/]/).filter(Boolean).at(-1) || tr('未指定项目', 'Unspecified Project', locale);
+        : `name:${normalizedProjectName || '__unassigned__'}`;
+      const label = session.project.trim() || session.projectPath?.split(/[\\/]/).filter(Boolean).at(-1) || t('butler.history.unassignedProject');
       const group = groups.get(key);
       if (group) {
         group.sessions.push(session);
@@ -338,11 +320,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       Number(right.activeCount > 0) - Number(left.activeCount > 0)
       || right.lastUpdated - left.lastUpdated
     ));
-  }, [hostedSessions, locale]);
+  }, [hostedSessions, locale, t]);
   const renderThreadHistory = () => (
     <nav
-      aria-label={tr('Codex 对话历史', 'Chat History', locale)}
-      className="!min-h-0 !flex-none !overflow-visible !pt-0 !pr-0 !pb-1 !pl-5"
+      aria-label={t('butler.history.codexHistoryAria')}
+      className="codex-history-nav !min-h-0 !flex-none !overflow-visible !pt-0 !pr-0 !pb-1 !pl-5"
     >
       <ul>
         {displayedThreads.map((thread) => {
@@ -353,6 +335,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
               || Boolean(runtimeState.activeTurnId)
             : thread.status.type === 'active' || (selected && Boolean(activeTurnId));
           const waiting = runtimeState?.status === 'waiting-input';
+          const title = threadTitle(thread.name, thread.preview, t);
           return (
             <li key={thread.id} className="codex-native-thread-row">
               {renamingThreadId === thread.id ? (
@@ -362,11 +345,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                     event.preventDefault();
                     void renameThread(thread.id, renameValue)
                       .then(() => { setRenamingThreadId(null); setMenuThreadId(null); })
-                      .catch((reason) => toast.error(reason, tr('无法重命名对话', 'Could not rename chat', locale)));
+                      .catch((reason) => toast.error(reason, t('butler.history.renameFailed')));
                   }}
                 >
-                  <input autoFocus aria-label={tr('对话名称', 'Chat name', locale)} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
-                  <button type="submit" disabled={!renameValue.trim()}>{tr('保存', 'Save', locale)}</button>
+                  <input autoFocus aria-label={t('butler.history.threadNameAria')} value={renameValue} onChange={(event) => setRenameValue(event.target.value)} />
+                  <button type="submit" disabled={!renameValue.trim()}>{t('common.save')}</button>
                 </form>
               ) : (
                 <>
@@ -376,47 +359,47 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                     onClick={() => {
                       setButlerView('conversation');
                       onNavigate?.();
-                      if (!selected) void resumeThread(thread.id).catch((reason) => toast.error(reason, tr('无法打开对话', 'Could not open chat', locale)));
+                      if (!selected) void resumeThread(thread.id).catch((reason) => toast.error(reason, t('butler.history.openThreadFailed')));
                     }}
                     aria-current={selected ? 'page' : undefined}
                   >
                     <span
                       className={`butler-conversation-history-status ${running ? 'is-running' : ''}`}
-                      title={waiting ? tr('等待确认', 'Waiting for input', locale) : running ? tr('运行中', 'Running', locale) : undefined}
+                      title={waiting ? t('butler.history.statusWaiting') : running ? t('butler.history.statusRunning') : undefined}
                     />
-                    <span className="butler-conversation-history-title">{threadTitle(thread.name, thread.preview, locale)}</span>
-                    <time dateTime={new Date(thread.updatedAt * 1_000).toISOString()}>{ageLabel(thread.updatedAt, locale)}</time>
+                    <span className="butler-conversation-history-title">{title}</span>
+                    <time dateTime={new Date(thread.updatedAt * 1_000).toISOString()}>{ageLabel(thread.updatedAt, t)}</time>
                   </button>
                   <div className="codex-native-thread-actions">
                     <button
                       type="button"
-                      aria-label={tr(`更多对话操作：${threadTitle(thread.name, thread.preview, locale)}`, `More chat actions: ${threadTitle(thread.name, thread.preview, locale)}`, locale)}
+                      aria-label={t('butler.history.moreThreadActionsAria', { title })}
                       aria-expanded={menuThreadId === thread.id}
                       onClick={() => setMenuThreadId((current) => current === thread.id ? null : thread.id)}
                     >
                       <MoreHorizontal size={14} aria-hidden="true" />
                     </button>
                     {menuThreadId === thread.id ? (
-                      <div role="menu" aria-label={tr('对话操作', 'Chat actions', locale)}>
+                      <div role="menu" aria-label={t('butler.history.threadActionsAria')}>
                         <button
                           type="button"
                           role="menuitem"
                           onClick={() => {
-                            setRenameValue(threadTitle(thread.name, thread.preview, locale));
+                            setRenameValue(title);
                             setRenamingThreadId(thread.id);
                             setMenuThreadId(null);
                           }}
                         >
-                          <Pencil size={13} aria-hidden="true" />{tr('重命名', 'Rename', locale)}
+                          <Pencil size={13} aria-hidden="true" />{t('butler.history.rename')}
                         </button>
                         <button
                           type="button"
                           role="menuitem"
                           onClick={() => void archiveThread(thread.id)
                             .then(() => setMenuThreadId(null))
-                            .catch((reason) => toast.error(reason, tr('无法归档对话', 'Could not archive chat', locale)))}
+                            .catch((reason) => toast.error(reason, t('butler.history.archiveFailed')))}
                         >
-                          <Archive size={13} aria-hidden="true" />{tr('归档', 'Archive', locale)}
+                          <Archive size={13} aria-hidden="true" />{t('butler.history.archive')}
                         </button>
                       </div>
                     ) : null}
@@ -435,28 +418,22 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           onClick={() => setHistoryExpanded((current) => !current)}
         >
           {historyExpanded
-            ? tr('收起较早对话', 'Show fewer', locale)
-            : tr(`展开其余 ${hiddenThreadCount} 个`, `Show ${hiddenThreadCount} more`, locale)}
+            ? t('butler.history.collapseOlder')
+            : tp(hiddenThreadCount, 'butler.history.expandOlderOne', 'butler.history.expandOlderOther')}
         </button>
       ) : null}
-      {desktopRuntime && status === 'unavailable' ? (
-        <p className="butler-codex-task-empty">
-          {localizeDynamicText(error, 'Configure a model or local runtime to start.', locale)}
-        </p>
-      ) : null}
+      {desktopRuntime && status === 'unavailable' ? <p className="butler-codex-task-empty">{error}</p> : null}
       {(!desktopRuntime || status !== 'unavailable') && visibleThreads.length === 0 ? (
         <p className="butler-codex-task-empty">
-          {!desktopRuntime
-            ? tr('请使用 RocketX 桌面端运行 AI 管家任务', 'Use RocketX Desktop to run AI Butler tasks', locale)
-            : tr('还没有对话', 'No conversations yet', locale)}
+          {!desktopRuntime ? t('butler.history.emptyDesktopRequired') : t('butler.history.emptyThreads')}
         </p>
       ) : null}
     </nav>
   );
 
   const chooseWorkspace = async (): Promise<boolean> => {
-    if (!isTauriRuntime()) throw new Error('网页版没有本地 Pi 执行面，请使用 RocketX 桌面端');
-    const path = await openDesktopDialog({ directory: true, multiple: false, title: '选择工作区' });
+    if (!isTauriRuntime()) throw new Error(t('butler.history.desktopOnlyWorkspace'));
+    const path = await openDesktopDialog({ directory: true, multiple: false, title: t('butler.chooseWorkspaceTitle') });
     if (typeof path !== 'string') return false;
     ensureEnvironment({ path });
     await setWorkspaceRoot(path);
@@ -494,7 +471,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const removeProject = async (path: string): Promise<void> => {
     const environment = findEnvironmentByPath(useAgentEnvironments.getState().environments, path);
     if (environment && environmentIsBusy(environment.id, useAgentEnvironments.getState().bindings)) {
-      throw new Error('该项目正在被活动讨论使用，请先结束 Agent 会话');
+      throw new Error(t('butler.history.projectBusyRemoveError'));
     }
     const runtimeState = useCodexWorkspace.getState();
     if (runtimeState.workspaceRoot === path) {
@@ -518,7 +495,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       await ensureDefaultWorkspace();
       if (!isCurrentAccount()) return;
       const butlerRoot = useCodexWorkspace.getState().butlerWorkspaceRoot;
-      if (!butlerRoot) throw new Error('系统管家工作区尚未准备好');
+      if (!butlerRoot) throw new Error(t('butler.workspaceNotReady'));
       if (useCodexWorkspace.getState().workspaceRoot !== butlerRoot) {
         await setWorkspaceRoot(butlerRoot);
         if (!isCurrentAccount()) return;
@@ -532,7 +509,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       setButlerView('conversation');
       onNavigate?.();
     } catch (reason) {
-      if (isCurrentAccount()) toast.error(reason, '无法新建对话');
+      if (isCurrentAccount()) toast.error(reason, t('butler.history.createThreadFailed'));
     }
   };
 
@@ -546,9 +523,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         result = await handoffToCodex();
         if (result === 'unavailable') await refreshFromCodex().catch(() => undefined);
       } else result = workspaceRoot ? await openCodexNewThread('', workspaceRoot) : 'unavailable';
-      if (result === 'unavailable') throw new Error('Codex App 没有响应');
+      if (result === 'unavailable') throw new Error(t('butler.codexNoResponse'));
     } catch (reason) {
-      toast.error(reason, '无法切换到 Codex App');
+      toast.error(reason, t('butler.history.switchCodexFailed'));
     } finally {
       setOpeningCodex(false);
     }
@@ -557,50 +534,51 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   const hostedSessionsNavigation = (
     <section
       className={`butler-hosted-sessions${nativeRuntime ? '' : ' is-standalone'}`}
-      aria-label={tr('共享 AI 托管', 'Shared AI Hosting', locale)}
+      aria-label={t('butler.history.hosted.sectionAria')}
       hidden={(!userId && hostedSessionCount === 0) || undefined}
     >
       <button
         type="button"
         className="butler-hosted-section-toggle"
         aria-expanded={hostedSectionExpanded}
-        aria-label={tr(
-          `AI 托管，${hostedActiveSessionCount > 0 ? `${hostedActiveSessionCount} 条活动，` : ''}${hostedSessionCount} 条会话`,
-          `AI Hosting, ${hostedActiveSessionCount > 0 ? `${hostedActiveSessionCount} active, ` : ''}${hostedSessionCount} sessions`,
-          locale,
-        )}
+        aria-label={t('butler.history.hosted.sectionToggleAria', {
+          activePart: hostedActiveSessionCount > 0
+            ? t('butler.history.hosted.activePart', { count: hostedActiveSessionCount })
+            : '',
+          total: hostedSessionCount,
+        })}
         onClick={() => setHostedSectionExpandedOverride((current) => !(current ?? hostedSectionExpandedDefault))}
       >
         <ChevronRight size={13} className={hostedSectionExpanded ? 'is-expanded' : undefined} aria-hidden="true" />
         <Bot size={14} aria-hidden="true" />
-        <span>{tr('AI 托管', 'AI Hosting', locale)}</span>
+        <span>{t('butler.history.hosted.title')}</span>
         <small>
           {hostedActiveSessionCount > 0
-            ? tr(`${hostedActiveSessionCount} 活动 · ${hostedSessionCount}`, `${hostedActiveSessionCount} active · ${hostedSessionCount}`, locale)
+            ? t('butler.history.hosted.activeCountBadge', { active: hostedActiveSessionCount, total: hostedSessionCount })
             : hostedSessionCount}
         </small>
       </button>
       {hostedSectionExpanded ? (
-        <nav aria-label={tr('AI 托管会话', 'AI Hosted Sessions', locale)} className="butler-hosted-session-list">
+        <nav aria-label={t('butler.history.hosted.listAria')} className="butler-hosted-session-list">
           {hostedSessionGroups.length === 0 ? (
-            <p className="butler-hosted-session-empty">{tr('还没有房间托管会话。', 'No hosted room sessions yet.', locale)}</p>
+            <p className="butler-hosted-session-empty">{t('butler.history.hosted.empty')}</p>
           ) : hostedSessionGroups.map((group) => {
             const defaultExpanded = group.sessions.some((session) => session.key === selectedHostedSessionKey);
             const expanded = expandedHostedGroups[group.key] ?? defaultExpanded;
             const groupSummary = group.activeCount > 0
-              ? tr(`${group.activeCount} 活动 · ${group.sessions.length} 条`, `${group.activeCount} active · ${group.sessions.length}`, locale)
-              : tr(`${group.sessions.length} 条 · 已结束`, `${group.sessions.length} · ended`, locale);
+              ? t('butler.history.hosted.groupActiveSummary', { active: group.activeCount, total: group.sessions.length })
+              : t('butler.history.hosted.groupEndedSummary', { total: group.sessions.length });
             return (
               <section
                 key={group.key}
                 className="butler-hosted-session-group"
-                aria-label={tr(`托管项目：${group.label}`, `Hosted project: ${group.label}`, locale)}
+                aria-label={t('butler.history.hosted.groupAria', { label: group.label })}
               >
                 <button
                   type="button"
                   className="butler-hosted-session-group-toggle"
                   aria-expanded={expanded}
-                  aria-label={tr(`${group.label}，${groupSummary}托管会话`, `${group.label}, ${groupSummary} hosted sessions`, locale)}
+                  aria-label={t('butler.history.hosted.groupToggleAria', { label: group.label, summary: groupSummary })}
                   title={group.projectPath}
                   onClick={() => {
                     setExpandedHostedGroups((current) => ({
@@ -618,21 +596,22 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                   <ul className="butler-hosted-session-items">
                     {group.sessions.map((session) => {
                       const room = subscriptions[session.rid] ?? rooms[session.rid];
-                      const name = session.roomNameSnapshot || room?.fname || room?.name || session.rid || tr('未知房间', 'Unknown Room', locale);
+                      const name = session.roomNameSnapshot || room?.fname || room?.name || session.rid || t('butler.history.hosted.unknownRoom');
                       const selected = selectedHostedSessionKey === session.key
                         || (!selectedHostedSessionKey && session.key === hostedSessions[0]?.key);
-                      const statusLabel = hostedStatusLabel(session.status, locale);
+                      const statusText = t(HOSTED_SESSION_STATUS_KEYS[session.status]);
                       return (
                         <li key={session.key}>
                           <button
                             type="button"
                             data-session-key={session.key}
                             aria-current={selected ? 'page' : undefined}
-                            aria-label={tr(
-                              `${name}，${session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}，${statusLabel}，${session.task}`,
-                              `${name}, ${session.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}, ${statusLabel}, ${session.task}`,
-                              locale,
-                            )}
+                            aria-label={t('butler.history.hosted.sessionAria', {
+                              name,
+                              backend: session.backend === 'deepseek' ? 'DeepSeek' : 'Codex',
+                              status: statusText,
+                              task: session.task,
+                            })}
                             onClick={() => {
                               setButlerView('conversation');
                               setSelectedHostedSessionKey(session.key);
@@ -645,7 +624,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                               <span className="butler-hosted-session-room">{name}</span>
                               <span className="butler-hosted-session-task" title={session.task}>{session.task}</span>
                             </span>
-                            <span className="butler-hosted-session-status">{statusLabel}</span>
+                            <span className="butler-hosted-session-status">{statusText}</span>
                           </button>
                         </li>
                       );
@@ -662,31 +641,27 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
 
   if (!nativeRuntime) {
     return (
-      <aside className="butler-conversation-history" aria-label={tr('AI 管家导航', 'AI Butler Navigation', locale)}>
+      <aside className="butler-conversation-history" aria-label={t('butler.history.navAria')}>
         <div className="butler-codex-product-switcher flex h-[52px] min-h-[52px] items-center justify-between border-b border-line px-3.5">
           <button
             type="button"
             className="butler-codex-back-rocketx"
-            aria-label={tr('返回 RocketX', 'Back to RocketX', locale)}
+            aria-label={t('butler.history.backRocketXAria')}
             onClick={() => setModule('messages')}
           >
             <ArrowLeft size={16} aria-hidden="true" />
           </button>
-          <div className="butler-codex-product-title"><strong>{tr('AI 管家', 'AI Butler', locale)}</strong></div>
+          <div className="butler-codex-product-title"><strong>{t('butler.history.brandTitle')}</strong></div>
         </div>
         <div className="mx-3 my-2.5 rounded-xl border border-line bg-surface-4 p-3 text-xs leading-5 text-ink-2 shadow-raise">
-          {tr(
-            '配置模型后，就可以向管家交代事情。已有工作和会话仍可查看，私人房间 AI 会话同样仅你可见。',
-            'Configure a model to delegate tasks to Butler. Existing work items and private room sessions remain accessible.',
-            locale,
-          )}
+          {t('butler.history.onboardingNotice')}
           <button
             type="button"
             onClick={() => { setModule('settings'); onNavigate?.(); }}
             className="mt-2.5 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
           >
             <Bot size={13} />
-            {tr('配置管家', 'Configure Butler', locale)}
+            {t('butler.history.configureButler')}
           </button>
         </div>
         {aiRuntimeProvider === 'none' ? (
@@ -701,7 +676,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                   : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
               }`}
             >
-              <span className="flex items-center gap-2"><SquareKanban size={13} />{tr('我的工作', 'My Work', locale)}</span>
+              <span className="flex items-center gap-2"><SquareKanban size={13} />{t('butler.history.myWork')}</span>
             </button>
             <button
               type="button"
@@ -713,7 +688,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                   : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
               }`}
             >
-              <span className="flex items-center gap-2"><Sparkles size={13} />{tr('个人助理', 'Assistant', locale)}</span>
+              <span className="flex items-center gap-2"><Sparkles size={13} />{t('butler.history.personalAssistant')}</span>
             </button>
             <button
               type="button"
@@ -725,7 +700,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                   : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
               }`}
             >
-              <span className="flex items-center gap-2"><Cpu size={13} />{tr('ACP 客户端', 'ACP Agents', locale)}</span>
+              <span className="flex items-center gap-2"><Cpu size={13} />{t('butler.history.acpClient')}</span>
             </button>
           </div>
         ) : null}
@@ -735,27 +710,27 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
   }
 
   return (
-    <aside className="butler-conversation-history work-first-navigation" aria-label={tr('AI 管家导航', 'AI Butler Navigation', locale)}>
+    <aside className="butler-conversation-history work-first-navigation" aria-label={t('butler.history.navAria')}>
       <div className="butler-codex-product-switcher flex h-[52px] min-h-[52px] items-center justify-between border-b border-line px-3.5">
         <div className="flex items-center gap-1.5 min-w-0">
           {!localMode ? (
             <button
               type="button"
               className="butler-codex-back-rocketx p-1 -ml-1 text-ink-3 hover:text-ink transition-colors rounded-md hover:bg-fill-hover"
-              aria-label={tr('返回 RocketX', 'Back to RocketX', locale)}
+              aria-label={t('butler.history.backRocketXAria')}
               onClick={() => setModule('messages')}
             >
               <ArrowLeft size={15} aria-hidden="true" />
             </button>
           ) : null}
           <div className="butler-codex-product-title flex items-center gap-1.5 truncate">
-            <strong className="text-sm font-semibold text-ink">{tr('AI 管家', 'AI Butler', locale)}</strong>
+            <strong className="text-sm font-semibold text-ink">{t('butler.history.brandTitle')}</strong>
           </div>
         </div>
         <div className="flex items-center gap-0.5">
           <button
             type="button"
-            aria-label={searchOpen ? tr('关闭对话搜索', 'Close chat search', locale) : tr('搜索对话', 'Search chats', locale)}
+            aria-label={t(searchOpen ? 'butler.history.closeSearchAria' : 'butler.history.openSearchAria')}
             aria-pressed={searchOpen}
             onClick={() => setSearchOpen((current) => !current)}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-fill-hover hover:text-ink transition-colors"
@@ -765,7 +740,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           {desktopRuntime && !piRuntime ? (
             <button
               type="button"
-              aria-label={tr('切换到 Codex App', 'Switch to Codex App', locale)}
+              aria-label={t('butler.history.switchToCodexAria')}
               disabled={openingCodex || (
                 activeView === 'conversation' && Boolean(activeThreadId) && (Boolean(activeTurnId) || status === 'external')
               )}
@@ -780,8 +755,8 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           <button
             type="button"
             onClick={() => useUI.getState().toggleButlerSidebarCollapsed()}
-            title={tr('收起会话列表 (Ctrl+B)', 'Collapse sidebar (Ctrl+B)', locale)}
-            aria-label={tr('收起会话列表', 'Collapse sidebar', locale)}
+            title={t('butler.sidebar.collapseTitle')}
+            aria-label={t('butler.sidebar.collapseAria')}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-ink-3 hover:bg-fill-hover hover:text-ink transition-colors"
           >
             <PanelLeft size={14} aria-hidden="true" />
@@ -794,11 +769,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           type="button"
           disabled={!desktopRuntime}
           onClick={() => void createConversation()}
-          aria-label={tr('新管家对话', 'New Butler Chat', locale)}
+          aria-label={t('butler.history.newConversation')}
           className="flex h-8.5 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover active:scale-[0.99] disabled:opacity-50"
         >
           <MessageSquarePlus size={14} className="text-white" aria-hidden="true" />
-          <span className="text-white">{tr('新管家对话', 'New Butler Chat', locale)}</span>
+          <span className="text-white">{t('butler.history.newConversation')}</span>
         </button>
         {searchOpen ? (
           <label className="butler-codex-task-search mt-2">
@@ -808,14 +783,14 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              aria-label={tr('搜索对话', 'Search chats', locale)}
-              placeholder={tr('搜索对话', 'Search chats', locale)}
+              aria-label={t('butler.history.openSearchAria')}
+              placeholder={t('butler.history.searchPlaceholder')}
             />
           </label>
         ) : null}
       </header>
 
-      <nav className="butler-codex-surface-nav work-first-primary-nav" aria-label={tr('AI 协作', 'AI Workspace', locale)}>
+      <nav className="butler-codex-surface-nav work-first-primary-nav" aria-label={t('butler.history.aiCollabAria')}>
         <button
           type="button"
           aria-current={activeView === 'conversation' ? 'page' : undefined}
@@ -831,7 +806,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         >
           <span className="flex items-center gap-2.5">
             <Bot size={15} className={activeView === 'conversation' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
-            <span>{tr('管家', 'Butler', locale)}</span>
+            <span>{t('butler.history.navButler')}</span>
           </span>
         </button>
 
@@ -850,7 +825,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         >
           <span className="flex items-center gap-2.5">
             <SquareKanban size={15} className={activeView === 'kanban' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
-            <span>{tr('我的工作', 'My Work', locale)}</span>
+            <span>{t('butler.history.myWork')}</span>
           </span>
           {activeCardCount > 0 ? (
             <span className="rounded-full bg-primary-light px-1.5 py-0.5 text-2xs font-semibold text-primary">
@@ -860,7 +835,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         </button>
 
         <details className="work-first-more-features" open={moreFeaturesOpen} onToggle={(event) => setMoreFeaturesOpen(event.currentTarget.open)}>
-          <summary><MoreHorizontal size={15} aria-hidden="true" /><span>{tr('更多功能', 'More', locale)}</span><ChevronRight size={13} aria-hidden="true" /></summary>
+          <summary><MoreHorizontal size={15} aria-hidden="true" /><span>{t('butler.history.moreFeatures')}</span><ChevronRight size={13} aria-hidden="true" /></summary>
           <div className="work-first-secondary-nav">
         <button
           type="button"
@@ -874,12 +849,17 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
             setButlerView('assistant');
             onNavigate?.();
           }}
-          title={tr('个人助理晨晚报与长期回顾库', 'Daily briefings and retrospective notes', locale)}
+          title={t('butler.history.navAssistantTitle')}
         >
           <span className="flex items-center gap-2.5">
             <Sparkles size={15} className={activeView === 'assistant' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
-            <span>{tr('简报与记忆', 'Briefings & Notes', locale)}</span>
+            <span>{t('butler.history.navAssistant')}</span>
           </span>
+          {pendingInsightCount > 0 ? (
+            <span className="rounded-full bg-primary-light px-1.5 py-0.5 text-2xs font-semibold text-primary">
+              {pendingInsightCount}
+            </span>
+          ) : null}
         </button>
 
         <button
@@ -894,12 +874,17 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
             setButlerView('acp-hub');
             onNavigate?.();
           }}
-          title={tr('本地 ACP Agent 客户端控制中心', 'Local ACP agent hub', locale)}
+          title={t('butler.history.navAcpHubTitle')}
         >
           <span className="flex items-center gap-2.5">
             <Cpu size={15} className={activeView === 'acp-hub' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
-            <span>{tr('执行器与会话', 'Agents & Sessions', locale)}</span>
+            <span>{t('butler.history.navAcpHub')}</span>
           </span>
+          {acpAttentionCount > 0 ? (
+            <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-2xs font-semibold text-warning">
+              {acpAttentionCount}
+            </span>
+          ) : null}
         </button>
 
         <div className="my-1 h-px bg-line-soft" />
@@ -913,11 +898,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => { setButlerView('routines'); onNavigate?.(); }}
-          title={tr('已安排任务', 'Scheduled tasks', locale)}
+          title={t('butler.history.navRoutinesTitle')}
         >
           <span className="flex items-center gap-2.5">
             <CalendarClock size={15} className={activeView === 'routines' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
-            <span>{tr('已安排', 'Scheduled', locale)}</span>
+            <span>{t('butler.history.navRoutines')}</span>
           </span>
         </button>
 
@@ -930,11 +915,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => { setButlerView('plugins'); onNavigate?.(); }}
-          title={tr('扩展插件', 'Extensions and plugins', locale)}
+          title={t('butler.history.navPluginsTitle')}
         >
           <span className="flex items-center gap-2.5">
             <Blocks size={15} className={activeView === 'plugins' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
-            <span>{tr('插件', 'Plugins', locale)}</span>
+            <span>{t('butler.history.navPlugins')}</span>
           </span>
         </button>
 
@@ -946,20 +931,20 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
             setModule('workbench');
             onNavigate?.();
           }}
-          title={tr('拉取请求', 'Pull Requests', locale)}
+          title={t('butler.history.navPullRequests')}
         >
           <span className="flex items-center gap-2.5">
             <GitPullRequest size={15} className="text-ink-3" aria-hidden="true" />
-            <span>{tr('拉取请求', 'Pull Requests', locale)}</span>
+            <span>{t('butler.history.navPullRequests')}</span>
           </span>
         </button>
         <button
           type="button"
           className="flex h-8.5 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
           disabled={!desktopRuntime}
-          onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, tr('无法添加项目目录', 'Could not add project folder', locale)))}
+          onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, t('butler.history.addProjectFailed')))}
         >
-          <FolderOpen size={15} className="text-ink-3" aria-hidden="true" />{tr('添加项目目录', 'Add Project Folder', locale)}
+          <FolderOpen size={15} className="text-ink-3" aria-hidden="true" />{t('butler.history.addProjectDir')}
         </button>
           </div>
         </details>
@@ -968,49 +953,49 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
       {hostedSessionCount > 0 ? hostedSessionsNavigation : null}
 
       {visibleProjectEntries.length > 0 ? <div className="butler-codex-thread-heading">
-        <span>{tr('最近对话与项目', 'Recent Chats & Projects', locale)}</span>
+        <span>{t('butler.history.recentConversationsAndProjects')}</span>
         <button
           type="button"
-          aria-label={tr('添加托管项目', 'Add project folder', locale)}
-          title={tr('添加托管项目', 'Add project folder', locale)}
+          aria-label={t('butler.history.addHostedProject')}
+          title={t('butler.history.addHostedProject')}
           disabled={!desktopRuntime}
-          onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, tr('无法添加项目目录', 'Could not add project folder', locale)))}
+          onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, t('butler.history.addProjectFailed')))}
         >
           <Plus size={13} aria-hidden="true" />
         </button>
       </div> : null}
 
-      <div className="butler-codex-project-list !max-h-none !min-h-0 !flex-1" aria-label={tr('项目目录', 'Project folders', locale)}>
+      <div className="butler-codex-project-list !max-h-none !min-h-0 !flex-1" aria-label={t('butler.history.projectListAria')}>
         {visibleProjectEntries.map((entry, index) => {
           const active = entry.path === workspaceRoot;
           const expanded = active && collapsedWorkspace !== entry.path;
           return (
             <Fragment key={entry.path}>
               {index === firstHostingProjectIndex ? (
-                <div className="butler-codex-project-kind" aria-label={tr('工作项目', 'Projects', locale)}>{tr('个人项目', 'Projects', locale)}</div>
+                <div className="butler-codex-project-kind" aria-label={t('butler.history.workProjectsAria')}>{t('butler.history.personalProjects')}</div>
               ) : null}
-              <section aria-label={tr(`项目：${entry.label}`, `Project: ${entry.label}`, locale)} data-workspace-kind={entry.kind}>
+              <section aria-label={t('butler.history.projectSectionAria', { label: entry.label })} data-workspace-kind={entry.kind}>
                 <div className="butler-codex-workspace-row" data-actions={entry.configurable ? '2' : undefined}>
                   <button
                     type="button"
                     className="butler-codex-workspace-picker"
                     data-active={active || undefined}
                     aria-expanded={expanded}
-                    onClick={() => void selectWorkspace(entry.path).catch((reason) => toast.error(reason, tr('无法切换项目目录', 'Could not switch project folder', locale)))}
+                    onClick={() => void selectWorkspace(entry.path).catch((reason) => toast.error(reason, t('butler.history.switchProjectFailed')))}
                   >
                     <ChevronRight className={expanded ? 'is-expanded' : undefined} size={13} aria-hidden="true" />
                     {active && status === 'connecting'
                       ? <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                       : <FolderOpen size={14} aria-hidden="true" />}
-                    <span title={entry.tooltipPath}>{entry.kind === 'hosting' && !findEnvironmentByPath(environments, entry.path)?.enabled ? `${entry.label}${tr('（已停用）', ' (Paused)', locale)}` : entry.label}</span>
+                    <span title={entry.tooltipPath}>{entry.kind === 'hosting' && !findEnvironmentByPath(environments, entry.path)?.enabled ? t('butler.history.projectDisabled', { label: entry.label }) : entry.label}</span>
                     <small>{threadCounts.get(entry.path) ?? 0}</small>
                   </button>
                   {entry.configurable ? (
                     <div className="butler-codex-workspace-actions">
                       <button
                         type="button"
-                        aria-label={tr(`项目配置：${entry.label}`, `Project settings: ${entry.label}`, locale)}
-                        title={tr('项目配置', 'Project settings', locale)}
+                        aria-label={t('butler.history.projectConfigAria', { label: entry.label })}
+                        title={t('butler.history.projectConfigTitle')}
                         onClick={() => {
                           setMenuThreadId(null);
                           setWorkspaceToConfigure(entry.path);
@@ -1020,8 +1005,8 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
                       </button>
                       <button
                         type="button"
-                        aria-label={tr(`移除项目：${entry.label}`, `Remove project: ${entry.label}`, locale)}
-                        title={entry.busy ? tr('活动讨论结束后才能移除项目', 'Wait for active discussion to finish before removing', locale) : tr('移除项目', 'Remove project', locale)}
+                        aria-label={t('butler.history.removeProjectAria', { label: entry.label })}
+                        title={t(entry.busy ? 'butler.history.removeProjectBusyTitle' : 'butler.history.removeProjectTitle')}
                         disabled={entry.busy}
                         onClick={() => {
                           setMenuThreadId(null);
@@ -1048,8 +1033,8 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
             onNavigate?.();
           }}
           className="flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-left text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
-          title={tr('点击进入设置调整 AI 引擎与模型', 'Open Settings to configure AI engine & model', locale)}
-          aria-label={tr('管家设置', 'Butler Settings', locale)}
+          title={t('butler.history.settingsTitle')}
+          aria-label={t('butler.history.settingsLabel')}
         >
           <div className="flex min-w-0 items-center gap-2">
             <span
@@ -1062,9 +1047,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
               }`}
             />
             <span className="truncate font-medium text-ink">
-              {tr('管家设置', 'Butler Settings', locale)}
+              {t('butler.history.settingsLabel')}
               <span className="text-ink-3">
-                {' · '}{displayModelName(activeModel?.displayName, selectedModel, locale) || tr('配置模型', 'Model setup', locale)}
+                {' · '}{activeModel?.displayName || selectedModel || t('butler.history.configureModel')}
               </span>
             </span>
           </div>
@@ -1074,21 +1059,17 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
 
       {workspaceToRemove ? (
         <ConfirmDialog
-          title={tr(`移除项目“${workspaceName(workspaceToRemove)}”？`, `Remove project "${workspaceName(workspaceToRemove)}"?`, locale)}
-          message={tr(
-            `只会从 RocketX 的项目列表中移除 ${workspaceToRemove}，不会删除磁盘目录或 Codex 会话。若该项目正在运行任务，本机连接会停止。`,
-            `Removes ${workspaceToRemove} from RocketX without deleting files or sessions on disk. Any active local connection for this project will stop.`,
-            locale,
-          )}
-          confirmLabel={tr('移除项目', 'Remove project', locale)}
+          title={t('butler.history.removeProjectDialogTitle', { name: workspaceName(workspaceToRemove) })}
+          message={t('butler.history.removeProjectDialogMessage', { path: workspaceToRemove })}
+          confirmLabel={t('butler.history.removeProjectConfirm')}
           onConfirm={() => {
             const target = workspaceToRemove;
             void removeProject(target)
               .then(() => {
                 setCollapsedWorkspace(null);
-                toast.success(tr(`已从项目列表移除 ${workspaceName(target)}`, `Removed ${workspaceName(target)}`, locale));
+                toast.success(t('butler.history.removeProjectSuccess', { name: workspaceName(target) }));
               })
-              .catch((reason) => toast.error(reason, tr('无法移除项目', 'Could not remove project', locale)));
+              .catch((reason) => toast.error(reason, t('butler.history.removeProjectFailed')));
           }}
           onClose={() => setWorkspaceToRemove(null)}
         />
@@ -1103,9 +1084,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
             try {
               saveProjectConfig(workspaceToConfigure, patch);
               setWorkspaceToConfigure(null);
-              toast.success(tr('项目配置已保存', 'Project settings saved', locale));
+              toast.success(t('butler.history.projectConfigSaved'));
             } catch (reason) {
-              toast.error(reason, tr('保存项目配置失败', 'Could not save project settings', locale));
+              toast.error(reason, t('butler.history.projectConfigSaveFailed'));
             }
           }}
         />

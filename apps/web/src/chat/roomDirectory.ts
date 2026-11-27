@@ -1,4 +1,6 @@
 import { tsMs, type RcRoom, type RcSubscription } from '@rcx/rc-client';
+import { t } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 import { messagePreview } from './messageProjection';
 
 export interface Conversation {
@@ -24,13 +26,13 @@ export interface Conversation {
 export type SectionKey = 'unread' | 'favorites' | 'teams' | 'discussions' | 'channels' | 'multi' | 'direct';
 
 export const SECTION_LABELS: Record<SectionKey, string> = {
-  unread: '未读',
-  favorites: '收藏',
-  teams: '团队',
-  discussions: '讨论',
-  channels: '频道与群组',
-  multi: '多人聊天',
-  direct: '私聊',
+  get unread() { return t('chat.directory.section.unread'); },
+  get favorites() { return t('chat.directory.section.favorites'); },
+  get teams() { return t('chat.directory.section.teams'); },
+  get discussions() { return t('chat.directory.section.discussions'); },
+  get channels() { return t('chat.directory.section.channels'); },
+  get multi() { return t('chat.directory.section.multi'); },
+  get direct() { return t('chat.directory.section.direct'); },
 };
 
 export function roomMembershipPolicy(
@@ -95,7 +97,7 @@ export function buildSections(
   opts: { groupByType: boolean; showUnread: boolean; showFavorites: boolean; sortBy: 'activity' | 'alphabetical' },
 ): { key: SectionKey | 'all'; label: string; items: Conversation[] }[] {
   const sortFn = (a: Conversation, b: Conversation) =>
-    opts.sortBy === 'alphabetical' ? a.name.localeCompare(b.name, 'zh-CN') : b.lastTs - a.lastTs;
+    opts.sortBy === 'alphabetical' ? compareLocaleText(a.name, b.name) : b.lastTs - a.lastTs;
   const rest = [...convs];
   const sections: { key: SectionKey | 'all'; label: string; items: Conversation[] }[] = [];
   if (opts.showUnread) {
@@ -111,7 +113,7 @@ export function buildSections(
       sections.push({ key: 'favorites', label: SECTION_LABELS.favorites, items: favorites.sort(sortFn) });
       for (const conversation of favorites) rest.splice(rest.indexOf(conversation), 1);
     }
-    sections.push({ key: 'all', label: '会话', items: rest.sort(sortFn) });
+    sections.push({ key: 'all', label: t('chat.directory.section.all'), items: rest.sort(sortFn) });
     return sections;
   }
   const order: SectionKey[] = ['favorites', 'teams', 'discussions', 'channels', 'multi', 'direct'];

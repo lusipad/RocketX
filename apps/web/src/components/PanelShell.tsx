@@ -5,6 +5,7 @@ import {
   type ReactNode,
 } from 'react';
 import { X } from 'lucide-react';
+import { useT } from '../i18n';
 import { useChat } from '../stores/chat';
 import { useImLayout } from '../stores/imLayout';
 import {
@@ -23,6 +24,7 @@ export default function PanelShell({
   children: ReactNode;
   resizable?: boolean;
 }) {
+  const t = useT();
   const setPanel = useChat((s) => s.setPanel);
   const savedWidth = useImLayout((s) => s.layout.butlerPanelWidth);
   const setButlerPanelWidth = useImLayout((s) => s.setButlerPanelWidth);
@@ -63,13 +65,13 @@ export default function PanelShell({
       {resizable && (
         <div
           role="separator"
-          aria-label="调整侧栏宽度"
+          aria-label={t('nav.panel.resizeAria')}
           aria-orientation="vertical"
           aria-valuemin={MIN_BUTLER_PANEL_WIDTH}
           aria-valuemax={MAX_BUTLER_PANEL_WIDTH}
           aria-valuenow={width}
           tabIndex={0}
-          title="拖动调整侧栏宽度，双击恢复默认"
+          title={t('nav.panel.resizeTitle')}
           onDoubleClick={resetButlerPanelWidth}
           onPointerDown={onResizePointerDown}
           onPointerMove={onResizePointerMove}
@@ -99,8 +101,8 @@ export default function PanelShell({
           <span className="min-w-0 flex-1 text-base font-semibold text-ink">{title}</span>
           <button
             onClick={() => setPanel(null)}
-            aria-label="关闭侧栏"
-            title="关闭侧栏"
+            aria-label={t('nav.panel.closeAria')}
+            title={t('nav.panel.closeAria')}
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           >
             <X size={16} />

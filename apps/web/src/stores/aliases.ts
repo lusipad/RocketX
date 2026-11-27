@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import { getServerBase, loadStoredAuth, rest, savePreferences } from '../lib/client';
 import { listArchivedEntries, removeArchivedEntry } from '../lib/accountScope';
 
@@ -333,7 +334,9 @@ export function displayName(
     aliases[`r:${conv.rid}`] ??
     (conv.avatarUsername ? aliases[`u:${conv.avatarUsername}`] : undefined);
   if (!alias) return conv.name;
-  return format === 'aliasWithReal' && alias !== conv.name ? `${alias}（${conv.name}）` : alias;
+  return format === 'aliasWithReal' && alias !== conv.name
+    ? t('nav.alias.withReal', { alias, real: conv.name })
+    : alias;
 }
 
 /** 给「人」的显示名：备注名，或按格式带上原名。用于成员/联系人/个人卡片 */
@@ -345,5 +348,7 @@ export function personName(
 ): string {
   const alias = aliases[`u:${username}`];
   if (!alias) return realName;
-  return format === 'aliasWithReal' && alias !== realName ? `${alias}（${realName}）` : alias;
+  return format === 'aliasWithReal' && alias !== realName
+    ? t('nav.alias.withReal', { alias, real: realName })
+    : alias;
 }

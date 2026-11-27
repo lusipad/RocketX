@@ -1,5 +1,25 @@
 # 更新日志
 
+## v0.51.0 - 2026-11-27
+
+### 多角色 AI 圆桌与讨论组协作
+
+- 支持直接在频道/群组内创建「AI 讨论组」或将 AI 讨论组一键拖入任意普通群聊（默认仅 `@提及` 响应，按住 `Shift` 拖放可自动注入《圆桌决议摘要》待审草稿）。
+- 内置 4 席位多角色 AI 圆桌（`🧭 产品设计`、`🏗️ 架构工程`、`⚡ 挑刺官`、`🎯 主理人`）并支持自定义席位与独立驱动模型绑定：只读推演并输出交互式《方案决议卡》，用户打断即可中止旧接力并以最新前提重开。
+- 点击「拍板并交付执行」触发两阶段真闭环（`架构工程 · 施工交付` 真实修改代码与测试 → `挑刺官 · 独立验收` 只读审计 `git diff` 与测试输出），通过后自动写入绑定全部验收标准的 `test_run` 证据跨越完工门禁，并由 4 层防 Worktree 爆炸护栏按脏区安全切换原位快照或隔离 Worktree；群内 `@` 菜单准确显示各圆桌角色席位以支持后续 `@` 追问。
+
+### GitHub Issue 原生全闭环工作流
+
+- 新增工作区 Git `origin` 仓库自动识别（`owner/repo`）、本机 `gh auth token` 凭据自动复用、完整 Issue 正文与评论拉取（`butler_github_get_issue_detail`）以及无 `gh` CLI 时的 GitHub REST API PR 创建回退。
+- 在「AI 管家 → 连接器」Issue 列表与「新建 AI 讨论组」弹窗支持输入 `#N`、`owner/repo#N` 或 URL 一键导入 Issue 上下文并发起圆桌或看板派工。
+- 关联了 GitHub Issue 的圆桌决议卡在验收完成后自动解锁「提交并创建 PR (`Closes #N`)」，自动脱离主干切出 `fix/issue-N` 分支、提交推送、创建 PR 并同步回写 Issue 评论；同时向 Agent 注册 `github_get_issue` 与受策略管控的 `github_create_comment` 宿主工具。
+
+### AI 管家工程套件与全局双语体系
+
+- 新增工作区 Diff 与 Git Checkpoint 快照抽屉（Unified / Split 视图、单文件 Stage / Unstage / Discard、快照回滚、分支切换、直接 Commit / Push / PR）、多标签工作区终端抽屉、MCP Hub 托管配置、Skills 工坊、`.rocketx/policy.json` 安全策略门禁与带 SSRF 防护的本地网页只读检查器。
+- 支持一键粘贴 NewAPI / 中转站配置片段自动解析并与裸地址 `/v1` 自适应规范化、自动识别 Anthropic / OpenAI Responses / OpenAI Completions / Gemini 协议。
+- 落地完整 `zh-CN` / `en-US` 全应用双语字典，支持随系统或 `C` locale 冷启动切换并在设置页与登录页免刷新即时切换。
+
 ## v0.50.3 - 2026-11-21
 
 ### 打包与跨平台兼容性

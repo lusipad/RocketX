@@ -526,6 +526,19 @@ export class AcpBridgeServer {
         });
         return {};
       }
+      case 'session/set_model': {
+        const session = this.sessions.get(params.sessionId);
+        if (!session) {
+          const err = new Error(`Unknown ACP session: ${params.sessionId}`);
+          err.code = -32602;
+          throw err;
+        }
+        const nextModel = String(params.modelId || '').trim();
+        if (nextModel) {
+          session.model = nextModel;
+        }
+        return {};
+      }
       case 'session/prompt': {
         const session = this.sessions.get(params.sessionId);
         if (!session) {
@@ -792,7 +805,7 @@ export class AcpBridgeServer {
     }
     args.push(...this.config.extraArgs);
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let emittedText = false;
       let streamedDelta = false;
       const stderrLines = [];
@@ -904,8 +917,7 @@ export class AcpBridgeServer {
 
       child.on('error', (error) => {
         session.activeChild = null;
-        this.emitAgentText(session.id, `启动 Claude Code 失败：${error.message}`);
-        resolve({ stopReason: 'end_turn' });
+        reject(new Error(`启动 Claude Code 失败：${error.message}`));
       });
 
       child.on('close', (code) => {
@@ -914,9 +926,10 @@ export class AcpBridgeServer {
           resolve({ stopReason: 'cancelled' });
           return;
         }
-        if (!emittedText && code !== 0) {
+        if (code !== 0) {
           const detail = stderrLines.join('\n').trim() || `退出码 ${code}`;
-          this.emitAgentText(session.id, `Claude Code 执行异常（退出码 ${code}）：\n${detail}`);
+          reject(new Error(`Claude Code 执行异常（退出码 ${code}）：\n${detail}`));
+          return;
         }
         resolve({ stopReason: 'end_turn' });
       });

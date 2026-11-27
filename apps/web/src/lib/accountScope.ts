@@ -20,10 +20,6 @@ export const LOCAL_ACCOUNT_OWNER = `${LOCAL_MODE_USER_ID}@local`;
 
 const OWNER_KEY = 'rcx-owner';
 
-export function currentDataOwner(): string | null {
-  try { return localStorage.getItem(OWNER_KEY); } catch { return null; }
-}
-
 /** 跟账号走的本地数据。设备级的(rcx-auth/server/site-url/theme)不在内 */
 const SCOPED_KEYS = [
   'rcx-folders',
@@ -68,29 +64,6 @@ export function ensureAccountScope(userId: string): 'ok' | 'switched' {
       : `${userId}@${getServerBase() || 'same-origin'}`;
     const prev = localStorage.getItem(OWNER_KEY);
     if (prev === owner) return 'ok';
-    // A bare legacy JSON cache without its account marker cannot be assigned to
-    // the first person who signs in. Preserve it separately for local recovery.
-    let preservedTodos = false;
-    if (!prev) {
-      const raw = localStorage.getItem('rcx-todos');
-      if (raw !== null) {
-        let suffix = 0;
-        let key = 'rcx-unassigned-todos';
-        while (localStorage.getItem(key) !== null && localStorage.getItem(key) !== raw) {
-          key = `rcx-unassigned-todos-${++suffix}`;
-        }
-        localStorage.setItem(key, raw);
-        localStorage.removeItem('rcx-todos');
-        preservedTodos = true;
-      }
-      const archivedKey = `rcx-todos#${owner}`;
-      const archived = localStorage.getItem(archivedKey);
-      if (archived !== null) {
-        localStorage.setItem('rcx-todos', archived);
-        localStorage.removeItem(archivedKey);
-        preservedTodos = true;
-      }
-    }
     if (prev === LOCAL_ACCOUNT_OWNER && owner !== LOCAL_ACCOUNT_OWNER && !hasArchivedAccountData(owner)) {
       // 从免登录本地模式首次绑定到真实账号：直接认领刚才在本地模式下配好的项目、日历与工作台数据
       localStorage.setItem(OWNER_KEY, owner);
@@ -114,7 +87,7 @@ export function ensureAccountScope(userId: string): 'ok' | 'switched' {
     }
     localStorage.setItem(OWNER_KEY, owner);
     // 首次(prev 为空)只是认领现有数据,不需要 reload
-    return prev || preservedTodos ? 'switched' : 'ok';
+    return prev ? 'switched' : 'ok';
   } catch {
     // 存储不可用时无从隔离,也不该拦住登录
     return 'ok';

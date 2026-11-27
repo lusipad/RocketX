@@ -22,8 +22,9 @@ RocketX is an independent team collaboration client built on the public Rocket.C
 
 - **Team messaging** over your existing Rocket.Chat server, with a Lark-style three-pane layout, threads, reactions, mentions, file sharing, and discussion cards.
 - **GTD-style work surfaces**: Inbox, Todos, Calendar, Contacts, and a Workbench that talks to Azure DevOps Server 2022.
-- **Local AI workspace** uses Pi with a model service of your choice. It keeps project work, conversations, decisions, and results together.
-- **Shared agent hosting** in rooms and discussions, backed by the same startup runtime. Web and no-AI clients can view an active host and use `@ai`; only a desktop client with the matching runtime can start or resume one.
+- **AI Multi-Role Roundtable & GitHub Issue Closed-Loop Delivery**: Spin up structured multi-role roundtables (Product Design, Architecture Engineering, Contrarian, Host) in rooms or discussions, approve a decision to run real implementation + Contrarian read-only verification with recorded test evidence, or import GitHub Issues directly into a closed-loop fix-branch → commit/push → PR (`Closes #N`) → Issue comment workflow.
+- **Butler AI & Coding Workspace**: Powered by the Pi Agent runtime plus multi-agent ACP executors (Claude Code, Codex CLI, Antigravity), featuring Chief-of-Staff delegation trees, structured Skills Studio (`/slash` & Markdown import/export), event-triggered & quiet-hour-enforced Routines, clickable briefings & Watchers, Memory Auto-Recall with inline governance, Unified/Split Diff + zero-pollution turn checkpoints, 4-layer guarded Git worktrees, integrated terminal drawer (`Ctrl+J`), `@file`/`/`/Plan unified composer, `.rocketx/policy.json` guardrails, custom OS-keyring MCP Hub, GitHub connector, SSRF-safe local browser inspector, and live bilingual UI switching (`zh-CN` / `en-US`).
+- **Shared agent hosting** in rooms and discussions. Web and no-AI clients can view an active host and use `@ai`; a desktop client with a matching runtime can start or resume one.
 - **LAN continuity** through authenticated peer links and an optional IPMSG/Intranet Link Sidecar plugin on Windows.
 
 Current behavior is defined by the [functional specifications](docs/specs/README.md). Product choices follow the [product principles](docs/specs/product-principles.md); the [vision](docs/vision.md) and [blueprint](docs/blueprint.md) are directional and historical context, not current delivery commitments. See [architecture notes](docs/architecture.md), [compatibility matrix](docs/compatibility.md), and [CHANGELOG.md](CHANGELOG.md) for supporting context and release history.
@@ -84,9 +85,12 @@ The file supplies defaults for Rocket.Chat, Azure DevOps, work-item templates, h
 
 ### AI runtime selection
 
-Desktop installers include the Pi SDK and its Node runtime. Open Butler to configure a model service and credentials, or keep AI disabled. Existing Codex and DSH startup selections migrate to Pi. Users who previously selected no AI keep that preference.
+In **Settings → AI** you can run the unified **Pi Agent** runtime for Butler workflows alongside optional **ACP executors** (Claude Code, Codex CLI, Antigravity), or switch to **No AI** (`none`). The choice is saved globally and shared across Butler workspaces, rooms, and `/ai` handoffs.
 
-Native Codex work requires a compatible Codex installation and its own account. The Windows full installer also includes private Codex, DSH and OCR resources. Save any DSH private-room conversation you need before upgrading, as its previous room binding will not reopen automatically.
+- **Pi + ACP** provides built-in multi-provider LLM execution (DeepSeek, OpenAI, Anthropic, Gemini, Ollama, custom OpenAI gateways), OS-keyring API credentials, Unified/Split diffs, zero-pollution turn checkpoints, integrated terminal, Skills Studio, event Routines, Memory Auto-Recall, `.rocketx/policy.json` guardrails, custom MCP Hub, GitHub connector, and SSRF-safe local browser inspection.
+- **No AI** starts no local executor. Messaging and GTD workflows stay fully active while AI execution actions remain cleanly gated.
+
+Slim installers probe compatible system Codex and DSH runtimes without bundling either. The Windows full installer additionally supplies exactly pinned private Codex, DSH, Node, and OCR resources. Scheduled tasks remain Codex-backed, device-local, and execute only while RocketX is running. See the [capability matrix](docs/specs/capability-matrix.md) for exact platform and degradation behavior.
 
 ### Optional self-host with Docker
 
@@ -131,7 +135,7 @@ UI changes still require an interaction pass when the automated flows do not cov
 
 ## Desktop client and releases
 
-The current release target is **v0.43.5**. `v0.34.5` restored official Windows x64, macOS universal, and Linux x64 desktop releases. Starting with `v0.35.0`, the protected workflow publishes verified three-platform releases as GitHub Latest.
+The current release target is **v0.44.18**. `v0.34.5` restored official Windows x64, macOS universal, and Linux x64 desktop releases. Starting with `v0.35.0`, the protected workflow publishes verified three-platform releases as GitHub Latest.
 
 - **Release candidate**: push `release/vX.Y.Z` at a verified `main` commit → the `Tag Version` workflow creates the tag and the `Desktop Build` workflow produces a draft Release.
 - **Prepare Release**: after `build` succeeds, this job packages plugins, verifies artifacts, generates `SHA256SUMS.txt`, and writes release notes from `CHANGELOG.md`.

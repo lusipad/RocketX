@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { isTauri } from '../lib/http';
 import { workContextPathKey } from '../lib/workContext';
 import { inspectNativeWorkspaceGit, type NativeWorkspaceGitSnapshot } from '../platform/desktopCommands';
@@ -12,7 +13,7 @@ export async function observeWorkArtifacts(workId: string, options: {
   const assertAccount = captureWorkLedgerAccount();
   const ledger = useWorkLedger.getState();
   const card = ledger.cards.find((item) => item.id === workId);
-  if (!card) throw new Error('待核对成果的工作不存在');
+  if (!card) throw new Error(t('agent.workArtifacts.workMissing'));
   const root = options.workspaceRoot || ledger.sessions.filter((session) => session.todoId === workId && session.workspaceRoot)
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]?.workspaceRoot
     || ledger.links.find((link) => link.todoId === workId && link.kind === 'kanban_card' && link.stateSnapshot === 'workspace')?.repo;
@@ -26,11 +27,11 @@ export async function observeWorkArtifacts(workId: string, options: {
     throw error;
   }
   assertAccount();
-  if (!snapshot.contentFingerprint) throw new Error('当前宿主尚不能核对成果内容，请更新宿主后再验收');
+  if (!snapshot.contentFingerprint) throw new Error(t('agent.workArtifacts.hostUnsupported'));
   await useWorkLedger.getState().upsertLink({
     todoId: workId, kind: 'git_branch', externalId: `workspace:${workContextPathKey(snapshot.repoTopLevel || root)}`,
     project: card.state.projectKey, repo: snapshot.repoTopLevel || root, rid: card.rid,
-    headSha: snapshot.headSha, title: `当前成果：${snapshot.branch || '未命名分支'}`,
+    headSha: snapshot.headSha, title: t('agent.workArtifacts.currentOutcome', { branch: snapshot.branch || t('agent.workArtifacts.unnamedBranch') }),
     webUrl: null, stateSnapshot: `content:${snapshot.contentFingerprint}`,
   });
   assertAccount();

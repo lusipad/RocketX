@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 
 export type ToastKind = 'success' | 'error' | 'info' | 'loading';
 
@@ -59,11 +60,11 @@ export const useToast = create<ToastState>((set, get) => ({
 }));
 
 /** 把任意错误转成人话 */
-export function humanError(err: unknown, fallback = '操作失败'): string {
+export function humanError(err: unknown, fallback = t('common.operationFailed')): string {
   const raw = err instanceof Error ? err.message : String(err ?? '');
   if (!raw) return fallback;
   if (/failed to fetch|network|load failed|error sending request/i.test(raw)) {
-    return '网络连接失败，请检查网络或服务器状态';
+    return t('nav.error.network');
   }
   /**
    * 权限只认 Rocket.Chat 自己报的 status。此前是从文本里匹配「401」，于是
@@ -72,19 +73,19 @@ export function humanError(err: unknown, fallback = '操作失败'): string {
    */
   const status = (err as { status?: unknown } | null | undefined)?.status;
   if (status === 401 || /unauthorized|not authorized/i.test(raw)) {
-    return '没有权限执行此操作';
+    return t('nav.error.unauthorized');
   }
   // 文件超出服务器上传上限：RC 报 error-file-too-large（HTTP 413），给出明确指向（issue #355）
   const errorType = (err as { errorType?: unknown } | null | undefined)?.errorType;
   if (errorType === 'error-file-too-large' || status === 413) {
-    return '文件超过服务器允许的大小上限，请压缩或拆分后再发';
+    return t('nav.error.fileTooLarge');
   }
   if (errorType === 'error-invalid-file-type') {
-    return '服务器禁止上传此文件类型，请联系管理员调整文件上传策略，或压缩为 ZIP 后发送';
+    return t('nav.error.invalidFileType');
   }
-  if (/not enough permission/i.test(raw)) return '权限不足（需要管理员授权）';
-  if (/enterprise/i.test(raw)) return '该功能需要 Rocket.Chat 企业版';
-  if (/rate limit|too many/i.test(raw)) return '操作过于频繁，请稍后再试';
+  if (/not enough permission/i.test(raw)) return t('nav.error.insufficientPermission');
+  if (/enterprise/i.test(raw)) return t('nav.error.enterpriseRequired');
+  if (/rate limit|too many/i.test(raw)) return t('nav.error.rateLimited');
   return raw.length > 90 ? `${raw.slice(0, 90)}…` : raw;
 }
 
@@ -109,7 +110,7 @@ export const toast = {
       kind: 'success',
       message,
       duration: 6000,
-      action: { label: '撤销', onClick: onUndo },
+      action: { label: t('nav.toast.undo'), onClick: onUndo },
     }),
   loading: (message: string) => useToast.getState().show({ kind: 'loading', message }),
   update: (id: string, patch: Partial<Omit<Toast, 'id'>>) =>

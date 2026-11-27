@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { WiTemplatesConfig } from '../stores/wiTemplates';
 
 /**
@@ -39,55 +40,55 @@ export interface WorkspaceConfig {
 }
 
 function normalizeUrl(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 必须是字符串`);
+  if (typeof value !== 'string' || !value.trim()) throw new Error(t('auth.workspace.error.mustBeString', { label }));
   let parsed: URL;
   try {
     parsed = new URL(value.trim());
   } catch {
-    throw new Error(`${label} 不是合法的 URL：${value}`);
+    throw new Error(t('auth.workspace.error.invalidUrl', { label, value: String(value) }));
   }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error(`${label} 必须是 http/https 地址`);
+    throw new Error(t('auth.workspace.error.mustBeHttp', { label }));
   }
   if (parsed.username || parsed.password) {
-    throw new Error(`${label} 不能内嵌用户名密码——凭据不进配置文件`);
+    throw new Error(t('auth.workspace.error.noEmbeddedCredentials', { label }));
   }
   return value.trim().replace(/\/+$/, '');
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: string): T {
   if (typeof value !== 'string' || !allowed.includes(value as T)) {
-    throw new Error(`${label} 只能是 ${allowed.join(' / ')}`);
+    throw new Error(t('auth.workspace.error.oneOf', { label, allowed: allowed.join(' / ') }));
   }
   return value as T;
 }
 
 function parseInlineWorkItemTemplates(raw: any): WiTemplatesConfig {
   if (!Array.isArray(raw.templates) || raw.templates.length === 0) {
-    throw new Error('workItemTemplates 模板列表为空');
+    throw new Error(t('auth.workspace.error.emptyTemplates'));
   }
   const config: WiTemplatesConfig = {
     templates: raw.templates.map((template: any, templateIndex: number) => {
       const label = `workItemTemplates.templates[${templateIndex}]`;
       if (typeof template?.name !== 'string' || !template.name.trim()) {
-        throw new Error(`${label}.name 必须是非空字符串`);
+        throw new Error(t('auth.workspace.error.nonEmptyString', { field: `${label}.name` }));
       }
       if (!Array.isArray(template.items) || template.items.length === 0) {
-        throw new Error(`${label}.items 不能为空`);
+        throw new Error(t('auth.workspace.error.nonEmptyArray', { field: `${label}.items` }));
       }
       return {
         name: template.name.trim(),
         items: template.items.map((item: any, itemIndex: number) => {
           const itemLabel = `${label}.items[${itemIndex}]`;
           if (typeof item?.type !== 'string' || !item.type.trim()) {
-            throw new Error(`${itemLabel}.type 必须是非空字符串`);
+            throw new Error(t('auth.workspace.error.nonEmptyString', { field: `${itemLabel}.type` }));
           }
           if (typeof item.title !== 'string' || !item.title.trim()) {
-            throw new Error(`${itemLabel}.title 必须是非空字符串`);
+            throw new Error(t('auth.workspace.error.nonEmptyString', { field: `${itemLabel}.title` }));
           }
           if (item.parent !== undefined
             && (!Number.isInteger(item.parent) || item.parent < 0 || item.parent >= itemIndex)) {
-            throw new Error(`${itemLabel}.parent 必须引用前面的模板项`);
+            throw new Error(t('auth.workspace.error.invalidParentRef', { field: `${itemLabel}.parent` }));
           }
           return {
             type: item.type.trim(),
@@ -100,7 +101,7 @@ function parseInlineWorkItemTemplates(raw: any): WiTemplatesConfig {
   };
   if (raw.defaultProject !== undefined) {
     if (typeof raw.defaultProject !== 'string' || !raw.defaultProject.trim()) {
-      throw new Error('workItemTemplates.defaultProject 必须是非空字符串');
+      throw new Error(t('auth.workspace.error.nonEmptyString', { field: 'workItemTemplates.defaultProject' }));
     }
     config.defaultProject = raw.defaultProject.trim();
   }
@@ -113,30 +114,30 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
   try {
     raw = JSON.parse(text);
   } catch {
-    throw new Error('不是合法的 JSON');
+    throw new Error(t('auth.workspace.error.invalidJson'));
   }
-  if (!raw || typeof raw !== 'object') throw new Error('配置必须是 JSON 对象');
-  if (raw.version !== 1) throw new Error('不支持的配置版本，当前只支持 version: 1');
+  if (!raw || typeof raw !== 'object') throw new Error(t('auth.workspace.error.mustBeJsonObject'));
+  if (raw.version !== 1) throw new Error(t('auth.workspace.error.unsupportedVersion'));
 
   const config: WorkspaceConfig = { version: 1 };
   if (raw.name !== undefined) {
-    if (typeof raw.name !== 'string') throw new Error('name 必须是字符串');
+    if (typeof raw.name !== 'string') throw new Error(t('auth.workspace.error.mustBeString', { label: 'name' }));
     config.name = raw.name.trim();
   }
   if (raw.rocketChat !== undefined) {
     config.rocketChat = { url: normalizeUrl(raw.rocketChat?.url, 'rocketChat.url') };
   }
   if (raw.ado !== undefined) {
-    if (!raw.ado || typeof raw.ado !== 'object') throw new Error('ado 必须是对象');
+    if (!raw.ado || typeof raw.ado !== 'object') throw new Error(t('auth.workspace.error.mustBeObject', { field: 'ado' }));
     const ado: WorkspaceConfig['ado'] = {};
     if (raw.ado.url !== undefined) ado.url = normalizeUrl(raw.ado.url, 'ado.url');
     if (raw.ado.mode !== undefined) {
       if (raw.ado.mode === 'direct') {
         /* 兼容旧配置：写回时不再保留 mode */
       } else if (raw.ado.mode === 'bridge') {
-        throw new Error('ado.mode=bridge 已移除；请改用直连 Azure DevOps');
+        throw new Error(t('auth.workspace.error.adoBridgeRemoved'));
       } else {
-        throw new Error('ado.mode 只兼容旧版 direct；bridge 已移除');
+        throw new Error(t('auth.workspace.error.adoModeInvalid'));
       }
     }
     if (raw.ado.auth !== undefined) {
@@ -147,36 +148,36 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
   }
   if (raw.workItemTemplates !== undefined) {
     if (!raw.workItemTemplates || typeof raw.workItemTemplates !== 'object') {
-      throw new Error('workItemTemplates 必须是对象');
+      throw new Error(t('auth.workspace.error.mustBeObject', { field: 'workItemTemplates' }));
     }
     const hasUrl = raw.workItemTemplates.url !== undefined;
     const hasTemplates = raw.workItemTemplates.templates !== undefined;
     if (hasUrl === hasTemplates) {
-      throw new Error('workItemTemplates 必须且只能提供 url 或 templates');
+      throw new Error(t('auth.workspace.error.templatesXor'));
     }
     config.workItemTemplates = hasUrl
       ? { url: normalizeUrl(raw.workItemTemplates.url, 'workItemTemplates.url') }
       : parseInlineWorkItemTemplates(raw.workItemTemplates);
   }
   if (raw.ai !== undefined) {
-    throw new Error('ai 配置已移除；RocketX 统一使用 Codex 的模型与权限设置');
+    throw new Error(t('auth.workspace.error.aiRemoved'));
   }
   if (raw.update !== undefined) {
-    if (!raw.update || typeof raw.update !== 'object') throw new Error('update 必须是对象');
+    if (!raw.update || typeof raw.update !== 'object') throw new Error(t('auth.workspace.error.mustBeObject', { field: 'update' }));
     const source = oneOf(raw.update.source, ['github', 'http', 'dir'] as const, 'update.source');
     const update: WorkspaceConfig['update'] = { source };
     if (source === 'http') {
       update.location = normalizeUrl(raw.update.location, 'update.location');
     } else if (source === 'dir') {
       if (typeof raw.update.location !== 'string' || !raw.update.location.trim()) {
-        throw new Error('update.location 在共享目录模式下必须是非空路径');
+        throw new Error(t('auth.workspace.error.updateDirRequired'));
       }
       update.location = raw.update.location.trim();
     }
     config.update = update;
   }
   if (raw.workItems !== undefined) {
-    if (!raw.workItems || typeof raw.workItems !== 'object') throw new Error('workItems 必须是对象');
+    if (!raw.workItems || typeof raw.workItems !== 'object') throw new Error(t('auth.workspace.error.mustBeObject', { field: 'workItems' }));
     const workItems: WorkspaceConfig['workItems'] = {};
     if (raw.workItems.hierarchyLayout !== undefined) {
       workItems.hierarchyLayout = oneOf(
@@ -189,12 +190,12 @@ export function parseWorkspaceConfig(text: string): WorkspaceConfig {
   }
   if (raw.aliases !== undefined) {
     if (!raw.aliases || typeof raw.aliases !== 'object' || Array.isArray(raw.aliases)) {
-      throw new Error('aliases 必须是对象');
+      throw new Error(t('auth.workspace.error.mustBeObject', { field: 'aliases' }));
     }
     const aliases: Record<string, string> = {};
     for (const [key, value] of Object.entries(raw.aliases)) {
       if (!/^u:.+/.test(key) || typeof value !== 'string' || !value.trim()) {
-        throw new Error('aliases 只允许非空的 u:<username> → 备注名');
+        throw new Error(t('auth.workspace.error.aliasesInvalid'));
       }
       aliases[key] = value.trim();
     }
@@ -266,28 +267,28 @@ export function planWorkspaceFields(
 ): WorkspaceField[] {
   const fields: WorkspaceField[] = [];
   if (config.rocketChat) {
-    fields.push(field('server.url', 'Rocket.Chat 服务器', config.rocketChat.url, current.serverUrl ?? '', lastApplied));
+    fields.push(field('server.url', t('auth.workspace.field.serverUrl'), config.rocketChat.url, current.serverUrl ?? '', lastApplied));
   }
   if (config.ado?.url !== undefined) {
-    fields.push(field('ado.base', 'ADO 地址', config.ado.url, current.adoBase ?? '', lastApplied));
+    fields.push(field('ado.base', t('auth.workspace.field.adoBase'), config.ado.url, current.adoBase ?? '', lastApplied));
   }
   if (config.ado?.auth !== undefined) {
-    fields.push(field('ado.auth', 'ADO 认证方式', config.ado.auth, current.adoAuth ?? '', lastApplied));
+    fields.push(field('ado.auth', t('auth.workspace.field.adoAuth'), config.ado.auth, current.adoAuth ?? '', lastApplied));
   }
   if (config.ado?.webUrl !== undefined || config.ado?.url !== undefined) {
     const webUrl = config.ado?.webUrl ?? config.ado?.url ?? '';
-    fields.push(field('ado.webUrl', 'ADO Web 链接地址', webUrl, current.adoWebUrl ?? '', lastApplied));
+    fields.push(field('ado.webUrl', t('auth.workspace.field.adoWebUrl'), webUrl, current.adoWebUrl ?? '', lastApplied));
   }
   if (config.workItemTemplates) {
     if ('url' in config.workItemTemplates) {
       fields.push(
-        field('templates.url', '工作项模板地址', config.workItemTemplates.url, current.templatesUrl ?? '', lastApplied),
+        field('templates.url', t('auth.workspace.field.templatesUrl'), config.workItemTemplates.url, current.templatesUrl ?? '', lastApplied),
       );
     } else {
       fields.push(
         field(
           'templates.inline',
-          '内联工作项模板',
+          t('auth.workspace.field.templatesInline'),
           inlineWorkItemTemplatesFingerprint(config.workItemTemplates),
           current.templatesInline ?? '',
           lastApplied,
@@ -299,7 +300,7 @@ export function planWorkspaceFields(
     fields.push(
       field(
         'update.source',
-        '更新源',
+        t('auth.workspace.field.updateSource'),
         updateSourceFingerprint({ kind: config.update.source, location: config.update.location ?? '' }),
         current.updateSource ?? '',
         lastApplied,
@@ -310,7 +311,7 @@ export function planWorkspaceFields(
     fields.push(
       field(
         'workItems.hierarchyLayout',
-        '层级工作项形态',
+        t('auth.workspace.field.hierarchyLayout'),
         config.workItems.hierarchyLayout,
         current.hierarchyLayout ?? '',
         lastApplied,
@@ -319,7 +320,7 @@ export function planWorkspaceFields(
   }
   if (config.aliases) {
     const incoming = JSON.stringify(config.aliases, Object.keys(config.aliases).sort());
-    fields.push(field('aliases', '团队共享备注', incoming, current.aliases ?? '', lastApplied));
+    fields.push(field('aliases', t('auth.workspace.field.aliases'), incoming, current.aliases ?? '', lastApplied));
   }
   return fields;
 }
@@ -389,32 +390,32 @@ function sanitizeAppliedFields(value: unknown): Record<string, string> {
 }
 
 function sanitizeSourceUrl(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 必须是字符串`);
+  if (typeof value !== 'string' || !value.trim()) throw new Error(t('auth.workspace.error.mustBeString', { label }));
   let parsed: URL;
   try {
     parsed = new URL(value.trim());
   } catch {
-    throw new Error(`${label} 不是合法的 URL：${value}`);
+    throw new Error(t('auth.workspace.error.invalidUrl', { label, value: String(value) }));
   }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error(`${label} 必须是 http/https 地址`);
+    throw new Error(t('auth.workspace.error.mustBeHttp', { label }));
   }
   parsed.username = '';
   parsed.password = '';
   return parsed.toString().replace(/\/+$/, '');
 }
 
-export function normalizeUncWorkspacePath(value: unknown, label = 'UNC 路径'): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 必须是字符串`);
+export function normalizeUncWorkspacePath(value: unknown, label = t('auth.workspace.uncDefaultLabel')): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(t('auth.workspace.error.mustBeString', { label }));
   const trimmed = value.trim();
   if (trimmed.length > 32_768 || /[\u0000-\u001f\u007f]/.test(trimmed)) {
-    throw new Error(`${label} 包含非法字符`);
+    throw new Error(t('auth.workspace.error.uncIllegalChars', { label }));
   }
   if (!trimmed.startsWith('\\\\') || trimmed.startsWith('\\\\?\\') || trimmed.startsWith('\\\\.\\')) {
-    throw new Error(`${label} 必须是 \\\\server\\share\\... 形式的 UNC 文件路径`);
+    throw new Error(t('auth.workspace.error.uncFormat', { label }));
   }
   if (trimmed.includes('/')) {
-    throw new Error(`${label} 只能使用反斜杠`);
+    throw new Error(t('auth.workspace.error.uncBackslashOnly', { label }));
   }
   const parts = trimmed.slice(2).split('\\');
   if (
@@ -428,10 +429,10 @@ export function normalizeUncWorkspacePath(value: unknown, label = 'UNC 路径'):
       || part.endsWith(' ')
     ))
   ) {
-    throw new Error(`${label} 不允许设备路径、盘符、空路径段或 . / .. 路径段`);
+    throw new Error(t('auth.workspace.error.uncInvalidSegments', { label }));
   }
   if (!parts.at(-1)?.toLowerCase().endsWith('.json')) {
-    throw new Error(`${label} 必须指向 .json 文件`);
+    throw new Error(t('auth.workspace.error.uncMustBeJson', { label }));
   }
   return trimmed;
 }

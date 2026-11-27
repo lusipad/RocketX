@@ -7,6 +7,7 @@ import {
   MinusCircle,
   XCircle,
 } from 'lucide-react';
+import { useI18n, useT, type MessageKey, type TranslateFn } from '../i18n';
 import {
   fetchBuild,
   fetchPullRequest,
@@ -38,14 +39,19 @@ function BuildIcon({ build, size = 14 }: { build: AdoBuildInfo; size?: number })
   return <MinusCircle size={size} className="shrink-0 text-ink-3" />;
 }
 
-function buildResult(build: AdoBuildInfo): string {
-  if (build.status === 'inProgress' || build.status === 'notStarted') return '进行中';
-  return ({
-    succeeded: '成功',
-    failed: '失败',
-    partiallySucceeded: '部分成功',
-    canceled: '已取消',
-  } as Record<string, string>)[build.result] ?? build.result;
+const BUILD_RESULT_LABEL_KEYS: Record<string, MessageKey> = {
+  succeeded: 'workbench.build.result.succeeded',
+  failed: 'workbench.build.result.failed',
+  partiallySucceeded: 'workbench.build.result.partiallySucceeded',
+  canceled: 'workbench.build.result.canceled',
+};
+
+function buildResult(build: AdoBuildInfo, t: TranslateFn): string {
+  if (build.status === 'inProgress' || build.status === 'notStarted') {
+    return t('workbench.build.inProgress');
+  }
+  const key = BUILD_RESULT_LABEL_KEYS[build.result];
+  return key ? t(key) : build.result;
 }
 
 function PlainLink({ entity }: { entity: RichAdoEntity }) {
@@ -62,7 +68,10 @@ function PlainLink({ entity }: { entity: RichAdoEntity }) {
 }
 
 function Loading({ entity, variant }: { entity: RichAdoEntity; variant: 'card' | 'chip' }) {
-  const label = entity.kind === 'pullrequest' ? `PR !${entity.id}` : `构建 #${entity.id}`;
+  const t = useT();
+  const label = entity.kind === 'pullrequest'
+    ? t('workbench.entity.prLabel', { id: entity.id })
+    : t('workbench.entity.buildLabel', { id: entity.id });
   if (variant === 'chip') {
     return (
       <span className="mx-0.5 inline-flex items-center gap-1 rounded-md border border-line bg-fill-1 px-2 py-1 align-middle text-xs text-primary">
@@ -74,7 +83,7 @@ function Loading({ entity, variant }: { entity: RichAdoEntity; variant: 'card' |
     <span className="my-1 inline-block min-w-0 w-full max-w-sm align-middle">
       <span className="flex animate-pulse flex-col rounded-lg border border-line bg-fill-1">
         <span className="block h-1 rounded-t-lg bg-line" />
-        <span className="px-3 py-2 text-xs text-ink-3">{label} 加载中…</span>
+        <span className="px-3 py-2 text-xs text-ink-3">{t('workbench.entity.loadingCard', { label })}</span>
       </span>
     </span>
   );
@@ -87,6 +96,7 @@ function PullRequestLink({
   item: AdoPullRequestInfo;
   variant: 'card' | 'chip';
 }) {
+  const { t, tp } = useI18n();
   const review = pullRequestReviewSummary(item);
   if (variant === 'chip') {
     return (
@@ -109,7 +119,7 @@ function PullRequestLink({
         <span className="px-3 pb-2 pt-1.5">
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
             <GitPullRequest size={14} className="shrink-0 text-[#7f3bf5]" />
-            <span className="shrink-0">PR !{item.id}</span>
+            <span className="shrink-0">{t('workbench.entity.prLabel', { id: item.id })}</span>
             <span className="shrink-0">·</span>
             <span className="min-w-0 flex-1 truncate">{item.project}/{item.repo}</span>
             <a href={item.webUrl} target="_blank" rel="noreferrer" className="shrink-0">
@@ -126,15 +136,23 @@ function PullRequestLink({
           </a>
           <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
             <span className="truncate">{item.sourceBranch} → {item.targetBranch}</span>
-            <span>发起人 {item.creator || '未知'}</span>
+            <span>{t('workbench.entity.prCreator', { creator: item.creator || t('workbench.common.unknown') })}</span>
             <span className={review.approved === review.total && review.total > 0 ? 'text-success' : ''}>
-              {review.total > 0 ? `${review.voted}/${review.total} 已审核` : '尚未指定评审人'}
+              {review.total > 0
+                ? t('workbench.entity.prReviewedCount', { voted: review.voted, total: review.total })
+                : t('workbench.entity.prNoReviewers')}
             </span>
-            {review.rejected > 0 && <span className="text-danger">{review.rejected} 人拒绝</span>}
+            {review.rejected > 0 && (
+              <span className="text-danger">
+                {tp(review.rejected, 'workbench.entity.prRejectedOne', 'workbench.entity.prRejectedOther', {
+                  count: review.rejected,
+                })}
+              </span>
+            )}
           </span>
           {review.requiredGroups.length > 0 && (
             <span className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-ink-3">
-              <span>必审组</span>
+              <span>{t('workbench.entity.prRequiredGroups')}</span>
               {review.requiredGroups.map((group) => (
                 <span key={group} className="rounded bg-fill-2 px-1.5 py-0.5 text-ink-2">
                   {group}
@@ -149,7 +167,8 @@ function PullRequestLink({
 }
 
 function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'chip' }) {
-  const result = buildResult(item);
+  const t = useT();
+  const result = buildResult(item, t);
   if (variant === 'chip') {
     return (
       <a
@@ -171,7 +190,7 @@ function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'c
         <span className="px-3 pb-2 pt-1.5">
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-ink-3">
             <BuildIcon build={item} size={14} />
-            <span>构建 {item.buildNumber}</span>
+            <span>{t('workbench.entity.buildNumberLabel', { buildNumber: item.buildNumber })}</span>
             <span>·</span>
             <span className="min-w-0 flex-1 truncate">{item.project}</span>
             <a href={item.webUrl} target="_blank" rel="noreferrer" className="shrink-0">
@@ -188,7 +207,9 @@ function BuildLink({ item, variant }: { item: AdoBuildInfo; variant: 'card' | 'c
           </a>
           <span className="mt-1.5 flex items-center gap-2 text-xs text-ink-3">
             <span>{result}</span>
-            {item.requestedFor && <span>{item.requestedFor} 触发</span>}
+            {item.requestedFor && (
+              <span>{t('workbench.entity.buildTriggeredBy', { user: item.requestedFor })}</span>
+            )}
           </span>
         </span>
       </span>

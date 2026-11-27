@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { leaseIsActive, type AgentBackend, type AgentSession } from './session';
 
 export interface AgentSessionCard {
@@ -50,8 +51,8 @@ export function agentSessionCardMatchesMessage(
 
 const LEGACY_MARKER = /<!--rocketx-agent:([^>]+)-->/;
 const INVISIBLE_MARKER = /\u2063\u2063([\uFE00-\uFE0F\u{E0100}-\u{E01EF}]+)\u2063/u;
-const WORK_ITEM_HEADER = /^🤖 \*\*AI 工作项会话：#(\d+) (.+)\*\*$/mu;
-const HOSTING_HEADER = /^🤖 \*\*AI 托管已开启\*\*$/mu;
+const WORK_ITEM_HEADER = /^🤖 \*\*(?:AI 工作项会话：|AI Work Item Session: )#(\d+) (.+)\*\*$/mu;
+const HOSTING_HEADER = /^🤖 \*\*(?:AI 托管已开启|AI Hosting Started)\*\*$/mu;
 const LEASE_ID_CHARS = '23456789ABCDEFGHJKLMNPQRSTWXYZabcdefghijkmnopqrstuvwxyz';
 const LEASE_ID_PREFIX = 'RXh';
 const LEASE_ID_BODY_LENGTH = 12;
@@ -161,11 +162,11 @@ function parseVisibleAgentSessionCard(
   message: AgentSessionCardMessage | undefined,
 ): AgentSessionCard | null {
   if (!message || (!HOSTING_HEADER.test(text) && !WORK_ITEM_HEADER.test(text))) return null;
-  const host = text.match(/^主持人：@(.+?) · 状态：(运行中|已中断|已结束)$/mu);
-  const backendText = lineValue(text, '执行引擎：');
-  const environmentName = lineValue(text, '本地项目：');
-  const currentTaskLabel = lineValue(text, '当前任务：');
-  const leaseText = lineValue(text, '宿主租约至：');
+  const host = text.match(/^(?:主持人：|Host: )@(.+?) · (?:状态：|Status: )(运行中|已中断|已结束|Active|Interrupted|Ended)$/mu);
+  const backendText = lineValue(text, '执行引擎：') ?? lineValue(text, 'Engine: ');
+  const environmentName = lineValue(text, '本地项目：') ?? lineValue(text, 'Local project: ');
+  const currentTaskLabel = lineValue(text, '当前任务：') ?? lineValue(text, 'Current task: ');
+  const leaseText = lineValue(text, '宿主租约至：') ?? lineValue(text, 'Host lease until: ');
   const leaseExpiresAt = leaseText ? Date.parse(leaseText) : Number.NaN;
   if (
     !host
@@ -174,7 +175,7 @@ function parseVisibleAgentSessionCard(
     || !currentTaskLabel
     || !Number.isFinite(leaseExpiresAt)
   ) return null;
-  const status = host[2] === '运行中' ? 'active' : host[2] === '已中断' ? 'interrupted' : 'ended';
+  const status = host[2] === '运行中' || host[2] === 'Active' ? 'active' : host[2] === '已中断' || host[2] === 'Interrupted' ? 'interrupted' : 'ended';
   const backend = backendText === 'DeepSeek' ? 'deepseek' : 'codex';
   const metadata = parseLeaseMetadata(message);
   const tmid = message.tmid ?? `room:${message.rid}`;
@@ -187,8 +188,8 @@ function parseVisibleAgentSessionCard(
   const workItem = WORK_ITEM_HEADER.exec(text);
   const workItemId = workItem ? Number(workItem[1]) : undefined;
   const workItemTitle = singleLine(workItem?.[2]);
-  const project = lineValue(text, 'ADO：');
-  const proposedBranch = lineValue(text, '计划分支：')?.replace(/^`|`$/gu, '');
+  const project = lineValue(text, 'ADO：') ?? lineValue(text, 'ADO: ');
+  const proposedBranch = (lineValue(text, '计划分支：') ?? lineValue(text, 'Planned branch: '))?.replace(/^`|`$/gu, '');
   return {
     version: 1,
     sessionId,
@@ -255,23 +256,27 @@ export function agentSessionCardAuthority(
 }
 
 export function renderAgentSessionCard(card: AgentSessionCard): string {
-  const status = card.status === 'active' ? '运行中' : card.status === 'interrupted' ? '已中断' : '已结束';
-  const project = singleLine(card.environmentName) || singleLine(card.workItem?.project) || '未指定项目';
+  const status = card.status === 'active'
+    ? t('agent.card.status.active')
+    : card.status === 'interrupted'
+      ? t('agent.card.status.interrupted')
+      : t('agent.card.status.ended');
+  const project = singleLine(card.environmentName) || singleLine(card.workItem?.project) || t('agent.hosted.noProject');
   const task = singleLine(card.currentTaskLabel)
-    || (card.workItem ? `#${card.workItem.id} ${singleLine(card.workItem.title) || '未命名工作项'}` : undefined)
-    || (card.status === 'interrupted' ? '等待恢复' : card.status === 'ended' ? '托管已结束' : '等待房间指令');
+    || (card.workItem ? `#${card.workItem.id} ${singleLine(card.workItem.title) || t('agent.card.unnamedWorkItem')}` : undefined)
+    || (card.status === 'interrupted' ? t('agent.hosted.waitingRecovery') : card.status === 'ended' ? t('agent.hosted.sessionEnded') : t('agent.hosted.waitingCommand'));
   return [
     card.workItem
-      ? `🤖 **AI 工作项会话：#${card.workItem.id} ${singleLine(card.workItem.title) || '未命名工作项'}**`
-      : '🤖 **AI 托管已开启**',
-    card.workItem?.project ? `ADO：${singleLine(card.workItem.project)}` : '',
-    `本地项目：${project}`,
-    `当前任务：${task}`,
-    card.proposedBranch ? `计划分支：\`${singleLine(card.proposedBranch)}\`` : '',
-    `执行引擎：${card.backend === 'deepseek' ? 'DeepSeek' : 'Codex'}`,
-    `主持人：@${card.hostUsername} · 状态：${status}`,
-    card.status === 'active' ? '房间成员：使用 `@ai` 提问；权限与审批由主持人的 AI 管家会话控制。' : '',
-    `宿主租约至：${new Date(card.leaseExpiresAt).toISOString()}`,
+      ? t('agent.card.workItemHeader', { id: card.workItem.id, title: singleLine(card.workItem.title) || t('agent.card.unnamedWorkItem') })
+      : t('agent.card.hostingHeader'),
+    card.workItem?.project ? t('agent.card.adoLine', { project: singleLine(card.workItem.project) ?? '' }) : '',
+    t('agent.card.localProjectLine', { project }),
+    t('agent.card.currentTaskLine', { task }),
+    card.proposedBranch ? t('agent.card.plannedBranchLine', { branch: singleLine(card.proposedBranch) ?? '' }) : '',
+    t('agent.card.engineLine', { engine: card.backend === 'deepseek' ? 'DeepSeek' : 'Codex' }),
+    t('agent.card.hostStatusLine', { username: card.hostUsername, status }),
+    card.status === 'active' ? t('agent.card.memberHint') : '',
+    t('agent.card.leaseUntilLine', { iso: new Date(card.leaseExpiresAt).toISOString() }),
   ].filter(Boolean).join('\n');
 }
 

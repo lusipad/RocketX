@@ -1,4 +1,5 @@
 import { tsMs, type RcDate, type RcMessage, type RoomType } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 export interface UnreadHistoryResult {
   messages: RcMessage[];
@@ -36,7 +37,7 @@ export async function collectUnreadHistory(
       break;
     }
     const nextLatest = new Date(oldestMs).toISOString();
-    if (nextLatest === latest) throw new Error('历史分页没有向前推进');
+    if (nextLatest === latest) throw new Error(t('chat.unreadHistory.paginationStalled'));
     latest = nextLatest;
   }
 

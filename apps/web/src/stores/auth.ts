@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { RcUser } from '@rcx/rc-client';
+import { t } from '../i18n';
 import {
   clearBusinessMcpAzureDevOps,
   clearBusinessMcpRocketChat,
@@ -20,12 +21,14 @@ import { startupPresence } from '../lib/presencePreference';
 export { LOCAL_MODE_USER_ID };
 export const LOCAL_MODE_STORAGE_KEY = 'rcx-local-mode';
 
-const LOCAL_USER: RcUser = {
-  _id: LOCAL_MODE_USER_ID,
-  username: 'local',
-  name: '本地模式',
-  status: 'offline',
-};
+function localUser(): RcUser {
+  return {
+    _id: LOCAL_MODE_USER_ID,
+    username: 'local',
+    name: t('nav.rail.localMode'),
+    status: 'offline',
+  };
+}
 
 interface AuthState {
   status: 'boot' | 'guest' | 'authing' | 'authed';
@@ -173,7 +176,7 @@ async function activateLocalWorkspace(
     location.reload();
     return;
   }
-  set({ status: 'authed', localMode: true, user: LOCAL_USER, error });
+  set({ status: 'authed', localMode: true, user: localUser(), error });
   void syncLocalBusinessMcpSession().catch((syncError) => {
     console.warn('[rcx] 本地模式业务 MCP 同步失败', syncError);
   });
@@ -228,8 +231,8 @@ export const useAuth = create<AuthState>((set, get) => ({
       await activateLocalWorkspace(set, {
         kind: 'session_expired',
         stage: 'login',
-        summary: '上次 Rocket.Chat 登录已失效，当前处于本地模式',
-        detail: 'AI 管家、统一看板与待办可正常使用；如需收发团队消息请重新登录',
+        summary: t('auth.session.resumeExpiredSummary'),
+        detail: t('auth.session.resumeExpiredDetail'),
         diagnostic: 'stage=resume kind=session_expired detail=token resume failed, entered local workspace',
       });
     }
@@ -240,7 +243,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     set({
       status: 'authing',
       localMode: wasLocalMode,
-      user: wasLocalMode ? LOCAL_USER : null,
+      user: wasLocalMode ? localUser() : null,
       error: null,
     });
     try {
@@ -265,7 +268,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       const diag = await writeLoginDiagnostic(err, 'login');
       if (wasLocalMode) {
         await clearBusinessMcpRocketChat().catch(() => undefined);
-        set({ status: 'authed', localMode: true, user: LOCAL_USER, error: diag });
+        set({ status: 'authed', localMode: true, user: localUser(), error: diag });
         return;
       }
       await clearBusinessMcpSession();
@@ -282,8 +285,9 @@ export const useAuth = create<AuthState>((set, get) => ({
     realtime.close();
     await activateLocalWorkspace(set, null);
     const { useUI } = await import('./ui');
+    const { runtimeFeatures } = await import('../lib/runtimeMode');
     if (useUI.getState().module === 'messages') {
-      useUI.getState().setModule('butler-view');
+      useUI.getState().setModule(runtimeFeatures().butler ? 'butler-view' : 'todos');
     }
   },
 
@@ -309,7 +313,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     }
     // reload 会销毁 JS 定时器；必须先等原生托盘恢复，避免透明帧永久残留。
     await restoreTrayAttention();
-    set({ status: 'authed', localMode: true, user: LOCAL_USER, error: null });
+    set({ status: 'authed', localMode: true, user: localUser(), error: null });
     location.reload();
   },
 
@@ -342,8 +346,8 @@ export const useAuth = create<AuthState>((set, get) => ({
     void activateLocalWorkspace(set, {
       kind: 'session_expired',
       stage: 'login',
-      summary: 'Rocket.Chat 登录已失效，已自动切换为本地模式',
-      detail: '本地 AI 管家与工作台不受影响；可在消息页重新登录服务器',
+      summary: t('auth.session.lostSummary'),
+      detail: t('auth.session.lostDetail'),
       diagnostic: 'stage=login kind=session_expired detail=session invalidated locally',
     });
   },

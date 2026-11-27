@@ -1,6 +1,7 @@
 import { readFile, stat } from '@tauri-apps/plugin-fs';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { RcApiError } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { ensureHttpOrigin, isTauri } from '../lib/http';
 import {
   UPLOAD_SPOOL_DIR,
@@ -10,13 +11,13 @@ import {
 import { getServerBase, loadStoredAuth } from '../lib/client';
 
 export async function readDesktopFile(path: string): Promise<ArrayBuffer> {
-  if (!isTauri) throw new Error('此操作仅支持桌面端');
+  if (!isTauri) throw new Error(t('nav.platform.desktopOnly'));
   const bytes = await readFile(path);
   return Uint8Array.from(bytes).buffer;
 }
 
 export async function statDesktopFile(path: string): Promise<{ size: number }> {
-  if (!isTauri) throw new Error('此操作仅支持桌面端');
+  if (!isTauri) throw new Error(t('nav.platform.desktopOnly'));
   return stat(path);
 }
 
@@ -39,10 +40,10 @@ export async function uploadDesktopFile(
     signal?: AbortSignal;
   } = {},
 ): Promise<void> {
-  if (!isTauri) throw new Error('此操作仅支持桌面端');
+  if (!isTauri) throw new Error(t('nav.platform.desktopOnly'));
   const serverUrl = getServerBase();
   const auth = loadStoredAuth();
-  if (!serverUrl || !auth) throw new Error('Rocket.Chat 登录状态不可用');
+  if (!serverUrl || !auth) throw new Error(t('nav.platform.authUnavailable'));
   await ensureHttpOrigin(serverUrl);
   const taskId = `nt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const progress = new Channel<{ event: string; loaded: number; total: number }>();
@@ -70,7 +71,7 @@ export async function uploadDesktopFile(
       throw new RcApiError(result.error ?? `HTTP ${result.status}`, result.status, result.errorType);
     }
   } catch (err) {
-    if (options.signal?.aborted) throw new DOMException('上传已取消', 'AbortError');
+    if (options.signal?.aborted) throw new DOMException(t('nav.platform.uploadAborted'), 'AbortError');
     throw err;
   } finally {
     options.signal?.removeEventListener('abort', onAbort);
@@ -99,7 +100,7 @@ export async function uploadDesktopBlob(
     onProgress?: (loaded: number, total: number) => void;
   },
 ): Promise<void> {
-  if (!isTauri) throw new Error('此操作仅支持桌面端');
+  if (!isTauri) throw new Error(t('nav.platform.desktopOnly'));
   const [{ appDataDir, join }, { mkdir, remove, writeFile }] = await Promise.all([
     import('@tauri-apps/api/path'),
     import('@tauri-apps/plugin-fs'),

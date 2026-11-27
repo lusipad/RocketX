@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t, tp } from '../i18n';
 import {
   RcApiError,
   tsMs,
@@ -415,22 +416,18 @@ async function lanRecipientIds(rid: string): Promise<string[]> {
 function lanP2pFriendlyError(error: unknown): Error {
   const raw = error instanceof Error ? error.message : String(error);
   if (/no LAN peer is online for this user/i.test(raw)) {
-    return new Error(
-      '没有发现对方设备的局域网入口（对方可能未开客户端、未登录同一服务器，或两台设备不在同一局域网段）。请确认双方在线并且处于同一网络；仍失败请导出两端 LAN 诊断日志（rocketx::lan_diagnostics）。',
-    );
+    return new Error(t('chat.p2p.error.noPeer'));
   }
   if (/no LAN peer candidate is available/i.test(raw)) {
-    return new Error('找到了对方设备但所有候选连接地址都不可达。请检查两端防火墙是否放行 RocketX 的 UDP/TCP 局域网端口，并导出两端 LAN 诊断日志。');
+    return new Error(t('chat.p2p.error.noCandidate'));
   }
   if (/LAN service is not running/i.test(raw)) {
-    return new Error('局域网直传服务未启动。请重新登录或重启客户端后再试；仍失败请导出诊断日志。');
+    return new Error(t('chat.p2p.error.serviceNotRunning'));
   }
   if (/failed to connect LAN peer/i.test(raw)) {
     // 发现了对方却连不进去，最常见的是对方的防火墙挡了入站；对方只要在与你的私聊里
     // 点一次 P2P 直传，就会在他那边检查并请求授权。
-    return new Error(
-      `连接对方设备失败，对方的防火墙可能拦截了连接。请让对方在与你的私聊里点一次 P2P 直传按钮，按提示允许管理员授权后再试。（${raw}）`,
-    );
+    return new Error(t('chat.p2p.error.connectFailed', { raw }));
   }
   return new Error(raw);
 }
@@ -445,7 +442,7 @@ async function lanP2pFailure(error: unknown, recipient: string): Promise<Error> 
   const hint = firewall ? lanFirewallFailureHint(firewall) : null;
   if (!hint) return friendly;
   return hint.cause
-    ? new Error(`${hint.text}（原始错误：${friendly.message}）`)
+    ? new Error(t('chat.p2p.error.withRaw', { hint: hint.text, error: friendly.message }))
     : new Error(`${friendly.message}${hint.text}`);
 }
 
@@ -1255,7 +1252,7 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (err) {
       // 这里挂掉的话界面会永远停在「加载会话中…」，连个错都看不到。
       // 必须说出来，否则用户只能干瞪眼。
-      toast.error(err, '无法加载会话列表');
+      toast.error(err, t('chat.store.loadConversationsFailed'));
       console.error('[rcx] 初始化失败', err);
       return;
     }
@@ -1287,7 +1284,7 @@ export const useChat = create<ChatState>((set, get) => ({
           enqueueAttachmentArchives(
             latest,
             snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
-              snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+              snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || t('chat.common.conversation'),
           );
           let merged = [...(get().messages[rid] ?? [])];
           for (const m of latest) merged = upsertMessage(merged, m);
@@ -1307,11 +1304,11 @@ export const useChat = create<ChatState>((set, get) => ({
       if (s === 'reconnecting' && prev === 'connected') {
         offlineToastId = toast.show({
           kind: 'error',
-          message: '与服务器断开连接，正在重连…',
+          message: t('chat.store.reconnecting'),
           duration: 0,
         });
       } else if (s === 'connected' && offlineToastId) {
-        toast.update(offlineToastId, { kind: 'success', message: '已重新连接' });
+        toast.update(offlineToastId, { kind: 'success', message: t('chat.store.reconnected') });
         offlineToastId = null;
       }
       // 从重连态恢复 → 补断线期间漏掉的数据
@@ -1341,7 +1338,7 @@ export const useChat = create<ChatState>((set, get) => ({
       enqueueAttachmentArchives(
         [msg],
         state.subscriptions[rid]?.fname || state.subscriptions[rid]?.name ||
-          state.rooms[rid]?.fname || state.rooms[rid]?.name || '会话',
+          state.rooms[rid]?.fname || state.rooms[rid]?.name || t('chat.common.conversation'),
       );
       const alreadyKnown = (state.messages[rid] ?? []).some((message) => message._id === msg._id);
       let nextList = upsertMessage(state.messages[rid] ?? [], msg);
@@ -1562,7 +1559,7 @@ export const useChat = create<ChatState>((set, get) => ({
       enqueueAttachmentArchives(
         history,
         subscriptions[rid]?.fname || subscriptions[rid]?.name ||
-          rooms[rid]?.fname || rooms[rid]?.name || '会话',
+          rooms[rid]?.fname || rooms[rid]?.name || t('chat.common.conversation'),
       );
       // 用户快速切过很多房间时，旧请求可能在该房间已被淘汰后才返回。
       // 不再保留的房间由下次打开重新加载，避免迟到响应绕过内存上限。
@@ -1615,7 +1612,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const [root, replies] = await Promise.all([
       knownRoot ?? rest.getMessage(mid).catch(() => null),
       rest.getThreadMessages(mid).catch((error: unknown) => {
-        if (get().rightPanel === panel) toast.error(error, '加载话题回复失败');
+        if (get().rightPanel === panel) toast.error(error, t('chat.store.loadThreadFailed'));
         return [];
       }),
     ]);
@@ -1625,7 +1622,7 @@ export const useChat = create<ChatState>((set, get) => ({
     enqueueAttachmentArchives(
       threadMessages,
       snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
-        snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+        snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || t('chat.common.conversation'),
     );
     let list = snapshot.messages[rid] ?? [];
     for (const m of threadMessages) {
@@ -1652,10 +1649,10 @@ export const useChat = create<ChatState>((set, get) => ({
           return { ...message, replies: [...replies] };
         }));
       }
-      toast.success(follow ? '已关注讨论串' : '已关闭讨论串提醒');
+      toast.success(follow ? t('chat.store.threadFollowed') : t('chat.store.threadUnfollowed'));
       return true;
     } catch (error) {
-      toast.error(error, follow ? '关注讨论串失败' : '关闭讨论串提醒失败');
+      toast.error(error, follow ? t('chat.store.threadFollowFailed') : t('chat.store.threadUnfollowFailed'));
       return false;
     }
   },
@@ -1679,7 +1676,7 @@ export const useChat = create<ChatState>((set, get) => ({
     enqueueAttachmentArchives(
       older,
       snapshot.subscriptions[rid]?.fname || snapshot.subscriptions[rid]?.name ||
-        snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || '会话',
+        snapshot.rooms[rid]?.fname || snapshot.rooms[rid]?.name || t('chat.common.conversation'),
     );
     let merged = get().messages[rid] ?? [];
     for (const m of older) {
@@ -1716,7 +1713,7 @@ export const useChat = create<ChatState>((set, get) => ({
       // 保留已有缓存，让其它调用方继续可用；同时记录原因，使成员面板能区分
       // 「拉取失败」和「群里真没人」(P1-11)。
       set({
-        memberErrors: { ...get().memberErrors, [rid]: humanError(err, '无法获取成员列表') },
+        memberErrors: { ...get().memberErrors, [rid]: humanError(err, t('chat.store.loadMembersFailed')) },
       });
       return get().members[rid] ?? [];
     }
@@ -1734,7 +1731,7 @@ export const useChat = create<ChatState>((set, get) => ({
       return {
         id: explicitClientId,
         delivery: 'failed',
-        reason: '消息 ID 无效，已拒绝发送',
+        reason: t('chat.store.invalidMessageId'),
       };
     }
 
@@ -1780,7 +1777,11 @@ export const useChat = create<ChatState>((set, get) => ({
             },
           });
         } catch (chunkError) {
-          const reason = `消息过长已分段发送，第 ${index + 1}/${chunks.length} 段失败，后续段已停止：${humanError(chunkError, '消息发送失败')}`;
+          const reason = t('chat.store.chunkSendFailed', {
+            index: index + 1,
+            total: chunks.length,
+            error: humanError(chunkError, t('chat.store.sendFailed')),
+          });
           toast.show({ kind: 'error', message: reason });
           return reason;
         }
@@ -1825,8 +1826,8 @@ export const useChat = create<ChatState>((set, get) => ({
       const uncertain = isUncertainSendError(err);
       let delivery: ChatSendResult['delivery'] = uncertain ? 'unknown' : 'failed';
       let reason = uncertain
-        ? '发送结果暂时无法确认，请检查原会话后重试'
-        : humanError(err, '消息发送失败');
+        ? t('chat.store.sendUncertain')
+        : humanError(err, t('chat.store.sendFailed'));
       if (uncertain) {
         // 8.6.1 对重复 _id 会只保留一条但返回 500；先按 id 回查，避免把已成功的消息
         // 又转成 LAN 离线消息或未知态。
@@ -1849,10 +1850,10 @@ export const useChat = create<ChatState>((set, get) => ({
           }
           if (existing.rid === rid && existing.msg !== firstChunk) {
             delivery = 'failed';
-            reason = '原会话里同一消息 ID 已存在不同内容，请检查原会话后重试';
+            reason = t('chat.store.duplicateIdMismatch');
           } else if (existing.rid !== rid) {
             delivery = 'failed';
-            reason = '同一消息 ID 已被其他会话占用，请检查原会话后重试';
+            reason = t('chat.store.duplicateIdOtherRoom');
           }
         } catch {
           /* 服务端不可达或确实未落库，继续判断 LAN 降级 */
@@ -1876,10 +1877,10 @@ export const useChat = create<ChatState>((set, get) => ({
         }
         delivery = currentMessage ? 'failed' : 'unknown';
         reason = !currentMessage
-          ? '发送结果暂时无法确认，请检查原会话后重试'
+          ? t('chat.store.sendUncertain')
           : currentMessage.rid !== rid
-            ? '同一消息 ID 已被其他会话占用，请检查原会话后重试'
-            : '原会话里同一消息 ID 已存在不同内容，请检查原会话后重试';
+            ? t('chat.store.duplicateIdOtherRoom')
+            : t('chat.store.duplicateIdMismatch');
       }
       set({
         messages: {
@@ -1894,7 +1895,7 @@ export const useChat = create<ChatState>((set, get) => ({
         kind: 'error',
         message: reason,
         ...(explicitClientId === undefined
-          ? { action: { label: '重试', onClick: () => void get().resendMessage(resolvedClientId) } }
+          ? { action: { label: t('common.retry'), onClick: () => void get().resendMessage(resolvedClientId) } }
           : {}),
       });
       return {
@@ -1915,7 +1916,7 @@ export const useChat = create<ChatState>((set, get) => ({
       try {
         await local.run({ rid, params, ...(tmid ? { tmid } : {}) });
       } catch (err) {
-        toast.error(err, `/${command} 执行失败`);
+        toast.error(err, t('chat.store.slashFailed', { command }));
       }
       return;
     }
@@ -1935,12 +1936,12 @@ export const useChat = create<ChatState>((set, get) => ({
           if (conv) {
             await get().hideConv({ rid: conv.rid, name: conv.fname || conv.name, type: conv.t });
           } else {
-            toast.info('当前会话已经是隐藏状态');
+            toast.info(t('chat.store.alreadyHidden'));
           }
         }
         if (action.type !== 'forward') return;
       } catch (err) {
-        toast.error(err, `/${command} 执行失败`);
+        toast.error(err, t('chat.store.slashFailed', { command }));
         return;
       }
     }
@@ -1951,7 +1952,9 @@ export const useChat = create<ChatState>((set, get) => ({
       const hint = nearestCommand(command, composerCommands(get().slashCommands));
       toast.show({
         kind: 'error',
-        message: hint ? `没有 /${command} 这个命令，你是想用 /${hint} 吗？` : `没有 /${command} 这个命令`,
+        message: hint
+          ? t('chat.store.unknownSlashWithHint', { command, hint })
+          : t('chat.store.unknownSlash', { command }),
       });
       return;
     }
@@ -1959,7 +1962,7 @@ export const useChat = create<ChatState>((set, get) => ({
       await rest.runCommand(command, rid, params, tmid);
       // 命令的结果由服务端产生（发消息 / 改房间 / 踢人），走实时流回来，这里不用管
     } catch (err) {
-      toast.error(err, `/${command} 执行失败`);
+      toast.error(err, t('chat.store.slashFailed', { command }));
     }
   },
 
@@ -2052,7 +2055,7 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       const target = cached ?? await rest.getMessage(mid);
       if (!isCurrent()) return;
-      if (!target || target._id !== mid) throw new Error('消息不存在或已无法访问');
+      if (!target || target._id !== mid) throw new Error(t('chat.store.messageNotFound'));
       if (target.rid !== targetRid) return get().jumpToMessage(mid, target.rid);
       if (target.tmid) {
         if (!cached) {
@@ -2070,7 +2073,7 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (error) {
       if (isCurrent()) {
         get().scrollToLatest();
-        toast.error(error, '无法定位原消息');
+        toast.error(error, t('chat.store.locateMessageFailed'));
       }
       return;
     }
@@ -2145,10 +2148,12 @@ export const useChat = create<ChatState>((set, get) => ({
       // 所以这里直接给一个「把原会话记录带过来」的入口（30 / 100 / 全部）。
       toast.show({
         kind: 'info',
-        message: `已新建包含所有人的会话；原会话「${get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '私聊'}」的历史仍在那里`,
+        message: t('chat.store.newGroupDmCreated', {
+          name: get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || t('chat.store.directMessageFallback'),
+        }),
         // 给操作按钮留足点击时间（默认 info 只停 2.8 秒）
         duration: 12_000,
-        action: { label: '带过来', onClick: () => openHistoryCopy({ sourceRid: rid, targetRid }) },
+        action: { label: t('chat.store.bringHistoryAction'), onClick: () => openHistoryCopy({ sourceRid: rid, targetRid }) },
       });
       return;
     }
@@ -2171,7 +2176,7 @@ export const useChat = create<ChatState>((set, get) => ({
       refreshed = await requestMemberSnapshot(rid, type, version);
     } catch (err) {
       // 邀请本身已经成功；刷新失败时保留旧缓存并乐观加入新人。
-      refreshError = humanError(err, '成员列表刷新失败');
+      refreshError = humanError(err, t('chat.store.refreshMembersFailed'));
     }
     if (memberVersion(rid) !== version) return;
     const nextMembers = applyPendingMemberChanges(
@@ -2203,8 +2208,8 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     toast.success(
       users.length === 1
-        ? `已添加 ${users[0].name || users[0].username}`
-        : `已添加 ${users.length} 位成员`,
+        ? t('chat.store.memberAddedSingle', { name: users[0].name || users[0].username })
+        : tp(users.length, 'chat.store.memberAddedOne', 'chat.store.memberAddedOther'),
     );
   },
 
@@ -2215,7 +2220,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const updated = await rest.updateMessage(rid, msgId, text.trim());
       set(updateLoadedMessage(get(), rid, msgId, () => updated));
     } catch (err) {
-      toast.error(err, '编辑失败');
+      toast.error(err, t('chat.store.editFailed'));
     }
   },
 
@@ -2227,7 +2232,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const panel = get().rightPanel;
       if (panel?.kind === 'thread' && panel.mid === msgId) set({ rightPanel: null });
     } catch (err) {
-      toast.error(err, '删除失败');
+      toast.error(err, t('chat.store.deleteFailed'));
     }
   },
 
@@ -2235,7 +2240,7 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       await rest.react(messageId, emoji);
     } catch (err) {
-      toast.error(err, '表情回应失败');
+      toast.error(err, t('chat.store.reactionFailed'));
     }
   },
 
@@ -2252,7 +2257,7 @@ export const useChat = create<ChatState>((set, get) => ({
         set({ messages: { ...get().messages, [rid]: [...list, message] } });
       }
     } catch (err) {
-      toast.error(err, '发起投票失败');
+      toast.error(err, t('chat.store.pollCreateFailed'));
       throw err;
     }
   },
@@ -2264,7 +2269,7 @@ export const useChat = create<ChatState>((set, get) => ({
     const my = useAuth.getState().user?.username;
     if (!my) return;
     if (pollIsClosed(poll, message)) {
-      toast.info('投票已经结束了');
+      toast.info(t('chat.store.pollAlreadyClosed'));
       return;
     }
     const code = POLL_DIGIT_CODES[optionIndex];
@@ -2281,7 +2286,7 @@ export const useChat = create<ChatState>((set, get) => ({
       await rest.react(message._id, code, !already);
       // 计票由服务端的消息更新流推回来，这里不做乐观改动，避免和流对账打架
     } catch (err) {
-      toast.error(err, '投票失败');
+      toast.error(err, t('chat.store.pollVoteFailed'));
     }
   },
 
@@ -2292,9 +2297,9 @@ export const useChat = create<ChatState>((set, get) => ({
       // 锁表情就是结束标记：chat.update 改附件会被服务端 schema 拒收，表情不会；
       // 消息更新流会把新回应推回来，卡片随即显示「已结束」。
       await rest.react(messageId, POLL_CLOSED_REACTION);
-      toast.success('投票已结束');
+      toast.success(t('chat.store.pollClosed'));
     } catch (err) {
-      toast.error(err, '结束投票失败，只有发起人能结束');
+      toast.error(err, t('chat.store.pollCloseFailed'));
     }
   },
 
@@ -2312,8 +2317,8 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     const message = await rest.sendMessageRaw({
       rid,
-      msg: '📋 已创建消息看板，卡片都在这个话题里维护，不会刷屏',
-      attachments: [{ type: KANBAN_BOARD_TYPE, text: '消息看板' }],
+      msg: t('chat.kanban.boardCreatedMsg'),
+      attachments: [{ type: KANBAN_BOARD_TYPE, text: t('chat.kanban.boardTitle') }],
     });
     const list = get().messages[rid];
     if (list && !list.some((m) => m._id === message._id)) {
@@ -2343,9 +2348,9 @@ export const useChat = create<ChatState>((set, get) => ({
           }),
         ],
       });
-      toast.success(`已加入看板（${kanbanColumnName(column)}）`);
+      toast.success(t('chat.kanban.addedToBoard', { column: kanbanColumnName(column) }));
     } catch (err) {
-      toast.error(err, '加入看板失败');
+      toast.error(err, t('chat.kanban.addFailed'));
       throw err;
     }
   },
@@ -2360,7 +2365,7 @@ export const useChat = create<ChatState>((set, get) => ({
         attachments: [kanbanEventAttachment({ op: 'move', cardId, column: to })],
       });
     } catch (err) {
-      toast.error(err, '移动卡片失败');
+      toast.error(err, t('chat.kanban.moveFailed'));
     }
   },
 
@@ -2373,9 +2378,9 @@ export const useChat = create<ChatState>((set, get) => ({
         msg: kanbanEventText({ op: 'remove', title }),
         attachments: [kanbanEventAttachment({ op: 'remove', cardId })],
       });
-      toast.success('已删除卡片');
+      toast.success(t('chat.kanban.removedCard'));
     } catch (err) {
-      toast.error(err, '删除卡片失败');
+      toast.error(err, t('chat.kanban.removeFailed'));
     }
   },
 
@@ -2392,8 +2397,8 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     const message = await rest.sendMessageRaw({
       rid,
-      msg: '📅 已创建团队值班表，排班记录都在这个话题里维护',
-      attachments: [{ type: ONCALL_BOARD_TYPE, text: '团队值班表' }],
+      msg: t('chat.oncall.boardCreatedMsg'),
+      attachments: [{ type: ONCALL_BOARD_TYPE, text: t('chat.oncall.boardTitle') }],
     });
     const list = get().messages[rid];
     if (list && !list.some((m) => m._id === message._id)) {
@@ -2421,9 +2426,9 @@ export const useChat = create<ChatState>((set, get) => ({
           }),
         ],
       });
-      toast.success(`已排班：${shift.date} ${shift.shift} → @${shift.username}`);
+      toast.success(t('chat.oncall.addedShift', { date: shift.date, shift: shift.shift, username: shift.username }));
     } catch (err) {
-      toast.error(err, '排班失败');
+      toast.error(err, t('chat.oncall.addFailed'));
       throw err;
     }
   },
@@ -2437,18 +2442,18 @@ export const useChat = create<ChatState>((set, get) => ({
         msg: oncallEventText({ op: 'remove' }),
         attachments: [oncallEventAttachment({ op: 'remove', shiftId })],
       });
-      toast.success('已取消排班');
+      toast.success(t('chat.oncall.removedShift'));
     } catch (err) {
-      toast.error(err, '取消排班失败');
+      toast.error(err, t('chat.oncall.removeFailed'));
     }
   },
 
   publishOncall: async (rid, shifts) => {
     try {
       await rest.sendMessage(rid, oncallSummaryText(shifts));
-      toast.success('值班表已发布到频道');
+      toast.success(t('chat.oncall.published'));
     } catch (err) {
-      toast.error(err, '发布失败');
+      toast.error(err, t('chat.oncall.publishFailed'));
       throw err;
     }
   },
@@ -2463,10 +2468,10 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       if (msg.pinned) await rest.unpinMessage(msg._id);
       else await rest.pinMessage(msg._id);
-      toast.success(msg.pinned ? '已取消置顶' : '已置顶');
+      toast.success(msg.pinned ? t('chat.store.unpinned') : t('chat.store.pinned'));
     } catch (err) {
       apply(!!msg.pinned); // 失败回滚
-      toast.error(err, msg.pinned ? '取消置顶失败' : '置顶失败');
+      toast.error(err, msg.pinned ? t('chat.store.unpinFailed') : t('chat.store.pinFailed'));
     }
   },
 
@@ -2505,19 +2510,19 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       if (starred) await rest.unstarMessage(msg._id);
       else await rest.starMessage(msg._id);
-      toast.success(starred ? '已取消标记' : '已标记');
+      toast.success(starred ? t('chat.store.unstarred') : t('chat.store.starred'));
     } catch (err) {
       apply(!!starred);
-      toast.error(err, starred ? '取消标记失败' : '标记失败');
+      toast.error(err, starred ? t('chat.store.unstarFailed') : t('chat.store.starFailed'));
     }
   },
 
   toggleFavorite: async (conv) => {
     try {
       await rest.favoriteRoom(conv.rid, !conv.favorite);
-      toast.success(conv.favorite ? '已取消收藏' : '已收藏');
+      toast.success(conv.favorite ? t('chat.store.unfavorited') : t('chat.store.favorited'));
     } catch (err) {
-      toast.error(err, '收藏操作失败');
+      toast.error(err, t('chat.store.favoriteFailed'));
     }
   },
 
@@ -2534,9 +2539,9 @@ export const useChat = create<ChatState>((set, get) => ({
           },
         });
       }
-      toast.success(conv.muted ? '已取消免打扰' : '已开启免打扰');
+      toast.success(conv.muted ? t('chat.store.unmuted') : t('chat.store.muted'));
     } catch (err) {
-      toast.error(err, '免打扰设置失败');
+      toast.error(err, t('chat.store.muteFailed'));
     }
   },
 
@@ -2544,7 +2549,7 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       await rest.markRead(rid);
     } catch (err) {
-      toast.error(err, '标为已读失败');
+      toast.error(err, t('chat.store.markReadFailed'));
     }
   },
 
@@ -2558,9 +2563,9 @@ export const useChat = create<ChatState>((set, get) => ({
         });
       }
       if (get().activeRid === conv.rid) set({ activeRid: null, rightPanel: null });
-      toast.success(`已隐藏「${conv.name}」，收到新消息时会重新出现`);
+      toast.success(t('chat.store.convHidden', { name: conv.name }));
     } catch (err) {
-      toast.error(err, '隐藏会话失败');
+      toast.error(err, t('chat.store.hideFailed'));
     }
   },
 
@@ -2573,9 +2578,9 @@ export const useChat = create<ChatState>((set, get) => ({
           subscriptions: { ...get().subscriptions, [conv.rid]: { ...sub, open: true } },
         });
       }
-      toast.success(`已恢复「${conv.name}」`);
+      toast.success(t('chat.store.convRestored', { name: conv.name }));
     } catch (err) {
-      toast.error(err, '恢复会话失败');
+      toast.error(err, t('chat.store.restoreFailed'));
       throw err;
     }
   },
@@ -2585,9 +2590,9 @@ export const useChat = create<ChatState>((set, get) => ({
       await rest.saveRoomSettings(rid, settings);
     } catch (err) {
       if (err instanceof RcApiError && err.errorType === 'error-invalid-room-name') {
-        toast.error(new Error('服务器不接受此房间名称，请联系管理员检查房间命名设置'));
+        toast.error(new Error(t('chat.store.invalidRoomName')));
       } else {
-        toast.error(err, '保存失败');
+        toast.error(err, t('chat.common.saveFailed'));
       }
       throw err;
     }
@@ -2609,7 +2614,7 @@ export const useChat = create<ChatState>((set, get) => ({
         });
       } catch {
         // 写入已经成功，不能提示保存失败或伪造未经确认的新名称。
-        toast.info('名称已保存，但刷新失败；请重新打开群信息确认');
+        toast.info(t('chat.store.nameSavedRefreshFailed'));
         return;
       }
     } else {
@@ -2618,7 +2623,7 @@ export const useChat = create<ChatState>((set, get) => ({
         return room ? { rooms: { ...state.rooms, [rid]: { ...room, ...settings } } } : {};
       });
     }
-    toast.success('已保存');
+    toast.success(t('chat.common.saved'));
   },
 
   // ---- 群管理 ----
@@ -2651,7 +2656,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!get().subscriptions[drid] && !get().rooms[drid]) {
       const info = await get().refreshRoomInfo(drid);
       if (!info) {
-        toast.show({ kind: 'error', message: '打不开这个讨论，可能你不在讨论成员里' });
+        toast.show({ kind: 'error', message: t('chat.store.openDiscussionFailed') });
         return;
       }
     }
@@ -2660,7 +2665,7 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (err) {
       // 只回滚这次打开留下的状态，不能覆盖用户随后发起的其他导航。
       if (get().activeRid === drid) set({ activeRid: previousRid });
-      toast.error(err, '打不开这个讨论，可能你不在讨论成员里');
+      toast.error(err, t('chat.store.openDiscussionFailed'));
     }
   },
 
@@ -2679,9 +2684,9 @@ export const useChat = create<ChatState>((set, get) => ({
       // 加入不一定推订阅变更，主动刷新并重新打开讨论。
       await refreshSubsAndRooms(set);
       await get().openRoom(rid);
-      toast.success('已加入');
+      toast.success(t('chat.store.joined'));
     } catch (err) {
-      toast.error(err, '加入失败，该讨论可能是私有的，需要成员邀请你');
+      toast.error(err, t('chat.store.joinFailed'));
     }
   },
 
@@ -2732,21 +2737,30 @@ export const useChat = create<ChatState>((set, get) => ({
           [rid]: applyPendingMemberChanges(rid, get().members[rid] ?? []),
         },
       });
-      toast.success(`已把 ${user.name || user.username} 移出群聊`);
+      toast.success(t('chat.store.kickedMember', { name: user.name || user.username }));
     } catch (err) {
-      toast.error(err, '移出失败，可能是你没有该群的管理权限');
+      toast.error(err, t('chat.store.kickFailed'));
     }
   },
 
   setMemberRole: async (rid, user, role, grant) => {
     const type = roomTypeOf(get(), rid);
-    const label = role === 'owner' ? '群主' : role === 'moderator' ? '管理员' : '负责人';
+    const label = role === 'owner' ? t('chat.role.owner') : role === 'moderator' ? t('chat.role.moderator') : t('chat.role.leader');
     try {
       await rest.setRoomRole(rid, type, user._id, role, grant);
       await get().loadRoomRoles(rid);
-      toast.success(`${grant ? '已设为' : '已取消'}${label}：${user.name || user.username}`);
+      toast.success(
+        grant
+          ? t('chat.store.roleGranted', { role: label, name: user.name || user.username })
+          : t('chat.store.roleRevoked', { role: label, name: user.name || user.username }),
+      );
     } catch (err) {
-      toast.error(err, `${grant ? '设置' : '取消'}${label}失败`);
+      toast.error(
+        err,
+        grant
+          ? t('chat.store.roleGrantFailed', { role: label })
+          : t('chat.store.roleRevokeFailed', { role: label }),
+      );
     }
   },
 
@@ -2775,9 +2789,13 @@ export const useChat = create<ChatState>((set, get) => ({
           },
         });
       }
-      toast.success(`${willMute ? '已禁言' : '已解除禁言'}：${user.name || user.username}`);
+      toast.success(
+        willMute
+          ? t('chat.store.memberMuted', { name: user.name || user.username })
+          : t('chat.store.memberUnmuted', { name: user.name || user.username }),
+      );
     } catch (err) {
-      toast.error(err, `${willMute ? '禁言' : '解除禁言'}失败`);
+      toast.error(err, willMute ? t('chat.store.memberMuteFailed') : t('chat.store.memberUnmuteFailed'));
     }
   },
 
@@ -2787,9 +2805,9 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       await rest.setReadOnly(rid, type, readOnly);
       if (room) set({ rooms: { ...get().rooms, [rid]: { ...room, ro: readOnly } } });
-      toast.success(readOnly ? '已设为只读，只有群主和管理员能发言' : '已取消只读');
+      toast.success(readOnly ? t('chat.store.readOnlyEnabled') : t('chat.store.readOnlyDisabled'));
     } catch (err) {
-      toast.error(err, '设置失败，可能是你没有该群的管理权限');
+      toast.error(err, t('chat.store.readOnlyFailed'));
     }
   },
 
@@ -2799,15 +2817,15 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       await rest.archiveRoom(rid, type, archive);
       if (room) set({ rooms: { ...get().rooms, [rid]: { ...room, archived: archive } } });
-      toast.success(archive ? '已归档，该群不再接收新消息' : '已取消归档');
+      toast.success(archive ? t('chat.store.archived') : t('chat.store.unarchived'));
     } catch (err) {
-      toast.error(err, `${archive ? '归档' : '取消归档'}失败`);
+      toast.error(err, archive ? t('chat.store.archiveFailed') : t('chat.store.unarchiveFailed'));
     }
   },
 
   deleteConv: async (rid) => {
     const type = roomTypeOf(get(), rid);
-    const name = get().subscriptions[rid]?.fname ?? get().subscriptions[rid]?.name ?? '该群';
+    const name = get().subscriptions[rid]?.fname ?? get().subscriptions[rid]?.name ?? t('chat.store.thisRoomFallback');
     try {
       await rest.deleteRoom(rid, type);
       // 服务端会推 subscriptions-changed，但先本地摘掉，别让用户盯着一个已经没了的群
@@ -2820,9 +2838,9 @@ export const useChat = create<ChatState>((set, get) => ({
         rooms,
         ...(get().activeRid === rid ? { activeRid: null, rightPanel: null } : {}),
       });
-      toast.success(`已解散并删除「${name}」`);
+      toast.success(t('chat.store.deletedConv', { name }));
     } catch (err) {
-      toast.error(err, '删除失败，只有群主或系统管理员能解散群');
+      toast.error(err, t('chat.store.deleteConvFailed'));
     }
   },
 
@@ -2835,21 +2853,27 @@ export const useChat = create<ChatState>((set, get) => ({
       delete subs[conv.rid];
       set({ subscriptions: subs });
       if (get().activeRid === conv.rid) set({ activeRid: null, rightPanel: null });
-      toast.success(conv.type === 'd' ? `已隐藏「${conv.name}」` : `已退出「${conv.name}」`);
+      toast.success(
+        conv.type === 'd'
+          ? t('chat.store.leftDmHidden', { name: conv.name })
+          : t('chat.store.leftConv', { name: conv.name }),
+      );
     } catch (err) {
-      toast.error(err, '退出失败');
+      toast.error(err, t('chat.store.leaveFailed'));
     }
   },
 
   forwardMessage: async (msg, rids) => {
     const names = rids.map(
-      (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
+      (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || t('chat.common.conversation'),
     );
     for (const rid of rids) {
       await forwardSingleMessage(msg, rid);
     }
     toast.success(
-      rids.length === 1 ? `已转发到「${names[0]}」` : `已转发到 ${rids.length} 个会话`,
+      rids.length === 1
+        ? t('chat.store.forwardedSingleRoom', { name: names[0] })
+        : tp(rids.length, 'chat.store.forwardedRoomsOne', 'chat.store.forwardedRoomsOther'),
     );
   },
 
@@ -2857,7 +2881,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // 按时间正序转发，保证目标会话里顺序和原会话一致
     const ordered = [...msgs].sort((a, b) => messageTime(a) - messageTime(b));
     const names = rids.map(
-      (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || '会话',
+      (rid) => get().subscriptions[rid]?.fname || get().subscriptions[rid]?.name || t('chat.common.conversation'),
     );
     for (const rid of rids) {
       if (merge) {
@@ -2866,7 +2890,7 @@ export const useChat = create<ChatState>((set, get) => ({
         await rest.sendMessageRaw({
           _id: randomMessageId(),
           rid,
-          msg: `[聊天记录] 共 ${ordered.length} 条`,
+          msg: tp(ordered.length, 'chat.store.mergedForwardHeaderOne', 'chat.store.mergedForwardHeaderOther'),
           attachments: mergedForwardAttachments(
             ordered.map((m) => ({
               text: stripQuotePrefix(stripAgentSessionMarker(m.msg || '')),
@@ -2884,8 +2908,10 @@ export const useChat = create<ChatState>((set, get) => ({
     }
     toast.success(
       rids.length === 1
-        ? `已转发 ${ordered.length} 条到「${names[0]}」`
-        : `已转发 ${ordered.length} 条到 ${rids.length} 个会话`,
+        ? tp(ordered.length, 'chat.store.forwardedCountSingleRoomOne', 'chat.store.forwardedCountSingleRoomOther', { name: names[0] })
+        : ordered.length === 1
+          ? t('chat.store.forwardedCountMultiRoomSingleMsg', { count: rids.length })
+          : tp(rids.length, 'chat.store.forwardedCountMultiRoomOne', 'chat.store.forwardedCountMultiRoomOther', { msgs: ordered.length }),
     );
   },
 
@@ -2974,7 +3000,7 @@ export const useChat = create<ChatState>((set, get) => ({
     await refreshSubsAndRooms(set);
     await get().openRoom(room._id);
     useOnboarding.getState().markChecklist('startedConversation');
-    toast.success(`已创建群组「${name}」`);
+    toast.success(t('chat.store.groupCreated', { name }));
     return room._id;
   },
 
@@ -2983,7 +3009,7 @@ export const useChat = create<ChatState>((set, get) => ({
     await refreshSubsAndRooms(set);
     await get().openRoom(team.roomId);
     useOnboarding.getState().markChecklist('startedConversation');
-    toast.success(`已创建团队「${name}」`);
+    toast.success(t('chat.store.teamCreated', { name }));
     return team.roomId;
   },
 
@@ -3001,10 +3027,10 @@ export const useChat = create<ChatState>((set, get) => ({
 
   addTeamMembers: async (teamId, usernames) => {
     const users = await resolveUsersByUsername(usernames);
-    if (users.length === 0) throw new Error('没有找到要添加的用户');
+    if (users.length === 0) throw new Error(t('chat.store.noUsersToAdd'));
     await rest.addTeamMembers(teamId, users.map((user) => ({ userId: user._id })));
     await refreshSubsAndRooms(set);
-    toast.success(`已把 ${users.length} 人加入团队`);
+    toast.success(tp(users.length, 'chat.store.teamMembersAddedOne', 'chat.store.teamMembersAddedOther'));
     return users.length;
   },
 
@@ -3012,7 +3038,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // 不传 rooms：服务端会把他从团队的所有房间里移除（团队语义下的「移除成员」）
     await rest.removeTeamMember(teamId, userId);
     await refreshSubsAndRooms(set);
-    toast.success('已把该成员移出团队');
+    toast.success(t('chat.store.teamMemberRemoved'));
   },
 
   createTeamRoom: async (teamId, name, priv) => {
@@ -3023,35 +3049,35 @@ export const useChat = create<ChatState>((set, get) => ({
     await rest.addTeamRooms(teamId, [room._id]);
     await refreshSubsAndRooms(set);
     await get().openRoom(room._id);
-    toast.success(`已在团队下创建「${room.fname || room.name || name}」`);
+    toast.success(t('chat.store.teamRoomCreated', { name: room.fname || room.name || name }));
     return room._id;
   },
 
   addRoomsToTeam: async (teamId, roomIds) => {
     await rest.addTeamRooms(teamId, roomIds);
     await refreshSubsAndRooms(set);
-    toast.success(`已把 ${roomIds.length} 个房间挂到团队下`);
+    toast.success(tp(roomIds.length, 'chat.store.teamRoomsAddedOne', 'chat.store.teamRoomsAddedOther'));
     return roomIds.length;
   },
 
   removeRoomFromTeam: async (teamId, roomId) => {
     await rest.removeTeamRoom(teamId, roomId);
     await refreshSubsAndRooms(set);
-    toast.success('已把房间移出团队（房间本身保留）');
+    toast.success(t('chat.store.teamRoomRemoved'));
   },
 
   setTeamMainRoom: async (teamId, roomId) => {
     void teamId;
     await rest.updateTeamRoom(roomId, true);
     await refreshSubsAndRooms(set);
-    toast.success('已设为主频道');
+    toast.success(t('chat.store.teamMainSet'));
   },
 
   renameTeam: async (teamId, name) => {
     // updateRoom: true 让服务端把主频道的名字一起改掉，避免团队名与主频道名不一致
     await rest.updateTeam(teamId, { name, updateRoom: true });
     await refreshSubsAndRooms(set);
-    toast.success('团队名称已更新');
+    toast.success(t('chat.store.teamRenamed'));
   },
 
   deleteTeam: async (teamId, roomsToRemove) => {
@@ -3059,22 +3085,22 @@ export const useChat = create<ChatState>((set, get) => ({
     await refreshSubsAndRooms(set);
     toast.success(
       roomsToRemove && roomsToRemove.length > 0
-        ? `团队已解散，并删除了 ${roomsToRemove.length} 个团队房间`
-        : '团队已解散（房间保留为普通房间）',
+        ? tp(roomsToRemove.length, 'chat.store.teamDeletedWithRoomsOne', 'chat.store.teamDeletedWithRoomsOther')
+        : t('chat.store.teamDeletedKeepRooms'),
     );
   },
 
   leaveTeam: async (teamId) => {
     await rest.leaveTeam(teamId);
     await refreshSubsAndRooms(set);
-    toast.success('已退出团队');
+    toast.success(t('chat.store.teamLeft'));
   },
 
   convertRoomToTeam: async (rid, type, teamName) => {
     // 团队名沿用房间名（服务端不接受自定义 teamName），所以这里的 teamName 只用于提示
     await rest.convertRoomToTeam(rid, type);
     await refreshSubsAndRooms(set);
-    toast.success(`已把「${teamName}」转换为团队`);
+    toast.success(t('chat.store.convertedToTeam', { name: teamName }));
   },
 
   addAllUsersToRoom: async (rid, type, activeUsersOnly = false) => {
@@ -3083,49 +3109,51 @@ export const useChat = create<ChatState>((set, get) => ({
     // 服务端批量加完人后，成员缓存必须作废重拉：否则面板还是旧的几个人
     invalidateMemberRequests(rid);
     await get().loadMembers(rid, { force: true }).catch(() => undefined);
-    toast.success(activeUsersOnly ? '已把在线用户加入本群' : '已把服务器上所有用户加入本群');
+    toast.success(activeUsersOnly ? t('chat.store.addedActiveUsers') : t('chat.store.addedAllUsers'));
   },
 
   createDiscussionFrom: async (msg, requestedName) => {
-    const id = toast.loading('正在创建讨论…');
+    const id = toast.loading(t('chat.discussion.creating'));
     try {
       if (!(await ensureDiscussionsEnabled())) {
-        toast.update(id, { kind: 'error', message: '本服务器的讨论功能已被管理员关闭' });
+        toast.update(id, { kind: 'error', message: t('chat.discussion.disabled') });
         return;
       }
       // 消息原文作为讨论展示名，保留中文与标点并统一清理空白。
+      const fallbackDiscussion = t('chat.discussion.defaultName');
       const name = normalizeDiscussionName(
-        requestedName?.trim() || stripQuotePrefix(msg.msg) || '讨论',
-        '讨论',
+        requestedName?.trim() || stripQuotePrefix(msg.msg) || fallbackDiscussion,
+        fallbackDiscussion,
       );
       const room = await rest.createDiscussion(msg.rid, name, msg._id);
       await refreshSubsAndRooms(set);
       await get().openRoom(room._id);
-      toast.update(id, { kind: 'success', message: `已创建讨论「${name}」` });
+      toast.update(id, { kind: 'success', message: t('chat.discussion.created', { name }) });
     } catch (err) {
-      toast.update(id, { kind: 'error', message: humanError(err, '创建讨论失败') });
+      toast.update(id, { kind: 'error', message: humanError(err, t('chat.discussion.createFailed')) });
     }
   },
 
   createDiscussionInRoom: async (rid, requestedName) => {
-    const id = toast.loading('正在创建讨论…');
+    const id = toast.loading(t('chat.discussion.creating'));
     try {
       if (!(await ensureDiscussionsEnabled())) {
-        toast.update(id, { kind: 'error', message: '本服务器的讨论功能已被管理员关闭' });
+        toast.update(id, { kind: 'error', message: t('chat.discussion.disabled') });
         return;
       }
       const room = get().rooms[rid];
       // 不带 pmid：Rocket.Chat 允许讨论没有来源消息，群里还没有消息时也能开。
+      const fallbackDiscussion = t('chat.discussion.defaultName');
       const name = normalizeDiscussionName(
-        requestedName?.trim() || room?.fname || room?.name || '讨论',
-        '讨论',
+        requestedName?.trim() || room?.fname || room?.name || fallbackDiscussion,
+        fallbackDiscussion,
       );
       const discussion = await rest.createDiscussion(rid, name);
       await refreshSubsAndRooms(set);
       await get().openRoom(discussion._id);
-      toast.update(id, { kind: 'success', message: `已创建讨论「${name}」` });
+      toast.update(id, { kind: 'success', message: t('chat.discussion.created', { name }) });
     } catch (err) {
-      toast.update(id, { kind: 'error', message: humanError(err, '创建讨论失败') });
+      toast.update(id, { kind: 'error', message: humanError(err, t('chat.discussion.createFailed')) });
     }
   },
 
@@ -3155,8 +3183,10 @@ export const useChat = create<ChatState>((set, get) => ({
     // 消息链接前缀展开成引用附件（issue #91）。话题面板上传（带 tmid）不消费它。
     const quote = !tmid ? get().replyTo : null;
     if (quote) set({ replyTo: null });
-    const label = files.length === 1 ? files[0].name : `${files.length} 个文件`;
-    const id = toast.loading(`正在发送 ${label}…`);
+    const label = files.length === 1
+      ? files[0].name
+      : tp(files.length, 'chat.upload.filesLabelOne', 'chat.upload.filesLabelOther');
+    const id = toast.loading(t('chat.upload.sending', { label }));
     // 上传取消（issue #385）：fetch 路径直接中断；spool 路径在落盘块之间中止。
     // 原生流式上传（Rust 命令）暂不支持中断，那批不挂取消按钮。
     const batchId = `up-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -3166,7 +3196,7 @@ export const useChat = create<ChatState>((set, get) => ({
     // （最终一段 Rust 原生上传不可中断，abort 会在进入它之前生效）。
     set({ uploading: get().uploading + files.length });
     toast.update(id, {
-      action: { label: '取消', onClick: () => get().cancelUploadBatch(batchId) },
+      action: { label: t('common.cancel'), onClick: () => get().cancelUploadBatch(batchId) },
     });
     try {
       const quoteMsg = quote
@@ -3186,7 +3216,7 @@ export const useChat = create<ChatState>((set, get) => ({
         lastPaint = now;
         const overall = Math.min(totalBytes, sentBytes + loaded);
         toast.update(id, {
-          message: `正在发送 ${label}（${Math.floor((overall / totalBytes) * 100)}%）…`,
+          message: t('chat.upload.sendingProgress', { label, percent: Math.floor((overall / totalBytes) * 100) }),
         });
       };
       for (const [index, file] of files.entries()) {
@@ -3205,12 +3235,12 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (err) {
       set({ uploading: 0 });
       if (isAbortError(err) || controller.signal.aborted) {
-        toast.update(id, { kind: 'info', message: '已取消发送' });
+        toast.update(id, { kind: 'info', message: t('chat.upload.canceled') });
         return false;
       }
       toast.update(id, {
         kind: 'error',
-        message: humanError(err, `发送 ${label} 失败`),
+        message: humanError(err, t('chat.upload.sendFailedLabel', { label })),
       });
       return false;
     } finally {
@@ -3226,8 +3256,10 @@ export const useChat = create<ChatState>((set, get) => ({
     // 直传——那条链路绕开 Rocket.Chat，引用附件带不过去。
     const quote = !tmid ? get().replyTo : null;
     if (quote) set({ replyTo: null });
-    const label = paths.length === 1 ? '文件' : `${paths.length} 个文件`;
-    const id = toast.loading(`正在发送 ${label}…`);
+    const label = paths.length === 1
+      ? t('chat.common.file')
+      : tp(paths.length, 'chat.upload.filesLabelOne', 'chat.upload.filesLabelOther');
+    const id = toast.loading(t('chat.upload.sending', { label }));
     // 原生流式上传现支持进度与取消（issue #385）：Rust 计数流经 Channel 推
     // loaded/total，取消经 cancel_native_upload 真实断开在途请求。
     const batchId = `nt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -3235,7 +3267,7 @@ export const useChat = create<ChatState>((set, get) => ({
     uploadCancelHandles.set(batchId, controller);
     set({ uploading: get().uploading + paths.length });
     toast.update(id, {
-      action: { label: '取消', onClick: () => get().cancelUploadBatch(batchId) },
+      action: { label: t('common.cancel'), onClick: () => get().cancelUploadBatch(batchId) },
     });
     const totalBytes = await Promise.all(
       paths.map(async (path) => (await statDesktopFile(path)).size),
@@ -3260,7 +3292,7 @@ export const useChat = create<ChatState>((set, get) => ({
             lastPaint = now;
             const overall = Math.min(totalBytes, sentBytes + loaded);
             toast.update(id, {
-              message: `正在发送 ${label}（${Math.floor((overall / totalBytes) * 100)}%）…`,
+              message: t('chat.upload.sendingProgress', { label, percent: Math.floor((overall / totalBytes) * 100) }),
             });
           },
           ...(index === 0 && firstMessage ? { msg: firstMessage } : {}),
@@ -3273,12 +3305,12 @@ export const useChat = create<ChatState>((set, get) => ({
     } catch (error) {
       set({ uploading: 0 });
       if (isAbortError(error) || controller.signal.aborted) {
-        toast.update(id, { kind: 'info', message: '已取消发送' });
+        toast.update(id, { kind: 'info', message: t('chat.upload.canceled') });
         return false;
       }
       toast.update(id, {
         kind: 'error',
-        message: humanError(error, '发送文件失败'),
+        message: humanError(error, t('chat.upload.sendFileFailed')),
       });
       return false;
     } finally {
@@ -3292,11 +3324,11 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!rid || !me || paths.length === 0) return false;
     const recipients = await lanRecipientIds(rid).catch(() => []);
     if (recipients.length !== 1) {
-      toast.error(new Error('P2P 直传仅支持一对一私聊'));
+      toast.error(new Error(t('chat.p2p.dmOnly')));
       return false;
     }
     const recipient = recipients[0];
-    const id = toast.loading(`正在通过 P2P 发送 ${paths.length} 个文件…`);
+    const id = toast.loading(tp(paths.length, 'chat.p2p.sendingOne', 'chat.p2p.sendingOther'));
     try {
       for (const path of paths) {
         const originalTs = Date.now();
@@ -3310,11 +3342,11 @@ export const useChat = create<ChatState>((set, get) => ({
         );
       }
       toast.dismiss(id);
-      toast.info('已通过 P2P 局域网直传发送');
+      toast.info(t('chat.p2p.sent'));
       return true;
     } catch (error) {
       toast.dismiss(id);
-      toast.error(await lanP2pFailure(error, recipient), 'P2P 直传不可用');
+      toast.error(await lanP2pFailure(error, recipient), t('chat.p2p.unavailable'));
       return false;
     }
   },
@@ -3324,7 +3356,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!rid) return false;
     const recipients = await lanRecipientIds(rid).catch(() => []);
     if (recipients.length !== 1) {
-      toast.error(new Error('P2P 直传仅支持一对一私聊'));
+      toast.error(new Error(t('chat.p2p.dmOnly')));
       return false;
     }
     const recipient = recipients[0];
@@ -3336,19 +3368,19 @@ export const useChat = create<ChatState>((set, get) => ({
         repair: () => repairLanFirewall(recipient),
         waitForPeer: () => waitForLanPeer(recipient),
         attempt: async () => {
-          if (!(await probeLanPeer(recipient))) throw new Error('对方当前不可用 P2P 直传');
+          if (!(await probeLanPeer(recipient))) throw new Error(t('chat.p2p.peerUnavailable'));
         },
         onElevate: (reason) =>
           toast.info(
             reason === 'blocked'
-              ? '本机防火墙没有放行 RocketX 的局域网连接，请在系统弹窗中允许管理员授权'
-              : '直传没有连通，可能是本机防火墙未完全放行；允许管理员授权后会自动重试',
+              ? t('chat.p2p.firewallBlocked')
+              : t('chat.p2p.firewallRetry'),
           ),
       });
-      toast.info('P2P 握手成功，请选择要发送的文件');
+      toast.info(t('chat.p2p.ready'));
       return true;
     } catch (error) {
-      toast.error(await lanP2pFailure(error, recipient), 'P2P 直传不可用');
+      toast.error(await lanP2pFailure(error, recipient), t('chat.p2p.unavailable'));
       return false;
     }
   },

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import {
   directGetIdentity,
   directGetProjectRefs,
@@ -87,7 +88,7 @@ function abortIfNeeded(signal?: AbortSignal): void {
   if (!signal?.aborted) return;
   throw signal.reason instanceof Error
     ? signal.reason
-    : new DOMException('贡献加载已取消', 'AbortError');
+    : new DOMException(t('workbench.contributions.aborted'), 'AbortError');
 }
 
 async function mapLimit<T, R>(
@@ -111,11 +112,11 @@ async function mapLimit<T, R>(
 }
 
 function parseLocalDay(day: string): Date {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(`无效日期：${day}`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error(t('workbench.contributions.invalidDate', { day }));
   const [year, month, date] = day.split('-').map(Number);
   const value = new Date(year, month - 1, date);
   if (value.getFullYear() !== year || value.getMonth() !== month - 1 || value.getDate() !== date) {
-    throw new Error(`无效日期：${day}`);
+    throw new Error(t('workbench.contributions.invalidDate', { day }));
   }
   return value;
 }
@@ -123,7 +124,7 @@ function parseLocalDay(day: string): Date {
 function rangeBounds(range: ContributionRange): { from: string; toExclusive: string } {
   const from = parseLocalDay(range.from);
   const to = parseLocalDay(range.to);
-  if (from > to) throw new Error('贡献开始日期不能晚于结束日期');
+  if (from > to) throw new Error(t('workbench.contributions.invalidDateRange'));
   const end = new Date(to);
   end.setDate(end.getDate() + 1);
   return { from: from.toISOString(), toExclusive: end.toISOString() };
@@ -135,7 +136,7 @@ function inRange(value: string, bounds: { from: string; toExclusive: string }): 
 }
 
 function describeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error ?? '未知错误');
+  const message = error instanceof Error ? error.message : String(error ?? t('common.unknownError'));
   return message.replace(/https?:\/\/[^\s/@]+:[^\s/@]+@/gi, 'https://').slice(0, 240);
 }
 
@@ -218,7 +219,7 @@ export async function loadAdoContributions(
   abortIfNeeded(options.signal);
   const bounds = rangeBounds(options.range);
   const identity = await directGetIdentity(cfg, { signal: options.signal });
-  if (!identity.id) throw new Error('Azure DevOps 未返回当前身份的稳定 ID');
+  if (!identity.id) throw new Error(t('workbench.contributions.missingIdentityId'));
 
   const cacheKey = JSON.stringify({
     adoBase: cfg.adoBase.trim().replace(/\/+$/, '').toLowerCase(),
@@ -243,7 +244,10 @@ export async function loadAdoContributions(
       return await fetchProjectPullRequests(cfg, identity.id, project, bounds, options.signal);
     } catch (error) {
       abortIfNeeded(options.signal);
-      failures.push(`${project.name}：${describeError(error)}`);
+      failures.push(t('workbench.contributions.projectError', {
+        project: project.name,
+        error: describeError(error),
+      }));
       return [];
     }
   });

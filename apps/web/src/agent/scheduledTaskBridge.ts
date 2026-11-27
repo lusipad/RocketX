@@ -1,6 +1,13 @@
+import { t } from '../i18n';
+
 export type ScheduledTaskKind = 'cron' | 'heartbeat';
 export type ScheduledTaskStatus = 'ACTIVE' | 'PAUSED';
-export type ScheduledTaskNotificationPolicy = 'all_runs' | 'important_updates' | 'failed_runs_only';
+export type ScheduledTaskNotificationPolicy =
+  | 'all_runs'
+  | 'important_updates'
+  | 'failed_runs_only'
+  | 'silent'
+  | 'digest_only';
 
 export interface ScheduledTaskInput {
   kind?: ScheduledTaskKind;
@@ -39,6 +46,6 @@ export function registerScheduledTaskAdapter(adapter: ScheduledTaskAdapter): () 
 }
 
 export function requireScheduledTaskAdapter(): ScheduledTaskAdapter {
-  if (!scheduledTaskAdapter) throw new Error('已安排任务尚未初始化');
+  if (!scheduledTaskAdapter) throw new Error(t('agent.scheduledTask.notInitialized'));
   return scheduledTaskAdapter;
 }

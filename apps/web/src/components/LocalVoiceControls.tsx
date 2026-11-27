@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useI18n } from '../i18n';
 import { isTauriRuntime } from '../lib/http';
-import { encodeLocalVoiceWav, localVoiceBase64, localVoiceError, LOCAL_VOICE_MAX_RECORDING_BYTES, LOCAL_VOICE_MAX_SECONDS } from '../lib/localVoiceAudio';
+import {
+  encodeLocalVoiceWav,
+  localVoiceBase64,
+  localVoiceError,
+  LOCAL_VOICE_MAX_RECORDING_BYTES,
+  LOCAL_VOICE_MAX_SECONDS,
+  selectLocalVoiceEngine,
+} from '../lib/localVoiceAudio';
 import { cancelLocalVoice, probeLocalVoice, synthesizeLocalVoice, transcribeLocalVoice, type LocalVoiceCapabilities } from '../platform/localVoice';
 import { useAuth } from '../stores/auth';
 import { useLocalVoice } from '../stores/localVoice';
@@ -31,9 +39,12 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
   const [capabilities, setCapabilities] = useState<LocalVoiceCapabilities>();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const { locale, t } = useI18n();
   const desktop = isTauriRuntime();
-  const canRecognize = capabilities?.recognizers.some((recognizer) => recognizer.language.toLowerCase() === 'zh-cn') ?? false;
-  const canSpeak = capabilities?.voices.some((voice) => voice.language.toLowerCase() === 'zh-cn') ?? false;
+  const matchedRecognizer = selectLocalVoiceEngine(capabilities?.recognizers, locale);
+  const matchedVoice = selectLocalVoiceEngine(capabilities?.voices, locale);
+  const canRecognize = Boolean(matchedRecognizer);
+  const canSpeak = Boolean(matchedVoice);
 
   const stopResources = useCallback(() => {
     const requestId = nativeRequest.current;
@@ -78,7 +89,7 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
       const result = await probeLocalVoice(requestId);
       if (!valid(token, owner)) return;
       setCapabilities(result);
-      if (!result.available) setError(result.reason || '本机尚未安装可用的离线语音组件。');
+      if (!result.available) setError(result.reason || t('voice.noLocalComponent'));
     } catch (reason) {
       if (valid(token, owner)) setError(localVoiceError(reason));
     } finally {
@@ -137,7 +148,7 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
     holding.current = true;
     setPhase('requesting'); setError(''); setNotice('');
     try {
-      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') throw new Error('当前桌面 WebView 不支持录音，请更新客户端后重试。');
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') throw new Error(t('voice.noWebViewRecording'));
       const microphone = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }, video: false });
       if (!valid(token, owner) || !holding.current) { microphone.getTracks().forEach((track) => track.stop()); return; }
       stream.current = microphone;
@@ -148,10 +159,10 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
       capture.ondataavailable = (event) => {
         if (!valid(token, owner)) return;
         size += event.data.size;
-        if (size > LOCAL_VOICE_MAX_RECORDING_BYTES) { cancel(); setError('录音数据过大，请缩短录音后重试。'); return; }
+        if (size > LOCAL_VOICE_MAX_RECORDING_BYTES) { cancel(); setError(t('voice.recordingTooLarge')); return; }
         chunks.push(event.data);
       };
-      capture.onerror = () => { if (valid(token, owner)) { cancel(); setError('麦克风录音失败，请重试。'); } };
+      capture.onerror = () => { if (valid(token, owner)) { cancel(); setError(t('voice.micRecordFailed')); } };
       capture.onstop = () => {
         if (!valid(token, owner)) return;
         void (async () => {
@@ -167,13 +178,17 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
             if (!valid(token, owner)) return;
             const requestId = crypto.randomUUID();
             nativeRequest.current = requestId;
-            const result = await transcribeLocalVoice(localVoiceBase64(wav), requestId).finally(() => {
+            const result = await transcribeLocalVoice(
+              localVoiceBase64(wav),
+              requestId,
+              matchedRecognizer?.language,
+            ).finally(() => {
               if (nativeRequest.current === requestId) nativeRequest.current = undefined;
             });
             if (!valid(token, owner)) return;
-            if (!result.text.trim()) throw new Error('没有识别到文字，请靠近麦克风后重试。');
+            if (!result.text.trim()) throw new Error(t('voice.noSpeechRecognized'));
             acceptTranscript(result.text.trim());
-            setNotice('转写已填入草稿，可编辑后发送。');
+            setNotice(t('voice.transcribedNotice'));
           } catch (reason) {
             if (valid(token, owner)) setError(localVoiceError(reason));
           } finally {
@@ -198,17 +213,22 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
     try {
       const requestId = crypto.randomUUID();
       nativeRequest.current = requestId;
-      const result = await synthesizeLocalVoice([...replyText].slice(0, 300).join(''), requestId, capabilities.voices.find((voice) => voice.language.toLowerCase() === 'zh-cn')?.id).finally(() => {
+      const result = await synthesizeLocalVoice(
+        [...replyText].slice(0, 300).join(''),
+        requestId,
+        matchedVoice?.id,
+        matchedVoice?.language,
+      ).finally(() => {
         if (nativeRequest.current === requestId) nativeRequest.current = undefined;
       });
       if (!valid(token, owner)) return;
-      if (result.mimeType !== 'audio/wav' || result.audioBase64.length > 16 * 1024 * 1024) throw new Error('本地朗读音频格式或大小无效。');
+      if (result.mimeType !== 'audio/wav' || result.audioBase64.length > 16 * 1024 * 1024) throw new Error(t('voice.invalidAudioOutput'));
       const bytes = Uint8Array.from(atob(result.audioBase64), (char) => char.charCodeAt(0));
       audioUrl.current = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
       const audio = new Audio(audioUrl.current);
       playback.current = audio;
       audio.onended = () => { if (valid(token, owner)) { stopResources(); setPhase('idle'); } };
-      audio.onerror = () => { if (valid(token, owner)) { cancel(); setError('本地朗读播放失败，请重试。'); } };
+      audio.onerror = () => { if (valid(token, owner)) { cancel(); setError(t('voice.playbackFailed')); } };
       await audio.play();
       if (valid(token, owner)) setPhase('playing');
     } catch (reason) {
@@ -216,31 +236,31 @@ export default function LocalVoiceControls({ targetKey, onTranscript, replyText 
     }
   };
 
-  if (!desktop) return <span className="text-xs text-ink-3">本地语音仅支持桌面客户端</span>;
+  if (!desktop) return <span className="text-xs text-ink-3">{t('voice.desktopOnly')}</span>;
   if (!enabled) return <button type="button" className="text-xs text-ink-3"
     onClick={() => useLocalVoice.getState().setEnabled(true)}
     onKeyDown={(event) => { if (event.key === ' ') { event.preventDefault(); useLocalVoice.getState().setEnabled(true); } }}
     onKeyUp={(event) => { if (event.key === ' ') event.preventDefault(); }}
-  >启用本地语音（可选）</button>;
+  >{t('voice.enable')}</button>;
   const busy = phase !== 'idle';
   return (
-    <section aria-label="可选本地语音" className="flex flex-wrap items-center gap-2 px-1 py-2 text-xs">
-      <span className="text-ink-3">本机离线 · 按住说话，松开转写 · 最多 30 秒</span>
+    <section aria-label={t('voice.controlsLabel')} className="local-voice-controls flex flex-wrap items-center gap-2 px-1 py-2 text-xs">
+      <span className="text-ink-3">{t('voice.hint')}</span>
       <button type="button" disabled={disabled || (busy && phase !== 'recording' && phase !== 'requesting') || !canRecognize}
-        aria-label="按住说话" aria-pressed={phase === 'recording'}
+        aria-label={t('voice.holdToSpeak')} aria-pressed={phase === 'recording'}
         onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); void startRecording(); }}
         onPointerUp={finishRecording} onPointerCancel={cancel} onLostPointerCapture={() => { if (holding.current) cancel(); }}
         onKeyDown={(event) => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); void startRecording(); } }}
         onKeyUp={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); finishRecording(); } }}
         onBlur={() => { if (holding.current) cancel(); }}
-      >{phase === 'recording' ? '松开完成录音' : phase === 'requesting' ? '等待麦克风…' : '按住说话'}</button>
-      <button type="button" disabled={busy || !replyText.trim() || !canSpeak} onClick={() => void speak()}>{[...replyText].length > 300 ? '朗读最新回复（前 300 字）' : '朗读最新回复'}</button>
-      <button type="button" disabled={!busy} onClick={cancel}>停止语音</button>
-      {phase === 'idle' && (!capabilities?.available || error) ? <button type="button" onClick={() => void check()}>重新检查本地语音</button> : null}
-      <button type="button" onClick={() => { cancel(); useLocalVoice.getState().setEnabled(false); }}>关闭本地语音</button>
-      <span role="status">{phase === 'checking' ? '正在检查本机语音组件…' : phase === 'transcribing' ? '正在本机转写…' : phase === 'synthesizing' ? '正在本机生成朗读…' : phase === 'playing' ? '正在朗读；停止语音不会停止工作。' : notice}</span>
-      {capabilities && !canRecognize ? <span className="text-ink-3">中文离线识别不可用，请在系统语言设置中安装中文语音后重新检查。</span> : null}
-      {capabilities && !canSpeak ? <span className="text-ink-3">本机未找到中文朗读语音。</span> : null}
+      >{phase === 'recording' ? t('voice.releaseToFinish') : phase === 'requesting' ? t('voice.requestingMic') : t('voice.holdToSpeak')}</button>
+      <button type="button" disabled={busy || !replyText.trim() || !canSpeak} onClick={() => void speak()}>{[...replyText].length > 300 ? t('voice.readLatestTruncated') : t('voice.readLatest')}</button>
+      <button type="button" disabled={!busy} onClick={cancel}>{t('voice.stopVoice')}</button>
+      {phase === 'idle' && (!capabilities?.available || error) ? <button type="button" onClick={() => void check()}>{t('voice.recheck')}</button> : null}
+      <button type="button" onClick={() => { cancel(); useLocalVoice.getState().setEnabled(false); }}>{t('voice.disable')}</button>
+      <span role="status">{phase === 'checking' ? t('voice.checking') : phase === 'transcribing' ? t('voice.transcribing') : phase === 'synthesizing' ? t('voice.synthesizing') : phase === 'playing' ? t('voice.playing') : notice}</span>
+      {capabilities && !canRecognize ? <span className="text-ink-3">{t('voice.recognizerUnavailable')}</span> : null}
+      {capabilities && !canSpeak ? <span className="text-ink-3">{t('voice.speakerUnavailable')}</span> : null}
       {error ? <span role="alert">{error}</span> : null}
     </section>
   );

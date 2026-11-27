@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import { rest } from '../lib/client';
 import { isPresenceStatus, type PresenceStatus } from '../lib/presencePreference';
 import {
@@ -99,7 +100,7 @@ export const useFocus = create<FocusStoreState>((set, get) => ({
     // 状态切换失败不阻断专注：通知聚合是本机行为，busy 只是给别人的信号
     if (!useAuth.getState().localMode) {
       await rest.setStatus('busy').catch((err) => {
-        toast.error(err, '状态切换失败');
+        toast.error(err, t('nav.focus.statusSwitchFailed'));
       });
     }
   },
@@ -121,7 +122,7 @@ export const useFocus = create<FocusStoreState>((set, get) => ({
     });
     if (!useAuth.getState().localMode) {
       await rest.setStatus(session.prevStatus).catch((err) => {
-        toast.error(err, '状态恢复失败');
+        toast.error(err, t('nav.focus.statusRestoreFailed'));
       });
     }
   },

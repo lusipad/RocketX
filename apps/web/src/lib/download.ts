@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { assetUrl, isTauri, normalizeAssetPath, rest } from './client';
 import { useDownloadHistory } from '../stores/downloadHistory';
 import { fileNameOfDownloadPath, type DownloadSourceV1 } from './downloadHistory';
@@ -65,7 +66,7 @@ export async function saveFile(
       options?.onProgress?.(0, total);
       await writeFile(target, stream);
       // 流自己会在 signal 触发时抛 AbortError，这里兜住「写完那一刻才取消」的窄缝
-      if (options?.signal?.aborted) throw new DOMException('下载已取消', 'AbortError');
+      if (options?.signal?.aborted) throw new DOMException(t('nav.download.aborted'), 'AbortError');
       options?.onProgress?.(total, total);
       useDownloadHistory.getState().record(fileNameOfDownloadPath(target, fileName), target, source);
       return;
@@ -86,7 +87,7 @@ export async function saveFile(
         loaded += value.length;
         options?.onProgress?.(loaded, total);
       }
-      if (options?.signal?.aborted) throw new DOMException('下载已取消', 'AbortError');
+      if (options?.signal?.aborted) throw new DOMException(t('nav.download.aborted'), 'AbortError');
       // 分块可能是不同 ArrayBuffer 的视图，合成一块连续缓冲再落盘
       const merged = new Uint8Array(loaded);
       let offset = 0;

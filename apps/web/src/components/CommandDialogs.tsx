@@ -16,6 +16,7 @@ import Dialog, { ConfirmDialog } from './Dialog';
 import Avatar from './Avatar';
 import { AddMembersDialog } from './MembersPanel';
 import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
+import { t as translate, useI18n, useT, type MessageKey } from '../i18n';
 
 /**
  * 斜杠命令与功能入口共用的对话框集。
@@ -29,7 +30,7 @@ import { CreateGroupDialog, StartDMDialog } from './NewChatDialogs';
 function roomName(rid: string): string {
   const sub = useChat.getState().subscriptions[rid];
   const room = useChat.getState().rooms[rid];
-  return sub?.fname || sub?.name || room?.name || '当前会话';
+  return sub?.fname || sub?.name || room?.name || translate('chat.common.currentConversation');
 }
 
 function roomType(rid: string): RcSubscription['t'] {
@@ -39,6 +40,7 @@ function roomType(rid: string): RcSubscription['t'] {
 
 /** 话题编辑（/topic 与房间信息面板的 EditableField 走同一个 saveRoomSettings） */
 function TopicDialog({ rid, prefill, onClose }: { rid: string; prefill: string; onClose: () => void }) {
+  const t = useT();
   const current = useChat((s) => s.rooms[rid]?.topic) ?? '';
   const saveRoomSettings = useChat((s) => s.saveRoomSettings);
   const [value, setValue] = useState(prefill || current);
@@ -51,17 +53,17 @@ function TopicDialog({ rid, prefill, onClose }: { rid: string; prefill: string; 
     setError(null);
     try {
       await saveRoomSettings(rid, { topic: value.trim() });
-      toast.success('话题已更新');
+      toast.success(t('chat.cmd.topic.updated'));
       onClose();
     } catch (err) {
-      setError(humanError(err, '保存失败，可能你没有编辑频道的权限'));
+      setError(humanError(err, t('chat.cmd.topic.saveFailed')));
       setBusy(false);
     }
   };
 
   return (
     <Dialog
-      title="设置频道话题"
+      title={t('chat.cmd.topic.title')}
       onClose={onClose}
       footer={
         <>
@@ -69,14 +71,14 @@ function TopicDialog({ rid, prefill, onClose }: { rid: string; prefill: string; 
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void doSave()}
             disabled={busy}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? '保存中…' : '保存'}
+            {busy ? t('chat.common.saving') : t('common.save')}
           </button>
         </>
       }
@@ -88,7 +90,7 @@ function TopicDialog({ rid, prefill, onClose }: { rid: string; prefill: string; 
           onChange={(e) => setValue(e.target.value)}
           rows={4}
           maxLength={120}
-          placeholder="这个频道是做什么的？"
+          placeholder={t('chat.cmd.topic.placeholder')}
           className="w-full resize-none rounded-md border border-line px-3 py-2 text-sm leading-relaxed outline-none transition focus:border-primary"
         />
         {error && <div className="pt-1 text-xs text-danger">{error}</div>}
@@ -97,15 +99,16 @@ function TopicDialog({ rid, prefill, onClose }: { rid: string; prefill: string; 
   );
 }
 
-const PRESENCES: { value: string; label: string; dot: string }[] = [
-  { value: 'online', label: '在线', dot: 'bg-success' },
-  { value: 'away', label: '离开', dot: 'bg-warning' },
-  { value: 'busy', label: '忙碌', dot: 'bg-danger' },
-  { value: 'offline', label: '隐身', dot: 'bg-line' },
+const PRESENCES: { value: string; labelKey: MessageKey; dot: string }[] = [
+  { value: 'online', labelKey: 'chat.cmd.presence.online', dot: 'bg-success' },
+  { value: 'away', labelKey: 'chat.cmd.presence.away', dot: 'bg-warning' },
+  { value: 'busy', labelKey: 'chat.cmd.presence.busy', dot: 'bg-danger' },
+  { value: 'offline', labelKey: 'chat.cmd.presence.offline', dot: 'bg-line' },
 ];
 
 /** 状态编辑（/status；presence 与状态文案一次设置） */
 function StatusDialog({ prefill, onClose }: { prefill: string; onClose: () => void }) {
+  const t = useT();
   const user = useAuth((s) => s.user);
   const [presence, setPresence] = useState(user?.status ?? 'online');
   const [text, setText] = useState(prefill);
@@ -136,17 +139,17 @@ function StatusDialog({ prefill, onClose }: { prefill: string; onClose: () => vo
     try {
       await rest.setStatus(presence, text.trim() || undefined);
       if (user) useAuth.setState({ user: { ...user, status: presence } });
-      toast.success('状态已更新');
+      toast.success(t('chat.cmd.status.updated'));
       onClose();
     } catch (err) {
-      setError(humanError(err, '状态设置失败'));
+      setError(humanError(err, t('chat.cmd.status.saveFailed')));
       setBusy(false);
     }
   };
 
   return (
     <Dialog
-      title="设置状态"
+      title={t('chat.cmd.status.title')}
       onClose={onClose}
       footer={
         <>
@@ -154,14 +157,14 @@ function StatusDialog({ prefill, onClose }: { prefill: string; onClose: () => vo
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void doSave()}
             disabled={busy}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? '保存中…' : '保存'}
+            {busy ? t('chat.common.saving') : t('common.save')}
           </button>
         </>
       }
@@ -179,7 +182,7 @@ function StatusDialog({ prefill, onClose }: { prefill: string; onClose: () => vo
               }`}
             >
               <span className={`h-2 w-2 rounded-full ${p.dot}`} />
-              {p.label}
+              {t(p.labelKey)}
             </button>
           ))}
         </div>
@@ -187,7 +190,7 @@ function StatusDialog({ prefill, onClose }: { prefill: string; onClose: () => vo
           value={text}
           onChange={(e) => setText(e.target.value)}
           maxLength={120}
-          placeholder="状态文案，例如：开会中，下午回复"
+          placeholder={t('chat.cmd.status.placeholder')}
           className="h-9 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
         />
         {error && <div className="text-xs text-danger">{error}</div>}
@@ -198,6 +201,7 @@ function StatusDialog({ prefill, onClose }: { prefill: string; onClose: () => vo
 
 /** 搜索并加入公开频道（/join；未加入的加入并跳转，已加入的直接打开） */
 function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () => void }) {
+  const t = useT();
   const [keyword, setKeyword] = useState(prefill);
   const [result, setResult] = useState<{ query: string; list: { rid: string; name: string; topic: string; joined: boolean; priv: boolean }[] }>({ query: '', list: [] });
   const [searching, setSearching] = useState(false);
@@ -273,7 +277,7 @@ function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () 
         })
         .catch((err) => {
           if (!current) return;
-          setError(humanError(err, '搜索频道失败'));
+          setError(humanError(err, t('chat.cmd.join.searchFailed')));
           setSearching(false);
         });
     }, 250);
@@ -293,13 +297,13 @@ function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () 
       else await useChat.getState().joinRoom(target.rid);
       onClose();
     } catch (err) {
-      setError(humanError(err, '打开失败'));
+      setError(humanError(err, t('chat.cmd.join.openFailed')));
       setBusyRid(null);
     }
   };
 
   return (
-    <Dialog title="加入频道" onClose={onClose}>
+    <Dialog title={t('chat.cmd.join.title')} onClose={onClose}>
       <div className="px-5 pb-2">
         <div className="flex h-8 items-center gap-2 rounded-md bg-fill-1 px-2.5">
           <Search size={14} className="text-ink-3" />
@@ -307,7 +311,7 @@ function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () 
             autoFocus
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索公开频道，支持 # 或直接输入名字"
+            placeholder={t('chat.cmd.join.placeholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
@@ -333,7 +337,11 @@ function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () 
                 r.joined ? 'bg-fill-1 text-ink-3' : 'bg-primary-light text-primary'
               }`}
             >
-              {busyRid === r.rid ? '打开中…' : r.joined ? '已加入 · 打开' : '加入'}
+              {busyRid === r.rid
+                ? t('chat.common.opening')
+                : r.joined
+                  ? t('chat.cmd.join.joinedOpen')
+                  : t('chat.cmd.join.joinBtn')}
             </span>
           </button>
         ))}
@@ -342,19 +350,19 @@ function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () 
             onClick={() => loadBrowse(browse.list.length)}
             className="mt-1 w-full rounded-lg border border-dashed border-line px-3 py-2 text-xs text-ink-2 transition hover:border-primary hover:text-primary"
           >
-            加载更多（已显示 {browse.list.length}/{browse.total}）
+            {t('chat.cmd.join.loadMore', { shown: browse.list.length, total: browse.total })}
           </button>
         )}
         {keyword.trim() && !searching && result.query && result.list.length === 0 && (
-          <div className="py-8 text-center text-sm text-ink-3">没有找到匹配的频道</div>
+          <div className="py-8 text-center text-sm text-ink-3">{t('chat.cmd.join.noSearchResults')}</div>
         )}
         {!keyword.trim() && !browse.loading && browse.list.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {browse.failed ? '目录不可浏览，输入关键字搜索频道' : '还没有可加入的频道'}
+            {browse.failed ? t('chat.cmd.join.directoryUnavailable') : t('chat.cmd.join.noChannels')}
           </div>
         )}
         {((!keyword.trim() && browse.loading) || (keyword.trim() && searching)) && (
-          <div className="py-8 text-center text-sm text-ink-3">加载中…</div>
+          <div className="py-8 text-center text-sm text-ink-3">{t('chat.common.loadingShort')}</div>
         )}
       </div>
     </Dialog>
@@ -363,21 +371,33 @@ function JoinChannelDialog({ prefill, onClose }: { prefill: string; onClose: () 
 
 const MEMBER_ACTIONS: Record<
   'kick' | 'mute' | 'unmute' | 'ban' | 'unban',
-  { title: string; confirm: string; hint: (name: string) => string }
+  { titleKey: MessageKey; confirmKey: MessageKey; hintKey: MessageKey }
 > = {
   kick: {
-    title: '移出成员',
-    confirm: '移出',
-    hint: (name) => `确定把「${name}」移出吗？TA 将不再收到本频道消息，需要重新邀请才能回来。`,
+    titleKey: 'chat.cmd.member.kickTitle',
+    confirmKey: 'chat.cmd.member.kickConfirm',
+    hintKey: 'chat.cmd.member.kickHint',
   },
-  mute: { title: '禁言成员', confirm: '禁言', hint: (name) => `确定禁言「${name}」吗？TA 将无法在本频道发言。` },
-  unmute: { title: '解除禁言', confirm: '解除', hint: (name) => `解除「${name}」的禁言，恢复 TA 在本频道的发言权限。` },
+  mute: {
+    titleKey: 'chat.cmd.member.muteTitle',
+    confirmKey: 'chat.cmd.member.muteConfirm',
+    hintKey: 'chat.cmd.member.muteHint',
+  },
+  unmute: {
+    titleKey: 'chat.cmd.member.unmuteTitle',
+    confirmKey: 'chat.cmd.member.unmuteConfirm',
+    hintKey: 'chat.cmd.member.unmuteHint',
+  },
   ban: {
-    title: '封禁用户',
-    confirm: '封禁',
-    hint: (name) => `确定封禁「${name}」吗？这是服务器级操作，TA 将无法再使用这个工作区。`,
+    titleKey: 'chat.cmd.member.banTitle',
+    confirmKey: 'chat.cmd.member.banConfirm',
+    hintKey: 'chat.cmd.member.banHint',
   },
-  unban: { title: '解除封禁', confirm: '解封', hint: (name) => `解除「${name}」的账号封禁。` },
+  unban: {
+    titleKey: 'chat.cmd.member.unbanTitle',
+    confirmKey: 'chat.cmd.member.unbanConfirm',
+    hintKey: 'chat.cmd.member.unbanHint',
+  },
 };
 
 /** 成员选择 + 确认（/kick /mute /unmute /ban /unban 共用） */
@@ -392,6 +412,7 @@ function MemberActionDialog({
   prefill: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const aliases = useAliases((s) => s.aliases);
   const nameFormat = useAliases((s) => s.nameFormat);
   const muted = useChat((s) => s.rooms[rid]?.muted);
@@ -434,28 +455,32 @@ function MemberActionDialog({
       } else if (action === 'mute' || action === 'unmute') {
         const now = isMuted(useChat.getState().rooms[rid]?.muted, user.username);
         if (action === 'mute' && now) {
-          toast.info(`「${user.username}」已经被禁言了`);
+          toast.info(t('chat.cmd.member.alreadyMuted', { username: user.username }));
         } else if (action === 'unmute' && !now) {
-          toast.info(`「${user.username}」没有被禁言`);
+          toast.info(t('chat.cmd.member.notMuted', { username: user.username }));
         } else {
           await useChat.getState().toggleMemberMute(rid, user);
         }
       } else {
         await rest.runCommand(action, rid, user.username);
-        toast.success(action === 'ban' ? `已封禁「${user.username}」` : `已解除「${user.username}」的封禁`);
+        toast.success(
+          action === 'ban'
+            ? t('chat.cmd.member.banned', { username: user.username })
+            : t('chat.cmd.member.unbanned', { username: user.username }),
+        );
       }
       onClose();
     } catch (err) {
       setConfirming(false);
-      setError(humanError(err, '操作失败，可能你没有相应权限'));
+      setError(humanError(err, t('chat.cmd.member.actionFailed')));
     }
   };
 
   return (
     <>
       <Dialog
-        title={meta.title}
-        hint={isDirect ? '私聊/多人聊天没有成员管理能力，请先创建频道或群组。' : undefined}
+        title={t(meta.titleKey)}
+        hint={isDirect ? t('chat.cmd.member.directHint') : undefined}
         onClose={onClose}
         footer={
           <button
@@ -463,7 +488,7 @@ function MemberActionDialog({
             disabled={!target || isDirect}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {meta.confirm}
+            {t(meta.confirmKey)}
           </button>
         }
       >
@@ -473,7 +498,7 @@ function MemberActionDialog({
             <input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索成员"
+              placeholder={t('chat.cmd.member.searchPlaceholder')}
               className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
             />
           </div>
@@ -500,7 +525,7 @@ function MemberActionDialog({
                 <span className="text-xs text-ink-3">@{m.username}</span>
                 {(action === 'mute' || action === 'unmute') && (
                   <span className="ml-auto shrink-0 rounded bg-fill-1 px-1.5 py-0.5 text-xs text-ink-3">
-                    {isMuted(muted, m.username) ? '已禁言' : '未禁言'}
+                    {isMuted(muted, m.username) ? t('chat.cmd.member.mutedBadge') : t('chat.cmd.member.unmutedBadge')}
                   </span>
                 )}
               </button>
@@ -508,7 +533,7 @@ function MemberActionDialog({
           })}
           {filtered.length === 0 && (
             <div className="py-8 text-center text-sm text-ink-3">
-              {members.length === 0 ? '成员列表加载中…' : '没有匹配的成员'}
+              {members.length === 0 ? t('chat.cmd.member.loadingMembers') : t('chat.cmd.member.noMatchingMembers')}
             </div>
           )}
         </div>
@@ -516,9 +541,11 @@ function MemberActionDialog({
       </Dialog>
       {confirming && target && (
         <ConfirmDialog
-          title={meta.title}
-          message={meta.hint(personName(aliases, target.username, target.name || target.username, nameFormat))}
-          confirmLabel={meta.confirm}
+          title={t(meta.titleKey)}
+          message={t(meta.hintKey, {
+            name: personName(aliases, target.username, target.name || target.username, nameFormat),
+          })}
+          confirmLabel={t(meta.confirmKey)}
           danger={action !== 'unmute' && action !== 'unban'}
           onConfirm={() => void execute(target)}
           onClose={() => setConfirming(false)}
@@ -538,6 +565,7 @@ function RoomPickerDialog({
   mode: 'invite-all-from' | 'invite-all-to';
   onClose: () => void;
 }) {
+  const { t, tp } = useI18n();
   const [keyword, setKeyword] = useState('');
   const [list, setList] = useState<{ rid: string; name: string; joined: boolean; members: number | null }[]>([]);
   const [searching, setSearching] = useState(false);
@@ -625,14 +653,14 @@ function RoomPickerDialog({
       const existing = new Set(dest.map((u) => u.username));
       const pending = users.filter((u) => !existing.has(u.username));
       if (pending.length === 0) {
-        toast.info('对方的成员都已经在频道里了，没有需要邀请的人');
+        toast.info(t('chat.cmd.roomPick.nonePending'));
         onClose();
         return;
       }
       await useChat.getState().inviteMembers(destRid, pending);
       onClose();
     } catch (err) {
-      setError(humanError(err, '批量邀请失败'));
+      setError(humanError(err, t('chat.cmd.roomPick.failed')));
       setBusy(false);
     }
   };
@@ -640,11 +668,11 @@ function RoomPickerDialog({
   return (
     <>
       <Dialog
-        title={mode === 'invite-all-from' ? '从其他频道导入成员' : '把成员邀请到其他频道'}
+        title={mode === 'invite-all-from' ? t('chat.cmd.roomPick.titleFrom') : t('chat.cmd.roomPick.titleTo')}
         hint={
           mode === 'invite-all-from'
-            ? `选择一个频道，把它的成员（除已在「${roomName(rid)}」里的）批量邀请进来。`
-            : `把「${roomName(rid)}」的成员批量邀请到你选的频道。`
+            ? t('chat.cmd.roomPick.hintFrom', { room: roomName(rid) })
+            : t('chat.cmd.roomPick.hintTo', { room: roomName(rid) })
         }
         onClose={onClose}
         footer={
@@ -654,12 +682,14 @@ function RoomPickerDialog({
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy
-              ? '邀请中…'
+              ? t('chat.cmd.roomPick.inviting')
               : count === 0 && target
-                ? '没有可邀请的成员'
+                ? t('chat.cmd.roomPick.noneToInvite')
                 : counting
-                  ? '统计中…'
-                  : `邀请${count !== null ? `（${count} 人）` : ''}`}
+                  ? t('chat.cmd.roomPick.counting')
+                  : count !== null
+                    ? t('chat.cmd.roomPick.inviteCount', { count })
+                    : t('chat.cmd.roomPick.inviteBtn')}
           </button>
         }
       >
@@ -670,7 +700,7 @@ function RoomPickerDialog({
               autoFocus
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索频道"
+              placeholder={t('chat.cmd.roomPick.searchPlaceholder')}
               className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
             />
           </div>
@@ -696,14 +726,16 @@ function RoomPickerDialog({
                 </span>
                 <span className="min-w-0 flex-1 truncate text-sm text-ink">{r.name}</span>
                 {r.members !== null && (
-                  <span className="shrink-0 text-xs text-ink-3">{r.members} 人</span>
+                  <span className="shrink-0 text-xs text-ink-3">
+                    {tp(r.members, 'chat.cmd.roomPick.membersCountOne', 'chat.cmd.roomPick.membersCountOther')}
+                  </span>
                 )}
               </button>
             );
           })}
           {!searching && list.length === 0 && (
             <div className="py-8 text-center text-sm text-ink-3">
-              {keyword ? '没有找到匹配的频道' : '输入关键字搜索频道'}
+              {keyword ? t('chat.cmd.join.noSearchResults') : t('chat.cmd.roomPick.searchPrompt')}
             </div>
           )}
         </div>
@@ -723,15 +755,16 @@ function ArchiveDialog({
   archive: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   return (
     <ConfirmDialog
-      title={archive ? '归档频道' : '取消归档'}
+      title={archive ? t('chat.cmd.archive.titleArchive') : t('chat.cmd.archive.titleUnarchive')}
       message={
         archive
-          ? `确定归档「${roomName(rid)}」吗？归档后频道保留历史，但不再接收新消息。`
-          : `确定取消「${roomName(rid)}」的归档吗？取消后恢复收发消息。`
+          ? t('chat.cmd.archive.confirmArchive', { name: roomName(rid) })
+          : t('chat.cmd.archive.confirmUnarchive', { name: roomName(rid) })
       }
-      confirmLabel={archive ? '归档' : '取消归档'}
+      confirmLabel={archive ? t('chat.cmd.archive.confirmBtnArchive') : t('chat.cmd.archive.confirmBtnUnarchive')}
       danger={archive}
       onConfirm={() => {
         void useChat.getState().archiveConv(rid, archive);
@@ -743,24 +776,25 @@ function ArchiveDialog({
 
 /** 退出频道确认（/leave /part；DM 由 leaveConv 自动转隐藏） */
 function LeaveDialog({ rid, onClose }: { rid: string; onClose: () => void }) {
+  const t = useT();
   const sub = useChat((s) => s.subscriptions[rid]);
   const priv = roomType(rid) === 'p';
   return (
     <ConfirmDialog
-      title="退出频道"
+      title={t('chat.cmd.leave.title')}
       message={
         priv
-          ? `确定退出「${sub?.fname || sub?.name || roomName(rid)}」吗？这是私有群组，退出后需要成员重新邀请才能回来。`
-          : `确定退出「${sub?.fname || sub?.name || roomName(rid)}」吗？公开频道之后可以随时再加入。`
+          ? t('chat.cmd.leave.confirmPrivate', { name: sub?.fname || sub?.name || roomName(rid) })
+          : t('chat.cmd.leave.confirmPublic', { name: sub?.fname || sub?.name || roomName(rid) })
       }
-      confirmLabel="退出"
+      confirmLabel={t('chat.cmd.leave.confirmBtn')}
       onConfirm={() => {
         if (sub) {
           void useChat
             .getState()
             .leaveConv({ rid: sub.rid, name: sub.fname || sub.name, type: sub.t });
         } else {
-          toast.show({ kind: 'error', message: '当前会话状态异常，请刷新后重试' });
+          toast.show({ kind: 'error', message: t('chat.cmd.leave.invalidState') });
         }
       }}
       onClose={onClose}
@@ -770,11 +804,16 @@ function LeaveDialog({ rid, onClose }: { rid: string; onClose: () => void }) {
 
 /** 全部斜杠命令参考（/help、Composer「?」按钮；点击插入输入框） */
 export function CommandHelpDialog({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const serverCommands = useChat((s) => s.slashCommands);
   const seedComposer = useUI((s) => s.seedComposer);
   const [keyword, setKeyword] = useState('');
   const commands = useMemo(() => {
-    const list = composerCommands(serverCommands);
+    const list = composerCommands(serverCommands).map((cmd) => {
+      if (cmd.command === 'summary') return { ...cmd, description: t('chat.command.summaryDesc') };
+      if (cmd.command === 'ai') return { ...cmd, description: t('chat.command.aiDesc'), params: t('chat.command.aiParams') };
+      return cmd;
+    });
     const q = keyword.trim().toLowerCase();
     if (!q) return list;
     return list.filter(
@@ -782,10 +821,10 @@ export function CommandHelpDialog({ onClose }: { onClose: () => void }) {
         c.command.toLowerCase().includes(q) ||
         commandDesc(c).toLowerCase().includes(q),
     );
-  }, [serverCommands, keyword]);
+  }, [serverCommands, keyword, t]);
 
   return (
-    <Dialog title="斜杠命令" hint="点击命令把它填进输入框，接着补参数即可。" width={460} onClose={onClose}>
+    <Dialog title={t('chat.cmd.help.title')} hint={t('chat.cmd.help.hint')} width={460} onClose={onClose}>
       <div className="px-5 pb-2">
         <div className="flex h-8 items-center gap-2 rounded-md bg-fill-1 px-2.5">
           <Search size={14} className="text-ink-3" />
@@ -793,7 +832,7 @@ export function CommandHelpDialog({ onClose }: { onClose: () => void }) {
             autoFocus
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="搜索命令或说明"
+            placeholder={t('chat.cmd.help.searchPlaceholder')}
             className="w-full bg-transparent text-sm outline-none placeholder:text-ink-3"
           />
         </div>
@@ -820,7 +859,7 @@ export function CommandHelpDialog({ onClose }: { onClose: () => void }) {
           );
         })}
         {commands.length === 0 && (
-          <div className="py-8 text-center text-sm text-ink-3">没有匹配的命令</div>
+          <div className="py-8 text-center text-sm text-ink-3">{t('chat.cmd.help.noMatches')}</div>
         )}
       </div>
     </Dialog>
@@ -829,6 +868,7 @@ export function CommandHelpDialog({ onClose }: { onClose: () => void }) {
 
 /** 发起投票（/poll、Composer 工具栏按钮共用）；选项行动态增删，票用数字表情计 */
 function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: string; onClose: () => void }) {
+  const t = useT();
   const [question, setQuestion] = useState(prefill);
   const [options, setOptions] = useState<string[]>(['', '']);
   const [multi, setMulti] = useState(false);
@@ -854,15 +894,15 @@ function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: st
         .sendPoll(rid, { question: question.trim(), options: validOptions, multi });
       onClose();
     } catch (err) {
-      setError(humanError(err, '发起投票失败'));
+      setError(humanError(err, t('chat.store.pollCreateFailed')));
       setBusy(false);
     }
   };
 
   return (
     <Dialog
-      title="发起投票"
-      hint={`成员点击消息里的数字表情计票，官方客户端用表情也能参与（2-${POLL_MAX_OPTIONS} 个选项）。`}
+      title={t('chat.cmd.poll.title')}
+      hint={t('chat.cmd.poll.hint', { max: POLL_MAX_OPTIONS })}
       width={460}
       onClose={onClose}
       footer={
@@ -871,14 +911,14 @@ function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: st
             onClick={onClose}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => void doCreate()}
             disabled={!canSubmit}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? '发布中…' : '发布投票'}
+            {busy ? t('chat.cmd.poll.publishing') : t('chat.cmd.poll.publish')}
           </button>
         </>
       }
@@ -889,7 +929,7 @@ function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: st
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           maxLength={120}
-          placeholder="投票问题，例如：周三团建去哪？"
+          placeholder={t('chat.cmd.poll.questionPlaceholder')}
           className="h-9 w-full rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary"
         />
         {options.map((option, i) => (
@@ -899,11 +939,11 @@ function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: st
               value={option}
               onChange={(e) => setOption(i, e.target.value)}
               maxLength={80}
-              placeholder={`选项 ${i + 1}`}
+              placeholder={t('chat.cmd.poll.optionPlaceholder', { index: i + 1 })}
               className="h-8 min-w-0 flex-1 rounded-md border border-line px-2.5 text-sm outline-none transition focus:border-primary"
             />
             <button
-              title="删除选项"
+              title={t('chat.cmd.poll.removeOption')}
               onClick={() => removeOption(i)}
               disabled={options.length <= 2}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-ink-3 transition hover:bg-fill-hover hover:text-danger disabled:opacity-30"
@@ -918,7 +958,7 @@ function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: st
             className="flex h-8 items-center gap-1.5 rounded-md border border-dashed border-line px-3 text-xs text-ink-2 transition hover:border-primary hover:text-primary"
           >
             <Plus size={13} />
-            加一个选项
+            {t('chat.cmd.poll.addOption')}
           </button>
         )}
         <label className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-2">
@@ -928,7 +968,7 @@ function PollCreatorDialog({ rid, prefill, onClose }: { rid: string; prefill: st
             onChange={(e) => setMulti(e.target.checked)}
             className="accent-primary"
           />
-          允许多选
+          {t('chat.cmd.poll.allowMultiple')}
         </label>
         {error && <div className="text-xs text-danger">{error}</div>}
       </div>

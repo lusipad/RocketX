@@ -17,7 +17,9 @@ import { useChat } from '../stores/chat';
 import { useTeamPanel } from '../stores/teamUi';
 import { toast } from '../stores/toast';
 import { useUserSearch } from './NewChatDialogs';
-import { canManageTeam, roomLabel, sortTeamRooms, teamTypeLabel } from '../lib/teams';
+import { canManageTeam, roomLabel, sortTeamRooms } from '../lib/teams';
+import { useI18n, useT } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 import Avatar from './Avatar';
 import Dialog, { ConfirmDialog } from './Dialog';
 
@@ -31,6 +33,7 @@ type Tab = 'rooms' | 'members';
  * 房间（新建 / 挂载 / 移出 / 设为主频道）与成员（加 / 移出）以及改名、解散、退出。
  */
 export default function TeamPanel({ onClose }: { onClose: () => void }) {
+  const { t, tp, locale } = useI18n();
   const teamIdProp = useTeamPanel((s) => s.teamId);
   const seed = useTeamPanel((s) => s.seed);
   const me = useAuth((s) => s.user);
@@ -45,7 +48,7 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
   const [members, setMembers] = useState<RcTeamMember[]>([]);
   const [tab, setTab] = useState<Tab>('rooms');
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const [newRoomOpen, setNewRoomOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
 
@@ -73,7 +76,7 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
       setRooms(roomList);
       setMembers(memberList);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '加载团队信息失败');
+      setError(err instanceof Error ? { message: err.message } : {});
     } finally {
       setLoading(false);
     }
@@ -86,13 +89,22 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
   }, [teamId]);
 
   const manageable = canManageTeam(me, team, members);
-  const { main, others } = useMemo(() => sortTeamRooms(rooms), [rooms]);
+  const { main, others } = useMemo(() => {
+    const grouped = sortTeamRooms(rooms);
+    return {
+      main: grouped.main,
+      others: [...grouped.others].sort((left, right) =>
+        compareLocaleText(roomLabel(left), roomLabel(right), locale),
+      ),
+    };
+  }, [rooms, locale]);
+  const errorMessage = error ? (error.message ?? t('panels.team.loadFailed')) : null;
 
   if (!teamId) {
     return (
-      <Dialog title="团队管理" onClose={onClose} width={520}>
+      <Dialog title={t('panels.team.title')} onClose={onClose} width={520}>
         <div className="px-5 py-6 text-sm text-ink-3">
-          没有找到可管理的团队。先在左侧「+ → 创建团队」建一个，或从会话列表进入团队房间。
+          {t('panels.team.noTeam')}
         </div>
       </Dialog>
     );
@@ -100,24 +112,26 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog
-      title={`团队管理${team?.name ? ` · ${team.name}` : ''}`}
-      hint="团队是一组频道的容器：成员与房间都在团队维度上管理。"
+      title={team?.name ? t('panels.team.titleWithName', { name: team.name }) : t('panels.team.title')}
+      hint={t('panels.team.hint')}
       width={560}
       onClose={onClose}
     >
       <div className="px-5 pb-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-3">
-          <span>{teamTypeLabel(team?.type)}</span>
-          <span>{rooms.length} 个房间</span>
-          <span>{members.length} 名成员</span>
-          {team?.createdBy?.username && <span>创建者 {team.createdBy.username}</span>}
-          {!manageable && <span className="text-warning">你在这个团队里没有管理权限</span>}
+          <span>{team?.type === 0 ? t('panels.team.type.public') : t('panels.team.type.private')}</span>
+          <span>{tp(rooms.length, 'panels.team.roomCount.one', 'panels.team.roomCount.other')}</span>
+          <span>{tp(members.length, 'panels.team.memberCount.one', 'panels.team.memberCount.other')}</span>
+          {team?.createdBy?.username && (
+            <span>{t('panels.team.createdBy', { username: team.createdBy.username })}</span>
+          )}
+          {!manageable && <span className="text-warning">{t('panels.team.noPermission')}</span>}
         </div>
         <div className="mt-3 flex gap-1.5">
           {(
             [
-              ['rooms', `房间（${rooms.length}）`],
-              ['members', `成员（${members.length}）`],
+              ['rooms', t('panels.team.tab.rooms', { count: rooms.length })],
+              ['members', t('panels.team.tab.members', { count: members.length })],
             ] as Array<[Tab, string]>
           ).map(([key, label]) => (
             <button
@@ -136,7 +150,7 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
                 onClick={() => setNewRoomOpen(true)}
                 className="flex h-8 items-center gap-1 rounded-md bg-fill-1 px-2.5 text-xs text-ink-2 hover:bg-fill-hover hover:text-primary"
               >
-                <Plus size={12} /> 新建团队频道
+                <Plus size={12} /> {t('panels.team.newRoom')}
               </button>
             )}
             {tab === 'members' && manageable && (
@@ -144,7 +158,7 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
                 onClick={() => setAddMemberOpen(true)}
                 className="flex h-8 items-center gap-1 rounded-md bg-fill-1 px-2.5 text-xs text-ink-2 hover:bg-fill-hover hover:text-primary"
               >
-                <UserPlus size={12} /> 添加成员
+                <UserPlus size={12} /> {t('panels.team.addMember')}
               </button>
             )}
           </div>
@@ -154,11 +168,11 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
       <div className="max-h-[52vh] min-h-40 overflow-y-auto border-y border-line">
         {loading && (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-ink-3">
-            <Loader2 size={14} className="animate-spin" /> 正在加载团队信息…
+            <Loader2 size={14} className="animate-spin" /> {t('panels.team.loading')}
           </div>
         )}
-        {!loading && error && <div className="px-5 py-6 text-sm text-danger">{error}</div>}
-        {!loading && !error && tab === 'rooms' && (
+        {!loading && errorMessage && <div className="px-5 py-6 text-sm text-danger">{errorMessage}</div>}
+        {!loading && !errorMessage && tab === 'rooms' && (
           <TeamRoomList
             teamId={teamId}
             main={main}
@@ -167,7 +181,7 @@ export default function TeamPanel({ onClose }: { onClose: () => void }) {
             onChanged={() => void refresh()}
           />
         )}
-        {!loading && !error && tab === 'members' && (
+        {!loading && !errorMessage && tab === 'members' && (
           <TeamMemberList
             teamId={teamId}
             members={members}
@@ -225,6 +239,7 @@ function TeamRoomList({
   manageable: boolean;
   onChanged: () => void;
 }) {
+  const t = useT();
   const openRoom = useChat((s) => s.openRoom);
   const removeRoomFromTeam = useChat((s) => s.removeRoomFromTeam);
   const setTeamMainRoom = useChat((s) => s.setTeamMainRoom);
@@ -241,27 +256,27 @@ function TeamRoomList({
       </button>
       {isMain && (
         <span className="flex items-center gap-0.5 rounded bg-primary-light px-1.5 py-0.5 text-xs text-primary">
-          <Star size={10} /> 主频道
+          <Star size={10} /> {t('panels.team.mainChannel')}
         </span>
       )}
-      {!subscriptions[room._id] && <span className="text-xs text-ink-3">未加入</span>}
+      {!subscriptions[room._id] && <span className="text-xs text-ink-3">{t('panels.team.notJoined')}</span>}
       {manageable && (
         <>
           {!isMain && (
             <button
-              title="设为主频道"
+              title={t('panels.team.setMainChannel')}
               onClick={() => void setTeamMainRoom(teamId, room._id).then(onChanged)}
               className="text-xs text-ink-3 hover:text-primary"
             >
-              设为主频道
+              {t('panels.team.setMainChannel')}
             </button>
           )}
           <button
-            title="移出团队（房间本身保留）"
+            title={t('panels.team.removeRoomTitle')}
             onClick={() => void removeRoomFromTeam(teamId, room._id).then(onChanged)}
             className="text-xs text-ink-3 hover:text-danger"
           >
-            移出
+            {t('panels.team.remove')}
           </button>
         </>
       )}
@@ -269,7 +284,7 @@ function TeamRoomList({
   );
 
   if (!main && others.length === 0) {
-    return <div className="px-5 py-6 text-sm text-ink-3">这个团队下还没有房间。</div>;
+    return <div className="px-5 py-6 text-sm text-ink-3">{t('panels.team.noRooms')}</div>;
   }
   return (
     <div>
@@ -292,11 +307,12 @@ function TeamMemberList({
   manageable: boolean;
   onChanged: () => void;
 }) {
+  const t = useT();
   const removeTeamMember = useChat((s) => s.removeTeamMember);
   const [confirmTarget, setConfirmTarget] = useState<RcTeamMember | null>(null);
 
   if (members.length === 0) {
-    return <div className="px-5 py-6 text-sm text-ink-3">没有取到团队成员。</div>;
+    return <div className="px-5 py-6 text-sm text-ink-3">{t('panels.team.noMembers')}</div>;
   }
   return (
     <div>
@@ -314,7 +330,7 @@ function TeamMemberList({
           ))}
           {manageable && member._id !== meId && (
             <button
-              title="移出团队（会从团队所有房间移除）"
+              title={t('panels.team.removeMemberTitle')}
               onClick={() => setConfirmTarget(member)}
               className="text-ink-3 transition hover:text-danger"
             >
@@ -325,9 +341,11 @@ function TeamMemberList({
       ))}
       {confirmTarget && (
         <ConfirmDialog
-          title="移出团队"
-          message={`「${confirmTarget.name || confirmTarget.username}」会被移出团队的所有房间。房间里的历史消息不会删除。`}
-          confirmLabel="移出"
+          title={t('panels.team.removeMemberDialogTitle')}
+          message={t('panels.team.removeMemberConfirmMessage', {
+            name: confirmTarget.name || confirmTarget.username,
+          })}
+          confirmLabel={t('panels.team.remove')}
           onConfirm={() => {
             void removeTeamMember(teamId, confirmTarget._id).then(onChanged);
             setConfirmTarget(null);
@@ -351,6 +369,7 @@ function TeamDangerZone({
   teamName: string;
   onDone: () => void;
 }) {
+  const { t, tp } = useI18n();
   const renameTeam = useChat((s) => s.renameTeam);
   const deleteTeam = useChat((s) => s.deleteTeam);
   const leaveTeam = useChat((s) => s.leaveTeam);
@@ -364,7 +383,7 @@ function TeamDangerZone({
     <div className="space-y-3 px-5 py-3">
       <div className="flex items-end gap-2">
         <label className="flex-1 text-xs text-ink-3">
-          团队名称
+          {t('panels.team.nameLabel')}
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -376,12 +395,12 @@ function TeamDangerZone({
           onClick={() => {
             setRenaming(true);
             void renameTeam(teamId, name.trim())
-              .catch((error) => toast.error(error, '改名失败'))
+              .catch((error) => toast.error(error, t('panels.team.renameFailed')))
               .finally(() => setRenaming(false));
           }}
           className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-40"
         >
-          保存
+          {t('common.save')}
         </button>
       </div>
       <div className="flex items-center gap-2">
@@ -389,25 +408,25 @@ function TeamDangerZone({
           onClick={() => setLeaveOpen(true)}
           className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
         >
-          <ArrowRightLeft size={12} /> 退出团队
+          <ArrowRightLeft size={12} /> {t('panels.team.leaveTeam')}
         </button>
         <button
           onClick={() => setDeleteOpen(true)}
           className="flex h-8 items-center gap-1.5 rounded-md border border-danger px-3 text-xs text-danger hover:bg-danger/10"
         >
-          <Trash2 size={12} /> 解散团队
+          <Trash2 size={12} /> {t('panels.team.deleteTeam')}
         </button>
         <span className="text-xs text-ink-3">
           <Users size={11} className="mr-1 inline" />
-          解散后房间可保留为普通房间
+          {t('panels.team.deleteKeepRoomsHint')}
         </span>
       </div>
 
       {leaveOpen && (
         <ConfirmDialog
-          title="退出团队"
-          message={`退出「${teamName}」后不再接收团队消息，需要重新被邀请才能回来。`}
-          confirmLabel="退出"
+          title={t('panels.team.leaveTeam')}
+          message={t('panels.team.leaveConfirmMessage', { name: teamName })}
+          confirmLabel={t('panels.team.leaveConfirmLabel')}
           onConfirm={() => {
             void leaveTeam(teamId).then(onDone);
             setLeaveOpen(false);
@@ -417,13 +436,13 @@ function TeamDangerZone({
       )}
       {deleteOpen && (
         <ConfirmDialog
-          title={`解散团队${teamName ? `「${teamName}」` : ''}`}
+          title={teamName ? t('panels.team.deleteTeamTitleWithName', { name: teamName }) : t('panels.team.deleteTeam')}
           message={
             alsoDeleteRooms
-              ? `团队和它的 ${rooms.length} 个房间都会被永久删除，聊天记录一并消失。这个操作无法撤销。`
-              : '团队会被解散，房间保留为普通房间，聊天记录不丢。'
+              ? tp(rooms.length, 'panels.team.deleteAllConfirm.one', 'panels.team.deleteAllConfirm.other')
+              : t('panels.team.deleteKeepConfirm')
           }
-          confirmLabel={alsoDeleteRooms ? '永久删除' : '解散团队'}
+          confirmLabel={alsoDeleteRooms ? t('panels.team.deleteConfirmPermanent') : t('panels.team.deleteTeam')}
           onConfirm={() => {
             void deleteTeam(teamId, alsoDeleteRooms ? rooms.map((room) => room._id) : undefined).then(onDone);
             setDeleteOpen(false);
@@ -437,7 +456,7 @@ function TeamDangerZone({
                 onChange={(event) => setAlsoDeleteRooms(event.target.checked)}
                 className="accent-danger"
               />
-              同时删除团队里的 {rooms.length} 个房间（不可撤销）
+              {tp(rooms.length, 'panels.team.alsoDeleteRooms.one', 'panels.team.alsoDeleteRooms.other')}
             </label>
           }
         />
@@ -453,14 +472,15 @@ function NewTeamRoomDialog({
   onCreate: (name: string, priv: boolean) => Promise<void>;
   onClose: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState('');
   const [priv, setPriv] = useState(true);
   const [busy, setBusy] = useState(false);
 
   return (
     <Dialog
-      title="新建团队频道"
-      hint="新频道会直接挂在团队下，团队成员共享。"
+      title={t('panels.team.newRoom')}
+      hint={t('panels.team.newRoomHint')}
       onClose={busy ? () => {} : onClose}
       footer={
         <>
@@ -469,7 +489,7 @@ function NewTeamRoomDialog({
             disabled={busy}
             className="h-8 rounded-md border border-line px-4 text-sm text-ink-2 hover:bg-fill-hover disabled:opacity-50"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             disabled={busy || !name.trim()}
@@ -481,14 +501,14 @@ function NewTeamRoomDialog({
             }}
             className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
           >
-            {busy ? '创建中…' : '创建'}
+            {busy ? t('panels.team.creating') : t('panels.team.create')}
           </button>
         </>
       }
     >
       <div className="space-y-3 px-5 pb-4">
         <label className="block text-xs text-ink-3">
-          频道名称
+          {t('panels.team.channelNameLabel')}
           <input
             autoFocus
             value={name}
@@ -503,7 +523,7 @@ function NewTeamRoomDialog({
             onChange={(event) => setPriv(event.target.checked)}
             className="accent-primary"
           />
-          私有频道（仅受邀成员可见）
+          {t('panels.team.privateChannelLabel')}
         </label>
       </div>
     </Dialog>
@@ -518,11 +538,13 @@ function AddTeamMembersDialog({
   onAdd: (usernames: string[]) => Promise<void>;
   onClose: () => void;
 }) {
+  const t = useT();
   const [keyword, setKeyword] = useState('');
   const [selected, setSelected] = useState<Map<string, RcUser>>(new Map());
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message?: string } | null>(null);
   const { users, warning } = useUserSearch(keyword);
+  const errorMessage = error ? (error.message ?? t('panels.team.addMembersFailed')) : null;
 
   const toggle = (user: RcUser) => {
     setSelected((prev) => {
@@ -535,8 +557,8 @@ function AddTeamMembersDialog({
 
   return (
     <Dialog
-      title="添加团队成员"
-      hint="成员会被加入团队的主频道；需要进其他团队频道时，在频道里单独邀请。"
+      title={t('panels.team.addMembersTitle')}
+      hint={t('panels.team.addMembersHint')}
       onClose={busy ? () => {} : onClose}
       footer={
         <button
@@ -546,12 +568,16 @@ function AddTeamMembersDialog({
             setError(null);
             void onAdd([...selected.values()].map((user) => user.username))
               .then(onClose)
-              .catch((err) => setError(err instanceof Error ? err.message : '添加失败'))
+              .catch((err) => setError(err instanceof Error ? { message: err.message } : {}))
               .finally(() => setBusy(false));
           }}
           className="h-8 rounded-md bg-primary px-4 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
         >
-          {busy ? '添加中…' : `添加${selected.size > 0 ? `（${selected.size}）` : ''}`}
+          {busy
+            ? t('panels.team.adding')
+            : selected.size > 0
+              ? t('panels.team.addWithCount', { count: selected.size })
+              : t('common.add')}
         </button>
       }
     >
@@ -560,7 +586,7 @@ function AddTeamMembersDialog({
           autoFocus
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
-          placeholder="搜索用户"
+          placeholder={t('panels.members.searchUsersPlaceholder')}
           className="h-8 w-full rounded-md bg-fill-1 px-2.5 text-sm outline-none placeholder:text-ink-3"
         />
       </div>
@@ -589,11 +615,11 @@ function AddTeamMembersDialog({
         })}
         {users.length === 0 && (
           <div className="py-8 text-center text-sm text-ink-3">
-            {keyword ? '未找到匹配的用户' : '输入用户名搜索'}
+            {keyword ? t('panels.members.noMatchingUsers') : t('panels.members.searchUsersPrompt')}
           </div>
         )}
       </div>
-      {error && <div className="px-5 pb-2 text-xs text-danger">{error}</div>}
+      {errorMessage && <div className="px-5 pb-2 text-xs text-danger">{errorMessage}</div>}
     </Dialog>
   );
 }

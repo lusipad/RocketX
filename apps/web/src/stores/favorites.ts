@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t, type MessageKey } from '../i18n';
 
 export type FavSize = 'small' | 'medium' | 'large';
 
@@ -58,10 +59,20 @@ export const SIZE_SPAN: Record<FavSize, string> = {
   large: 'col-span-3',
 };
 
+export const SIZE_LABEL_KEYS: Record<FavSize, MessageKey> = {
+  small: 'nav.favorites.size.small',
+  medium: 'nav.favorites.size.medium',
+  large: 'nav.favorites.size.large',
+};
+
+export function getFavoriteSizeLabel(size: FavSize): string {
+  return t(SIZE_LABEL_KEYS[size]);
+}
+
 export const SIZE_LABELS: Record<FavSize, string> = {
-  small: '小',
-  medium: '中',
-  large: '大',
+  get small() { return t(SIZE_LABEL_KEYS.small); },
+  get medium() { return t(SIZE_LABEL_KEYS.medium); },
+  get large() { return t(SIZE_LABEL_KEYS.large); },
 };
 
 interface FavoritesState {

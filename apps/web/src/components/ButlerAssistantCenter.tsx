@@ -1,9 +1,11 @@
 import {
   Archive,
+  Bell,
   BookmarkCheck,
   Brain,
   Calendar,
   CheckCircle2,
+  CheckSquare,
   Clock,
   Cpu,
   Edit3,
@@ -11,21 +13,27 @@ import {
   EyeOff,
   FileText,
   FolderOpen,
+  GitBranch,
   History,
   Layers,
   Loader2,
+  MessageSquarePlus,
+  Moon,
   PanelLeft,
   PauseCircle,
   Pin,
   PinOff,
   PlayCircle,
   Plus,
+  Radar,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldAlert,
   Sparkles,
   SquareKanban,
   Trash2,
+  Wand2,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -35,6 +43,12 @@ import {
   saveAssistantSnapshotDigest,
   type PersonalAssistantBriefKind,
 } from '../agent/personalAssistant';
+import { executePreparedExternalAction, readExternalActionSpec } from '../agent/externalWorkActions';
+import ButlerSkillsStudio from './ButlerSkillsStudio';
+import ShareToRoomButton from './ShareToRoomButton';
+import { writeButlerShareDrag, type ButlerSharePayload } from '../lib/butlerChatBridge';
+import { useI18n, type MessageKey } from '../i18n';
+import { formatDateTime } from '../i18n/format';
 import { isTauriRuntime } from '../lib/client';
 import { renderMarkdownDoc } from '../lib/markdown';
 import type {
@@ -43,7 +57,13 @@ import type {
   ButlerMemoryEntry,
 } from '../platform/desktopCommands';
 import { useAcpAgents } from '../stores/acpAgents';
+import { useButlerCognition } from '../stores/butlerCognition';
 import { isMemoryCurrent, isMemoryInWorkspace, useButlerMemory, validateMemoryNoSecrets } from '../stores/butlerMemory';
+import { useButlerSkills } from '../stores/butlerSkills';
+import { useChat } from '../stores/chat';
+import { useRoutines } from '../stores/routines';
+import { useTodos } from '../stores/todos';
+import { inspectNativeWorkspaceGit, type NativeWorkspaceGitSnapshot } from '../platform/desktopCommands';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
 import { useUI } from '../stores/ui';
@@ -51,47 +71,52 @@ import { useWorkLedger } from '../stores/workLedger';
 
 const BRIEF_TABS: ReadonlyArray<{
   kind: PersonalAssistantBriefKind;
-  label: string;
-  subtitle: string;
+  labelKey: MessageKey;
+  subtitleKey: MessageKey;
 }> = [
-  { kind: 'morning_brief', label: '晨间简报', subtitle: '今日截止 · 逾期盘点 · 优先级排序' },
-  { kind: 'evening_review', label: '晚间复盘', subtitle: '完成回顾 · 风险收敛 · 记忆沉淀' },
-  { kind: 'focus_digest', label: '聚焦摘要', subtitle: '实时工作流 · 审批队列 · 承诺跟进' },
+  { kind: 'morning_brief', labelKey: 'butler.assistant.brief.morningLabel', subtitleKey: 'butler.assistant.brief.morningSubtitle' },
+  { kind: 'evening_review', labelKey: 'butler.assistant.brief.eveningLabel', subtitleKey: 'butler.assistant.brief.eveningSubtitle' },
+  { kind: 'focus_digest', labelKey: 'butler.assistant.brief.focusLabel', subtitleKey: 'butler.assistant.brief.focusSubtitle' },
 ];
 
 const MEMORY_CATEGORIES: ReadonlyArray<{
   key: 'all' | ButlerMemoryCategory;
-  label: string;
+  labelKey: MessageKey;
   badgeClass: string;
 }> = [
-  { key: 'all', label: '全部', badgeClass: 'bg-fill-2 text-ink-2' },
-  { key: 'preference', label: '偏好习惯', badgeClass: 'bg-primary/10 text-primary' },
-  { key: 'project_fact', label: '项目事实', badgeClass: 'bg-cyan-500/12 text-cyan-700 dark:text-cyan-300' },
-  { key: 'workflow_habit', label: '工作流规范', badgeClass: 'bg-purple-500/12 text-purple-700 dark:text-purple-300' },
-  { key: 'person_context', label: '协作关系', badgeClass: 'bg-amber-500/12 text-amber-700 dark:text-amber-300' },
-  { key: 'episodic_summary', label: '阶段总结', badgeClass: 'bg-success/10 text-success' },
+  { key: 'all', labelKey: 'butler.assistant.category.all', badgeClass: 'bg-fill-2 text-ink-2' },
+  { key: 'preference', labelKey: 'butler.assistant.category.preference', badgeClass: 'bg-primary/10 text-primary' },
+  { key: 'project_fact', labelKey: 'butler.assistant.category.projectFact', badgeClass: 'bg-cyan-500/12 text-cyan-700 dark:text-cyan-300' },
+  { key: 'workflow_habit', labelKey: 'butler.assistant.category.workflowHabit', badgeClass: 'bg-purple-500/12 text-purple-700 dark:text-purple-300' },
+  { key: 'person_context', labelKey: 'butler.assistant.category.personContext', badgeClass: 'bg-amber-500/12 text-amber-700 dark:text-amber-300' },
+  { key: 'episodic_summary', labelKey: 'butler.assistant.category.episodicSummary', badgeClass: 'bg-success/10 text-success' },
 ];
 
-function categoryMeta(category: ButlerMemoryCategory) {
+function categoryMeta(category: ButlerMemoryCategory): {
+  key: string;
+  labelKey?: MessageKey;
+  fallbackLabel?: string;
+  badgeClass: string;
+} {
   return (
     MEMORY_CATEGORIES.find((c) => c.key === category) ?? {
       key: category,
-      label: category,
+      fallbackLabel: category,
       badgeClass: 'bg-fill-2 text-ink-2',
     }
   );
 }
 
-function formatDateTime(ts: number): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(ts);
-}
+const DATE_TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  month: 'numeric',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+};
 
 export default function ButlerAssistantCenter() {
+  const { t, tp, locale } = useI18n();
+  const setModule = useUI((state) => state.setModule);
   const setButlerView = useUI((state) => state.setButlerView);
   const openAcpHub = useUI((state) => state.openAcpHub);
   const butlerSidebarCollapsed = useUI((state) => state.butlerSidebarCollapsed);
@@ -114,6 +139,8 @@ export default function ButlerAssistantCenter() {
   const deleteDigest = useButlerMemory((state) => state.deleteDigest);
 
   const acpAgents = useAcpAgents((state) => state.agents);
+  const acpSessionsMap = useAcpAgents((state) => state.sessions);
+  const setActiveAcpSession = useAcpAgents((state) => state.setActiveSession);
   const hydrateAcp = useAcpAgents((state) => state.hydrate);
   const startAcpSession = useAcpAgents((state) => state.startSession);
   const sendAcpPrompt = useAcpAgents((state) => state.sendPrompt);
@@ -122,8 +149,37 @@ export default function ButlerAssistantCenter() {
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
   const defaultWorkspaceRoot = useCodexWorkspace((state) => state.defaultWorkspaceRoot);
   const hydrateLedger = useWorkLedger((state) => state.hydrate);
+  const ledgerActions = useWorkLedger((state) => state.actions);
+  const transitionDispatchAction = useWorkLedger((state) => state.transitionDispatchAction);
 
-  const [sectionTab, setSectionTab] = useState<'briefing' | 'memories' | 'archive'>('briefing');
+  const sectionTab = useUI((state) => state.assistantTab);
+  const setSectionTab = useUI((state) => state.setAssistantTab);
+  const hydrateCognition = useButlerCognition((state) => state.hydrate);
+  const ambientEnabled = useButlerCognition((state) => state.ambientEnabled);
+  const dreamEnabled = useButlerCognition((state) => state.dreamEnabled);
+  const setAmbientEnabled = useButlerCognition((state) => state.setAmbientEnabled);
+  const setDreamEnabled = useButlerCognition((state) => state.setDreamEnabled);
+  const ambientRunning = useButlerCognition((state) => state.ambientRunning);
+  const dreamRunning = useButlerCognition((state) => state.dreamRunning);
+  const cognitionObservations = useButlerCognition((state) => state.observations);
+  const cognitionWatchpoints = useButlerCognition((state) => state.watchpoints);
+  const cognitionInsights = useButlerCognition((state) => state.insights);
+  const dreamJournal = useButlerCognition((state) => state.dreamJournal);
+  const lastUserActivityAt = useButlerCognition((state) => state.lastUserActivityAt);
+  const lastAmbientWakeAt = useButlerCognition((state) => state.lastAmbientWakeAt);
+  const lastDreamDate = useButlerCognition((state) => state.lastDreamDate);
+  const runAmbientTurn = useButlerCognition((state) => state.runAmbientTurn);
+  const runDreamNow = useButlerCognition((state) => state.runDreamNow);
+  const rollbackDreamEntry = useButlerCognition((state) => state.rollbackDreamEntry);
+  const cancelWatchpoint = useButlerCognition((state) => state.cancelWatchpoint);
+  const markInsightFeedback = useButlerCognition((state) => state.markInsightFeedback);
+
+  const allSkills = useButlerSkills((state) => state.skills);
+  const skillsCount = allSkills.length;
+  const hydrateSkills = useButlerSkills((state) => state.hydrate);
+  const routines = useRoutines((state) => state.routines);
+  const hydrateRoutines = useRoutines((state) => state.hydrate);
+  const [gitInspect, setGitInspect] = useState<NativeWorkspaceGitSnapshot | null>(null);
   const [briefKind, setBriefKind] = useState<PersonalAssistantBriefKind>(() =>
     new Date().getHours() >= 17 ? 'evening_review' : 'morning_brief',
   );
@@ -150,13 +206,32 @@ export default function ButlerAssistantCenter() {
   const [confirmClearScope, setConfirmClearScope] = useState(false);
 
   useEffect(() => {
+    hydrateCognition();
     void hydrateMemory();
+    void hydrateSkills();
+    hydrateRoutines();
     void hydrateAcp();
     void hydrateLedger();
-  }, [hydrateAcp, hydrateLedger, hydrateMemory]);
+  }, [hydrateAcp, hydrateCognition, hydrateLedger, hydrateMemory, hydrateRoutines, hydrateSkills]);
 
   const effectiveWorkspace =
     workspaceRoot || butlerWorkspaceRoot || defaultWorkspaceRoot || '';
+
+  useEffect(() => {
+    if (!isTauriRuntime() || !effectiveWorkspace.trim()) {
+      setGitInspect(null);
+      return;
+    }
+    let cancelled = false;
+    void inspectNativeWorkspaceGit(effectiveWorkspace)
+      .then((info: NativeWorkspaceGitSnapshot) => {
+        if (!cancelled) setGitInspect(info);
+      })
+      .catch(() => {
+        if (!cancelled) setGitInspect(null);
+      });
+    return () => { cancelled = true; };
+  }, [effectiveWorkspace, refreshTick]);
 
   const enabledAcpAgents = useMemo(
     () => acpAgents.filter((a) => a.enabled),
@@ -217,11 +292,11 @@ export default function ButlerAssistantCenter() {
   const handleSaveMemory = async (event: FormEvent) => {
     event.preventDefault();
     if (!memTitle.trim() || !memContent.trim()) {
-      toast.error('请填写记忆标题与内容');
+      toast.error(t('butler.assistant.memoryValidationRequired'));
       return;
     }
     if (!secretCheck.ok) {
-      toast.error(secretCheck.reason || '检测到敏感凭据，禁止写入长期记忆');
+      toast.error(secretCheck.reason || t('butler.assistant.memorySecretBlocked'));
       return;
     }
     setSavingMem(true);
@@ -241,9 +316,9 @@ export default function ButlerAssistantCenter() {
       if (editingId) await correctMemory(editingId, fields);
       else await upsertMemory({ ...fields, sourceKind: 'manual', enabled: true });
       setEditorOpen(false);
-      toast.success(editingId ? '记忆已纠正，旧版本不再召回' : '已存入长期记忆库');
+      toast.success(t(editingId ? 'butler.assistant.memoryCorrected' : 'butler.assistant.memorySaved'));
     } catch (error) {
-      toast.error(error, '保存记忆失败');
+      toast.error(error, t('butler.assistant.memorySaveFailed'));
     } finally {
       setSavingMem(false);
     }
@@ -254,9 +329,9 @@ export default function ButlerAssistantCenter() {
     try {
       const saved = await saveAssistantSnapshotDigest(snapshot);
       setSelectedDigest(saved);
-      toast.success('已归档本次助理简报');
+      toast.success(t('butler.assistant.digestArchived'));
     } catch (error) {
-      toast.error(error, '归档简报失败');
+      toast.error(error, t('butler.assistant.digestArchiveFailed'));
     } finally {
       setSavingDigest(false);
     }
@@ -270,14 +345,14 @@ export default function ButlerAssistantCenter() {
       if (isTauriRuntime() && ws.status === 'ready') {
         await ws.startTask(prompt, snapshot.title);
         setButlerView('conversation');
-        toast.success('已交给管家深度梳理并启动新对话');
+        toast.success(t('butler.assistant.handoffStarted'));
       } else {
         ws.setComposerDraft(prompt);
         setButlerView('conversation');
-        toast.info('已将深度梳理提示词填入管家输入框');
+        toast.info(t('butler.assistant.handoffDrafted'));
       }
     } catch (error) {
-      toast.error(error, '交给管家处理失败');
+      toast.error(error, t('butler.assistant.handoffFailed'));
     } finally {
       setSendingToButler(false);
     }
@@ -286,12 +361,12 @@ export default function ButlerAssistantCenter() {
   const handleDispatchToAcp = async () => {
     if (!resolvedAcpAgentId) {
       openAcpHub(null);
-      toast.info('请先在 ACP 客户端工作台发现或添加本地 Agent');
+      toast.info(t('butler.assistant.acpNoAgent'));
       return;
     }
     if (!effectiveWorkspace) {
       openAcpHub(resolvedAcpAgentId);
-      toast.info('请先在 ACP 工作台选择本地工作区目录');
+      toast.info(t('butler.assistant.acpNoWorkspace'));
       return;
     }
     setDispatchingAcp(true);
@@ -305,15 +380,51 @@ export default function ButlerAssistantCenter() {
       });
       openAcpHub(resolvedAcpAgentId);
       void sendAcpPrompt(session.sessionKey, prompt, { injectMemory: true }).catch((err) => {
-        toast.error(err, 'ACP 客户端执行失败');
+        toast.error(err, t('butler.assistant.acpRunFailed'));
       });
-      toast.success(`已派发给 ACP 客户端（${session.agentName}）`);
+      toast.success(t('butler.assistant.acpDispatched', { agentName: session.agentName }));
     } catch (error) {
-      toast.error(error, '派发 ACP 客户端失败');
+      toast.error(error, t('butler.assistant.acpDispatchFailed'));
     } finally {
       setDispatchingAcp(false);
     }
   };
+
+  const askButlerAbout = (prompt: string, taskTitle: string) => {
+    const ws = useCodexWorkspace.getState();
+    if (isTauriRuntime() && ws.status === 'ready') {
+      void ws.startTask(prompt, taskTitle).then(() => {
+        setButlerView('conversation');
+        toast.success(t('butler.assistant.handoffStarted'));
+      }).catch((err) => toast.error(err, t('butler.assistant.handoffFailed')));
+    } else {
+      ws.setComposerDraft(prompt);
+      setButlerView('conversation');
+      toast.info(t('butler.assistant.handoffDrafted'));
+    }
+  };
+
+  const unreadInsights = useMemo(
+    () => cognitionInsights.filter((item) => item.status === 'unread' && item.level !== 'silent_log'),
+    [cognitionInsights],
+  );
+  const armedWatchpoints = useMemo(
+    () => cognitionWatchpoints.filter((item) => item.status === 'armed'),
+    [cognitionWatchpoints],
+  );
+  const unconsumedObsCount = useMemo(
+    () => cognitionObservations.filter((item) => !item.consumedAt).length,
+    [cognitionObservations],
+  );
+
+  const activeRoutinesCount = useMemo(
+    () => routines.filter((r) => r.enabled && !r.workTemplate).length,
+    [routines],
+  );
+  const unreadRoutineRunsCount = useMemo(
+    () => routines.reduce((sum, r) => sum + r.runs.filter((run) => !run.archived && !run.readAt).length, 0),
+    [routines],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-3">
@@ -324,20 +435,20 @@ export default function ButlerAssistantCenter() {
             <button
               type="button"
               onClick={toggleButlerSidebarCollapsed}
-              title="展开会话列表 (Ctrl+B)"
-              aria-label="展开会话列表"
+              title={t('butler.sidebar.expandTitle')}
+              aria-label={t('butler.sidebar.expandAria')}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
             >
               <PanelLeft size={16} />
             </button>
           ) : null}
           <Sparkles size={16} className="shrink-0 text-primary" />
-          <h1 className="truncate text-sm font-semibold text-ink">个人助理</h1>
+          <h1 className="truncate text-sm font-semibold text-ink">{t('butler.assistant.title')}</h1>
           <span
             className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-4 px-2.5 py-0.5 text-2xs font-medium text-ink-2"
           >
             <span className={`h-1.5 w-1.5 rounded-full ${memoryPaused ? 'bg-warning' : 'bg-success'}`} />
-            <span>{memoryPaused ? '记忆已暂停' : `记忆在线 (${snapshot.metrics.memoryCount})`}</span>
+            <span>{memoryPaused ? t('butler.assistant.memoryPausedBadge') : t('butler.assistant.memoryOnlineBadge', { count: snapshot.metrics.memoryCount })}</span>
           </span>
         </div>
 
@@ -348,9 +459,7 @@ export default function ButlerAssistantCenter() {
             onClick={() => {
               setMemoryPaused(!memoryPaused);
               toast.info(
-                !memoryPaused
-                  ? '已暂停长期记忆召回与自动沉淀'
-                  : '已恢复长期记忆召回与沉淀',
+                t(!memoryPaused ? 'butler.assistant.memoryPausedToast' : 'butler.assistant.memoryResumedToast'),
               );
             }}
             className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition ${
@@ -358,18 +467,26 @@ export default function ButlerAssistantCenter() {
                 ? 'border-warning/40 bg-warning/10 text-warning'
                 : 'border-line bg-surface-4 text-ink-2 shadow-raise hover:bg-fill-hover hover:text-ink'
             }`}
-            title="开启后不会向 AI 提示词注入任何长期记忆"
+            title={t('butler.assistant.memoryPauseTitle')}
           >
             {memoryPaused ? <PlayCircle size={13} /> : <PauseCircle size={13} />}
-            <span>{memoryPaused ? '恢复记忆召回' : '暂停记忆召回'}</span>
+            <span>{t(memoryPaused ? 'butler.assistant.resumeMemory' : 'butler.assistant.pauseMemory')}</span>
           </button>
 
           {/* 主分栏切换 */}
           <div className="flex items-center rounded-lg border border-line-soft bg-surface-2 p-0.5 text-xs">
             {[
-              { id: 'briefing' as const, label: '今日助理', icon: Sparkles },
-              { id: 'memories' as const, label: `长期记忆库 (${memories.length})`, icon: Brain },
-              { id: 'archive' as const, label: `归档 (${digests.length})`, icon: History },
+              { id: 'briefing' as const, label: t('butler.assistant.tabBriefing'), icon: Sparkles },
+              {
+                id: 'cognition' as const,
+                label: unreadInsights.length > 0
+                  ? t('butler.assistant.tabCognitionUnread', { count: unreadInsights.length })
+                  : t('butler.assistant.tabCognition'),
+                icon: Radar,
+              },
+              { id: 'skills' as const, label: t('butler.assistant.tabSkills', { count: skillsCount }), icon: Wand2 },
+              { id: 'memories' as const, label: t('butler.assistant.tabMemories', { count: memories.length }), icon: Brain },
+              { id: 'archive' as const, label: t('butler.assistant.tabArchive', { count: digests.length }), icon: History },
             ].map((tab) => {
               const Icon = tab.icon;
               return (
@@ -396,6 +513,26 @@ export default function ButlerAssistantCenter() {
       <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-5">
         {sectionTab === 'briefing' && (
           <div className="space-y-4">
+            {unreadInsights.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/30 bg-primary/5 px-4 py-2.5 text-xs">
+                <div className="flex min-w-0 items-center gap-2">
+                  <Radar size={14} className="shrink-0 text-primary" />
+                  <span className="font-semibold text-ink">
+                    {t('butler.cognition.briefingBanner', {
+                      count: unreadInsights.length,
+                      topTitle: unreadInsights[0].title,
+                    })}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSectionTab('cognition')}
+                  className="rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white transition hover:bg-primary-hover"
+                >
+                  {t('butler.cognition.openInbox')}
+                </button>
+              </div>
+            )}
             {/* 模式切换 + 操作工具条 */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface-3 p-3 shadow-raise">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -410,8 +547,8 @@ export default function ButlerAssistantCenter() {
                         : 'border-line-soft bg-surface-4 text-ink-2 hover:bg-fill-hover'
                     }`}
                   >
-                    <div className="text-xs font-semibold">{item.label}</div>
-                    <div className="text-xs opacity-75">{item.subtitle}</div>
+                    <div className="text-xs font-semibold">{t(item.labelKey)}</div>
+                    <div className="text-xs opacity-75">{t(item.subtitleKey)}</div>
                   </button>
                 ))}
               </div>
@@ -423,7 +560,7 @@ export default function ButlerAssistantCenter() {
                   className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface-4 px-3 py-1.5 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover hover:text-ink"
                 >
                   <RefreshCw size={12} />
-                  <span>刷新快照</span>
+                  <span>{t('butler.assistant.refreshSnapshot')}</span>
                 </button>
 
                 <button
@@ -433,7 +570,7 @@ export default function ButlerAssistantCenter() {
                   className="inline-flex items-center gap-1.5 rounded-xl border border-line bg-surface-4 px-3 py-1.5 text-xs font-medium text-ink shadow-raise transition hover:bg-fill-hover disabled:opacity-50"
                 >
                   <BookmarkCheck size={12} className="text-success" />
-                  <span>{savingDigest ? '归档中…' : '保存归档'}</span>
+                  <span>{t(savingDigest ? 'butler.assistant.archivingDigest' : 'butler.assistant.saveArchive')}</span>
                 </button>
 
                 <button
@@ -447,13 +584,13 @@ export default function ButlerAssistantCenter() {
                   ) : (
                     <Sparkles size={12} />
                   )}
-                  <span>交给管家深度梳理</span>
+                  <span>{t('butler.assistant.sendToButler')}</span>
                 </button>
 
                 <div className="flex items-center gap-1">
                   {acpAgents.length > 1 && (
                     <select
-                      aria-label="选择 ACP 客户端"
+                      aria-label={t('butler.assistant.selectAcpClientAria')}
                       value={resolvedAcpAgentId}
                       onChange={(e) => setSelectedAcpAgentId(e.target.value)}
                       className="h-8 rounded-xl border border-line bg-surface-4 px-2 text-xs text-ink outline-none focus:border-primary"
@@ -476,7 +613,7 @@ export default function ButlerAssistantCenter() {
                     ) : (
                       <Cpu size={12} />
                     )}
-                    <span>派发 ACP 客户端执行</span>
+                    <span>{t('butler.assistant.dispatchAcp')}</span>
                   </button>
                 </div>
               </div>
@@ -485,44 +622,47 @@ export default function ButlerAssistantCenter() {
             {/* Bento 指标卡 */}
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <div className="rounded-2xl border border-line bg-surface-4 p-3.5 shadow-raise">
-                <div className="text-xs text-ink-3">未完成待办</div>
+                <div className="text-xs text-ink-3">{t('butler.assistant.metricOpenTodos')}</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className="text-lg font-bold text-ink">{snapshot.metrics.openTodos}</span>
                   {snapshot.metrics.overdueTodos > 0 && (
                     <span className="rounded-full bg-danger/15 px-2 py-0.5 text-2xs font-medium text-danger">
-                      {snapshot.metrics.overdueTodos} 逾期
+                      {t('butler.assistant.metricOverdue', { count: snapshot.metrics.overdueTodos })}
                     </span>
                   )}
                   {snapshot.metrics.dueTodayTodos > 0 && (
                     <span className="rounded-full bg-warning/15 px-2 py-0.5 text-2xs font-medium text-warning">
-                      {snapshot.metrics.dueTodayTodos} 今日截止
+                      {t('butler.assistant.metricDueToday', { count: snapshot.metrics.dueTodayTodos })}
                     </span>
                   )}
                 </div>
               </div>
 
               <div className="rounded-2xl border border-line bg-surface-4 p-3.5 shadow-raise">
-                <div className="text-xs text-ink-3">今日日程</div>
+                <div className="text-xs text-ink-3">{t('butler.assistant.metricTodayEvents')}</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className="text-lg font-bold text-ink">{snapshot.metrics.todayEvents}</span>
                   <span className="text-xs text-ink-3">
-                    已完成 {snapshot.metrics.completedTodayEvents}
+                    {t('butler.assistant.metricCompletedEvents', { count: snapshot.metrics.completedTodayEvents })}
                   </span>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-line bg-surface-4 p-3.5 shadow-raise">
-                <div className="text-xs text-ink-3">活跃工作流 / ACP</div>
+                <div className="text-xs text-ink-3">{t('butler.assistant.metricActiveWorkflows')}</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span className="text-lg font-bold text-ink">{snapshot.metrics.activeWorkflows}</span>
                   <span className="text-xs text-ink-3">
-                    ACP {snapshot.metrics.acpActiveSessions} · 阻塞 {snapshot.metrics.blockedCount}
+                    {t('butler.assistant.metricAcpAndBlocked', {
+                      acp: snapshot.metrics.acpActiveSessions,
+                      blocked: snapshot.metrics.blockedCount,
+                    })}
                   </span>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-line bg-surface-4 p-3.5 shadow-raise">
-                <div className="text-xs text-ink-3">待人工确认</div>
+                <div className="text-xs text-ink-3">{t('butler.assistant.metricWaitingApproval')}</div>
                 <div className="mt-1 flex items-baseline gap-2">
                   <span
                     className={`text-lg font-bold ${
@@ -537,10 +677,64 @@ export default function ButlerAssistantCenter() {
                     className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                   >
                     <SquareKanban size={11} />
-                    查看看板
+                    {t('butler.assistant.viewBoard')}
                   </button>
                 </div>
               </div>
+            </div>
+
+            {/* 主动哨兵 Watchers 条 */}
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface-3 px-3.5 py-2.5 text-xs shadow-raise">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-ink">
+                <Bell size={13} className="text-primary" />
+                <span>{t('butler.assistant.watchersTitle')}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setButlerView('kanban')}
+                className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-4 px-2.5 py-1 text-xs text-ink-2 transition hover:border-primary/40 hover:text-ink"
+              >
+                <SquareKanban size={11} className="text-warning" />
+                <span>
+                  {t('butler.assistant.watcherWorkSummary', {
+                    blocked: snapshot.metrics.blockedCount,
+                    approval: snapshot.metrics.waitingApprovalCount,
+                  })}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setButlerView('routines')}
+                className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-4 px-2.5 py-1 text-xs text-ink-2 transition hover:border-primary/40 hover:text-ink"
+              >
+                <Clock size={11} className="text-primary" />
+                <span>
+                  {t('butler.assistant.watcherRoutineSummary', {
+                    active: activeRoutinesCount,
+                    unread: unreadRoutineRunsCount,
+                  })}
+                </span>
+              </button>
+              {gitInspect?.repoTopLevel ? (
+                <button
+                  type="button"
+                  onClick={() =>
+                    askButlerAbout(
+                      `Inspect dirty working tree changes on branch ${gitInspect.branch || 'HEAD'} (${gitInspect.dirtyFiles.length} changed files) and summarize risks.`,
+                      t('butler.assistant.watcherGitTitle'),
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-4 px-2.5 py-1 text-xs text-ink-2 transition hover:border-primary/40 hover:text-ink"
+                >
+                  <GitBranch size={11} className="text-success" />
+                  <span>
+                    {t('butler.assistant.watcherGitSummary', {
+                      branch: gitInspect.branch || 'HEAD',
+                      dirty: gitInspect.dirtyFiles.length,
+                    })}
+                  </span>
+                </button>
+              ) : null}
             </div>
 
             {/* 三栏结构化简报明细 */}
@@ -551,13 +745,13 @@ export default function ButlerAssistantCenter() {
                   <div className="mb-3 flex items-center justify-between">
                     <h2 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
                       <Layers size={14} className="text-primary" />
-                      <span>重点聚焦事项</span>
+                      <span>{t('butler.assistant.focusItemsTitle')}</span>
                     </h2>
-                    <span className="text-xs text-ink-3">{snapshot.focusItems.length} 项</span>
+                    <span className="text-xs text-ink-3">{tp(snapshot.focusItems.length, 'butler.assistant.itemCountOne', 'butler.assistant.itemCountOther')}</span>
                   </div>
                   {snapshot.focusItems.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-line p-5 text-center text-xs text-ink-3">
-                      暂无未完成焦点待办，可前往统一看板或对话新建任务
+                      {t('butler.assistant.noFocusItems')}
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -579,6 +773,28 @@ export default function ButlerAssistantCenter() {
                                 {item.stage}
                               </span>
                             )}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                askButlerAbout(
+                                  `Help advance focus item "${item.title}" (${item.reason}) and propose the next concrete step.`,
+                                  item.title,
+                                )
+                              }
+                              title={t('butler.assistant.askButlerItem')}
+                              className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary transition hover:bg-primary/20"
+                            >
+                              <MessageSquarePlus size={11} />
+                              <span>{t('butler.assistant.askButlerItem')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setButlerView('kanban')}
+                              title={t('butler.assistant.viewBoard')}
+                              className="rounded-md border border-line bg-surface-3 px-2 py-0.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
+                            >
+                              {t('butler.assistant.viewBoard')}
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -591,10 +807,10 @@ export default function ButlerAssistantCenter() {
                   <section className="rounded-2xl border border-line bg-surface-3 p-4 shadow-card">
                     <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-ink">
                       <Clock size={14} className="text-warning" />
-                      <span>承诺与等待协同</span>
+                      <span>{t('butler.assistant.commitmentsTitle')}</span>
                     </h2>
                     {snapshot.commitments.length === 0 ? (
-                      <p className="text-xs text-ink-3">暂无记录在案的对外承诺或等待回复事项。</p>
+                      <p className="text-xs text-ink-3">{t('butler.assistant.noCommitments')}</p>
                     ) : (
                       <div className="space-y-2">
                         {snapshot.commitments.map((c, idx) => (
@@ -611,12 +827,26 @@ export default function ButlerAssistantCenter() {
                                 }`}
                               >
                                 {c.direction === 'committed_to'
-                                  ? `我承诺 -> ${c.person}`
-                                  : `等待 <- ${c.person}`}
+                                  ? t('butler.assistant.committedTo', { person: c.person })
+                                  : t('butler.assistant.waitingFor', { person: c.person })}
                               </span>
-                              {c.due && <span className="text-xs text-ink-3">截止 {c.due}</span>}
+                              {c.due && <span className="text-xs text-ink-3">{t('butler.assistant.duePrefix', { due: c.due })}</span>}
                             </div>
-                            <div className="mt-1 truncate font-medium text-ink">{c.title}</div>
+                            <div className="mt-1 flex items-center justify-between gap-2">
+                              <span className="truncate font-medium text-ink">{c.title}</span>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  askButlerAbout(
+                                    `Draft a concise status follow-up with ${c.person} regarding "${c.title}"${c.due ? ` (due ${c.due})` : ''}.`,
+                                    c.title,
+                                  )
+                                }
+                                className="shrink-0 rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs text-primary hover:bg-primary/20"
+                              >
+                                {t('butler.assistant.followUpItem')}
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -626,16 +856,40 @@ export default function ButlerAssistantCenter() {
                   <section className="rounded-2xl border border-line bg-surface-3 p-4 shadow-card">
                     <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-ink">
                       <CheckCircle2 size={14} className="text-success" />
-                      <span>建议行动清单</span>
+                      <span>{t('butler.assistant.actionItemsTitle')}</span>
                     </h2>
                     <ul className="space-y-2 text-xs text-ink-2">
                       {snapshot.actionItems.map((act, idx) => (
                         <li
                           key={idx}
-                          className="flex items-start gap-2 rounded-xl border border-line-soft bg-surface-4 px-3 py-2"
+                          className="flex items-start justify-between gap-2 rounded-xl border border-line-soft bg-surface-4 px-3 py-2"
                         >
-                          <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                          <span>{act}</span>
+                          <div className="flex min-w-0 items-start gap-2">
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+                            <span>{act}</span>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                useTodos.getState().add({ title: act, source: 'manual', priority: 2 });
+                                toast.success(t('butler.assistant.todoAddedFromBriefing'));
+                              }}
+                              title={t('butler.assistant.createTodoItem')}
+                              className="inline-flex items-center gap-1 rounded border border-line bg-surface-3 px-1.5 py-0.5 text-xs text-ink-2 transition hover:border-primary/40 hover:text-primary"
+                            >
+                              <CheckSquare size={11} />
+                              <span>{t('butler.assistant.createTodoItem')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => askButlerAbout(`Execute action item: ${act}`, act.slice(0, 48))}
+                              title={t('butler.assistant.askButlerItem')}
+                              className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-xs text-primary transition hover:bg-primary/20"
+                            >
+                              {t('butler.assistant.askButlerItem')}
+                            </button>
+                          </div>
                         </li>
                       ))}
                     </ul>
@@ -648,10 +902,10 @@ export default function ButlerAssistantCenter() {
                 <section className="rounded-2xl border border-line bg-surface-3 p-4 shadow-card">
                   <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-ink">
                     <Calendar size={14} className="text-primary" />
-                    <span>今日日程</span>
+                    <span>{t('butler.assistant.scheduleTitle')}</span>
                   </h2>
                   {snapshot.schedule.length === 0 ? (
-                    <p className="text-xs text-ink-3">今日暂无日历事件。</p>
+                    <p className="text-xs text-ink-3">{t('butler.assistant.noSchedule')}</p>
                   ) : (
                     <div className="space-y-1.5">
                       {snapshot.schedule.map((ev) => (
@@ -664,8 +918,8 @@ export default function ButlerAssistantCenter() {
                           </span>
                           <span className="shrink-0 text-xs text-ink-3">
                             {ev.allDay
-                              ? '全天'
-                              : [ev.startTime, ev.endTime].filter(Boolean).join('-') || '全天'}
+                              ? t('butler.assistant.allDay')
+                              : [ev.startTime, ev.endTime].filter(Boolean).join('-') || t('butler.assistant.allDay')}
                           </span>
                         </div>
                       ))}
@@ -677,42 +931,43 @@ export default function ButlerAssistantCenter() {
                   <div className="mb-3 flex items-center justify-between">
                     <h2 className="flex items-center gap-1.5 text-sm font-semibold text-ink">
                       <Brain size={14} className="text-primary" />
-                      <span>置顶与相关记忆</span>
+                      <span>{t('butler.assistant.pinnedMemoriesTitle')}</span>
                     </h2>
                     <button
                       type="button"
                       onClick={() => setSectionTab('memories')}
                       className="text-xs text-primary hover:underline"
                     >
-                      打开记忆库
+                      {t('butler.assistant.openMemoryVault')}
                     </button>
                   </div>
                   {memoryPaused ? (
                     <div className="rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
-                      当前已暂停记忆召回，向导与 ACP 会话将不会注入任何个人记忆。
+                      {t('butler.assistant.memoryPausedNotice')}
                     </div>
                   ) : snapshot.relevantMemories.length === 0 ? (
-                    <p className="text-xs text-ink-3">暂无长期记忆条目，可在记忆库中手动添加或从汇报沉淀。</p>
+                    <p className="text-xs text-ink-3">{t('butler.assistant.noRelevantMemories')}</p>
                   ) : (
                     <div className="space-y-1.5">
-                      {snapshot.relevantMemories.map((m) => (
-                        <div
-                          key={m.id}
-                          className="rounded-xl border border-line-soft bg-surface-4 px-3 py-2 text-xs"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate font-semibold text-ink">{m.title}</span>
-                            <span
-                              className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium ${
-                                categoryMeta(m.category).badgeClass
-                              }`}
-                            >
-                              {categoryMeta(m.category).label}
-                            </span>
+                      {snapshot.relevantMemories.map((m) => {
+                        const meta = categoryMeta(m.category);
+                        return (
+                          <div
+                            key={m.id}
+                            className="rounded-xl border border-line-soft bg-surface-4 px-3 py-2 text-xs"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate font-semibold text-ink">{m.title}</span>
+                              <span
+                                className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-medium ${meta.badgeClass}`}
+                              >
+                                {meta.labelKey ? t(meta.labelKey) : meta.fallbackLabel}
+                              </span>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-xs text-ink-3">{m.content}</p>
                           </div>
-                          <p className="mt-1 line-clamp-2 text-xs text-ink-3">{m.content}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </section>
@@ -721,10 +976,540 @@ export default function ButlerAssistantCenter() {
           </div>
         )}
 
+        {sectionTab === 'cognition' && (
+          <div className="space-y-4">
+            {/* 主动感知与 Dream 控制条 */}
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface-3 p-4 shadow-raise">
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Radar size={15} className="text-primary" />
+                  <h2 className="text-sm font-semibold text-ink">{t('butler.cognition.heading')}</h2>
+                  <span className="rounded-full bg-fill-1 px-2 py-0.5 text-xs text-ink-2">
+                    {t('butler.cognition.statsBadge', {
+                      obs: unconsumedObsCount,
+                      wp: armedWatchpoints.length,
+                    })}
+                  </span>
+                </div>
+                <p className="text-xs text-ink-3">
+                  {t('butler.cognition.subtitle', {
+                    lastActive: lastUserActivityAt > 0
+                      ? formatDateTime(lastUserActivityAt, DATE_TIME_OPTIONS, locale)
+                      : t('butler.cognition.neverLabel'),
+                    lastWake: lastAmbientWakeAt > 0
+                      ? formatDateTime(lastAmbientWakeAt, DATE_TIME_OPTIONS, locale)
+                      : t('butler.cognition.neverLabel'),
+                    lastDream: lastDreamDate ?? t('butler.cognition.neverLabel'),
+                  })}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAmbientEnabled(!ambientEnabled)}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition ${
+                    ambientEnabled
+                      ? 'border-primary/40 bg-primary/10 text-primary'
+                      : 'border-line bg-surface-4 text-ink-3 hover:text-ink'
+                  }`}
+                >
+                  <Radar size={12} />
+                  <span>{t(ambientEnabled ? 'butler.cognition.ambientOn' : 'butler.cognition.ambientOff')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDreamEnabled(!dreamEnabled)}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition ${
+                    dreamEnabled
+                      ? 'border-purple-500/40 bg-purple-500/10 text-purple-700 dark:text-purple-300'
+                      : 'border-line bg-surface-4 text-ink-3 hover:text-ink'
+                  }`}
+                >
+                  <Moon size={12} />
+                  <span>{t(dreamEnabled ? 'butler.cognition.dreamOn' : 'butler.cognition.dreamOff')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={ambientRunning}
+                  onClick={() => {
+                    void runAmbientTurn('manual').then((res) => {
+                      if (res.ran) toast.success(t('butler.cognition.pulseDone'));
+                      else toast.info(res.output || t('butler.cognition.pulseSkipped'));
+                    });
+                  }}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-line bg-surface-4 px-3 text-xs font-medium text-ink shadow-raise transition hover:bg-fill-hover disabled:opacity-50"
+                >
+                  {ambientRunning ? <Loader2 size={12} className="animate-spin" /> : <PlayCircle size={12} />}
+                  <span>{t('butler.cognition.runPulseNow')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={dreamRunning}
+                  onClick={() => {
+                    void runDreamNow().then((entry) => {
+                      toast.success(
+                        t('butler.cognition.dreamDone', {
+                          merged: entry.memoriesConsolidated,
+                          skills: entry.skillsEvolved,
+                        }),
+                      );
+                    }).catch((err) => toast.error(err, t('butler.cognition.dreamFailed')));
+                  }}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
+                >
+                  {dreamRunning ? <Loader2 size={12} className="animate-spin" /> : <Moon size={12} />}
+                  <span>{t('butler.cognition.runDreamNow')}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* 主动注意力收件箱 */}
+              <section className="rounded-2xl border border-line bg-surface-3 p-4 shadow-raise">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                    <Bell size={14} className="text-primary" />
+                    <span>{t('butler.cognition.inboxTitle')}</span>
+                  </h3>
+                  <span className="text-xs text-ink-3">
+                    {t('butler.cognition.unreadCount', { count: unreadInsights.length })}
+                  </span>
+                </div>
+
+                {cognitionInsights.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-3">
+                    {t('butler.cognition.inboxEmpty')}
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {cognitionInsights.slice(0, 12).map((item) => {
+                      const sharePayload: ButlerSharePayload = {
+                        kind: 'insight',
+                        id: item.id,
+                        insightKind: item.kind,
+                        title: item.title,
+                        summary: item.summary,
+                        suggestedActions: item.suggestedActions?.map((a) => a.label),
+                        ref: item.ref,
+                      };
+                      const pendingAction = item.ref?.actionId
+                        ? ledgerActions.find(
+                            (a) => a.id === item.ref?.actionId && a.state === 'awaiting_approval',
+                          )
+                        : undefined;
+                      const refAcpSession = item.ref?.sessionKey
+                        ? acpSessionsMap[item.ref.sessionKey]
+                        : undefined;
+
+                      return (
+                      <article
+                        key={item.id}
+                        draggable
+                        onDragStart={(e) => writeButlerShareDrag(e.dataTransfer, sharePayload)}
+                        className={`rounded-xl border p-3 transition ${
+                          item.status === 'unread'
+                            ? 'border-primary/35 bg-primary/5'
+                            : 'border-line-soft bg-surface-4 opacity-80'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-1.5">
+                            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-xs font-medium text-ink-2">
+                              {t(`butler.cognition.kind.${item.kind}`)}
+                            </span>
+                            <span className="truncate text-xs font-semibold text-ink">{item.title}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <ShareToRoomButton payload={sharePayload} compact />
+                            <span className="text-xs text-ink-3">
+                              {formatDateTime(item.createdAt, DATE_TIME_OPTIONS, locale)}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-ink-2">
+                          {item.summary}
+                        </p>
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                          {(item.suggestedActions ?? []).map((act, idx) => (
+                            <button
+                              key={`${item.id}:act:${idx}`}
+                              type="button"
+                              onClick={() => {
+                                markInsightFeedback(item.id, 'acted');
+                                if (act.prompt) {
+                                  askButlerAbout(act.prompt, act.label);
+                                }
+                              }}
+                              className="rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white transition hover:bg-primary-hover"
+                            >
+                              {act.label}
+                            </button>
+                          ))}
+                          {!item.suggestedActions?.length && item.status === 'unread' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                markInsightFeedback(item.id, 'acted');
+                                askButlerAbout(`${item.title}\n\n${item.summary}`, item.title);
+                              }}
+                              className="rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-white transition hover:bg-primary-hover"
+                            >
+                              {t('butler.cognition.handleInButler')}
+                            </button>
+                          )}
+                          {pendingAction ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  markInsightFeedback(item.id, 'acted');
+                                  const isExternal = Boolean(readExternalActionSpec(pendingAction));
+                                  const actionPromise = isExternal
+                                    ? executePreparedExternalAction(pendingAction.id, true)
+                                    : transitionDispatchAction({
+                                        id: pendingAction.id,
+                                        state: 'prepared',
+                                        expectedState: 'awaiting_approval',
+                                      });
+                                  void actionPromise
+                                    .then(() => toast.success(t('butler.cognition.actionApprovedToast')))
+                                    .catch((err) => toast.error(err));
+                                }}
+                                className="rounded-lg border border-success/40 bg-success/15 px-2 py-1 text-xs font-medium text-success hover:bg-success/25"
+                              >
+                                {t('butler.cognition.approveAction')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  markInsightFeedback(item.id, 'dismissed');
+                                  void transitionDispatchAction({
+                                    id: pendingAction.id,
+                                    state: 'canceled',
+                                    expectedState: 'awaiting_approval',
+                                  })
+                                    .then(() => toast.info(t('butler.cognition.actionRejectedToast')))
+                                    .catch((err) => toast.error(err));
+                                }}
+                                className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-3 hover:text-danger"
+                              >
+                                {t('butler.cognition.rejectAction')}
+                              </button>
+                            </>
+                          ) : null}
+                          {item.ref?.rid ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const chat = useChat.getState();
+                                setModule('messages');
+                                if (item.ref?.mid) {
+                                  void chat.jumpToMessage(item.ref.mid, item.ref.rid);
+                                } else if (item.ref?.rid) {
+                                  void chat.openRoom(item.ref.rid);
+                                }
+                              }}
+                              className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 hover:text-primary"
+                            >
+                              {t('butler.cognition.jumpToRoom')}
+                            </button>
+                          ) : null}
+                          {item.ref?.sessionKey ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveAcpSession(item.ref?.sessionKey ?? null);
+                                openAcpHub(refAcpSession?.agentId ?? null);
+                              }}
+                              className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 hover:text-primary"
+                            >
+                              {t('butler.cognition.jumpToAcp')}
+                            </button>
+                          ) : null}
+                          {item.ref?.todoId ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setButlerView('kanban');
+                              }}
+                              className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 hover:text-primary"
+                            >
+                              {t('butler.cognition.jumpToCard')}
+                            </button>
+                          ) : null}
+                          {item.status === 'unread' ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => markInsightFeedback(item.id, 'acknowledged')}
+                                className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-2 hover:text-ink"
+                              >
+                                {t('butler.cognition.acknowledge')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => markInsightFeedback(item.id, 'dismissed')}
+                                className="rounded-lg border border-line bg-surface-2 px-2 py-1 text-xs text-ink-3 hover:text-danger"
+                              >
+                                {t('butler.cognition.dismissNoise')}
+                              </button>
+                            </>
+                          ) : (
+                            <span className="text-xs text-ink-3">
+                              {t(`butler.cognition.status.${item.status}`)}
+                            </span>
+                          )}
+                        </div>
+                      </article>
+                    );})}
+                  </div>
+                )}
+              </section>
+
+              {/* 自调度观察点与观测缓冲 */}
+              <section className="space-y-4 rounded-2xl border border-line bg-surface-3 p-4 shadow-raise">
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                      <Clock size={14} className="text-primary" />
+                      <span>{t('butler.cognition.watchpointsTitle')}</span>
+                    </h3>
+                    <span className="text-xs text-ink-3">{armedWatchpoints.length}</span>
+                  </div>
+                  {armedWatchpoints.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-line p-3 text-xs text-ink-3">
+                      {t('butler.cognition.watchpointsEmpty')}
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {armedWatchpoints.map((wp) => {
+                        const wpPayload: ButlerSharePayload = {
+                          kind: 'watchpoint',
+                          watchpointId: wp.id,
+                          reason: wp.reason,
+                          conditionKind: wp.condition.kind,
+                          expiresAt: wp.expiresAt,
+                        };
+                        return (
+                        <div
+                          key={wp.id}
+                          draggable
+                          onDragStart={(e) => writeButlerShareDrag(e.dataTransfer, wpPayload)}
+                          className="flex items-center justify-between gap-2 rounded-xl border border-line-soft bg-surface-4 px-3 py-2 text-xs"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium text-ink">{wp.reason}</div>
+                            <div className="mt-0.5 truncate font-mono text-xs text-ink-3">
+                              {wp.condition.kind} · {t('butler.cognition.expiresAt', {
+                                time: formatDateTime(wp.expiresAt, DATE_TIME_OPTIONS, locale),
+                              })}
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            <ShareToRoomButton
+                              payload={wpPayload}
+                              bindableTarget={{
+                                targetKind: 'watchpoint',
+                                targetId: wp.id,
+                                label: wp.reason,
+                              }}
+                              compact
+                            />
+                            <button
+                              type="button"
+                              onClick={() => cancelWatchpoint(wp.id)}
+                              className="shrink-0 rounded-lg border border-line px-2 py-1 text-xs text-ink-3 hover:text-danger"
+                            >
+                              {t('common.cancel')}
+                            </button>
+                          </div>
+                        </div>
+                      );})}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <h3 className="mb-2 text-xs font-semibold text-ink">{t('butler.cognition.observationsTitle')}</h3>
+                  {cognitionObservations.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-line p-3 text-xs text-ink-3">
+                      {t('butler.cognition.observationsEmpty')}
+                    </p>
+                  ) : (
+                    <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+                      {cognitionObservations.slice(0, 15).map((obs) => (
+                        <div
+                          key={obs.id}
+                          className="flex items-start justify-between gap-2 rounded-lg border border-line-soft bg-surface-4 px-2.5 py-1.5 text-xs"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <span className="mr-1.5 rounded bg-fill-1 px-1.5 py-0.5 font-mono text-xs text-ink-2">
+                              {obs.source}/{obs.kind}
+                            </span>
+                            <span className="text-ink-2">{obs.summary}</span>
+                          </div>
+                          <span className="shrink-0 text-xs text-ink-3">
+                            {formatDateTime(obs.at, DATE_TIME_OPTIONS, locale)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            {/* 每日 Dream 进化日志 */}
+            <section className="rounded-2xl border border-line bg-surface-3 p-4 shadow-raise">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                  <Moon size={14} className="text-primary" />
+                  <span>{t('butler.cognition.dreamJournalTitle')}</span>
+                </h3>
+                <span className="text-xs text-ink-3">
+                  {t('butler.cognition.dreamCount', { count: dreamJournal.length })}
+                </span>
+              </div>
+              {dreamJournal.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-line p-4 text-center text-xs text-ink-3">
+                  {t('butler.cognition.dreamEmpty')}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {dreamJournal.slice(0, 7).map((entry) => {
+                    const hasRollbackables =
+                      (entry.memoryArtifacts?.length ?? 0) > 0 || (entry.skillSnapshots?.length ?? 0) > 0;
+                    return (
+                    <article
+                      key={entry.id}
+                      className="space-y-2 rounded-xl border border-line-soft bg-surface-4 p-3.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-semibold text-ink">{entry.dateKey}</span>
+                          <span className="rounded-full bg-fill-1 px-2 py-0.5 text-xs text-ink-2">
+                            {entry.trigger === 'auto'
+                              ? t('butler.cognition.triggerAuto')
+                              : t('butler.cognition.triggerManual')}
+                          </span>
+                          {entry.rolledBackAt ? (
+                            <span className="rounded-full bg-warning/15 px-2 py-0.5 text-xs text-warning">
+                              {t('butler.cognition.dreamRolledBackBadge')}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {hasRollbackables && !entry.rolledBackAt ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void rollbackDreamEntry(entry.id).then((res) => {
+                                  toast.info(t('butler.cognition.dreamRollbackToast', {
+                                    memories: res.restoredMemories,
+                                    skills: res.restoredSkills,
+                                  }));
+                                }).catch((err) => toast.error(err));
+                              }}
+                              className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-3 px-2 py-0.5 text-xs text-ink-2 hover:border-warning/40 hover:text-warning"
+                            >
+                              <RotateCcw size={11} aria-hidden="true" />
+                              <span>{t('butler.cognition.dreamRollbackBtn')}</span>
+                            </button>
+                          ) : null}
+                          <span className="text-xs text-ink-3">
+                            {formatDateTime(entry.at, DATE_TIME_OPTIONS, locale)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 text-xs">
+                        <span className="rounded-full bg-fill-1 px-2 py-0.5 text-ink-2">
+                          {t('butler.cognition.metricEpisodes', { count: entry.episodesReviewed })}
+                        </span>
+                        <span className="rounded-full bg-fill-1 px-2 py-0.5 text-ink-2">
+                          {t('butler.cognition.metricMerged', { count: entry.memoriesConsolidated })}
+                        </span>
+                        <span className="rounded-full bg-fill-1 px-2 py-0.5 text-ink-2">
+                          {t('butler.cognition.metricCreated', { count: entry.memoriesCreated })}
+                        </span>
+                        <span className="rounded-full bg-fill-1 px-2 py-0.5 text-ink-2">
+                          {t('butler.cognition.metricSkills', { count: entry.skillsEvolved })}
+                        </span>
+                      </div>
+                      {((entry.memoryArtifacts?.length ?? 0) > 0 || (entry.skillSnapshots?.length ?? 0) > 0) ? (
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          {(entry.memoryArtifacts ?? []).slice(0, 6).map((artifact) => (
+                            <button
+                              key={`${entry.id}:mem:${artifact.id}`}
+                              type="button"
+                              onClick={() => setSectionTab('memories')}
+                              className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-3 px-2 py-0.5 text-xs text-ink-2 hover:border-primary/40 hover:text-primary"
+                            >
+                              <Brain size={11} aria-hidden="true" />
+                              <span>{artifact.title}</span>
+                            </button>
+                          ))}
+                          {(entry.skillSnapshots ?? []).slice(0, 6).map((snap) => {
+                            const matchedSkill = allSkills.find(
+                              (s) => s.id === snap.currentSkillId || s.slug === snap.slug,
+                            );
+                            return (
+                              <div
+                                key={`${entry.id}:skill:${snap.slug}`}
+                                className="inline-flex items-center gap-1"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => setSectionTab('skills')}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20"
+                                >
+                                  <Wand2 size={11} aria-hidden="true" />
+                                  <span>/{snap.slug}</span>
+                                </button>
+                                {matchedSkill ? (
+                                  <ShareToRoomButton
+                                    compact
+                                    payload={{
+                                      kind: 'skill',
+                                      skillId: matchedSkill.id,
+                                      slug: matchedSkill.slug,
+                                      name: matchedSkill.name,
+                                      description: matchedSkill.description,
+                                      category: matchedSkill.category,
+                                      approvalPolicy: matchedSkill.approvalPolicy,
+                                      triggers: matchedSkill.triggers,
+                                      allowedTools: matchedSkill.allowedTools,
+                                      instructionsMd: matchedSkill.instructionsMd,
+                                    }}
+                                  />
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      <div className="butler-conversation-markdown text-xs">
+                        {renderMarkdownDoc(entry.reflectionMd)}
+                      </div>
+                    </article>
+                  );})}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {sectionTab === 'skills' && (
+          <ButlerSkillsStudio workspaceRoot={effectiveWorkspace} />
+        )}
+
         {sectionTab === 'memories' && (
           <div className="space-y-4">
-            <p className="text-xs text-ink-3">当前目录与全局背景 · 记忆仅供参考，项目强制规则与权限以版本化资料和当前授权为准。</p>
-            <label className="inline-flex items-center gap-2 text-xs text-ink-2"><input type="checkbox" checked={showMemoryHistory} onChange={(e) => setShowMemoryHistory(e.target.checked)} />显示停用、待确认、过期与已纠正的历史</label>
+            <p className="text-xs text-ink-3">{t('butler.assistant.memoryScopeNote')}</p>
+            <label className="inline-flex items-center gap-2 text-xs text-ink-2"><input type="checkbox" checked={showMemoryHistory} onChange={(e) => setShowMemoryHistory(e.target.checked)} />{t('butler.assistant.showMemoryHistory')}</label>
             {/* 记忆库搜索、分类与新增 */}
             <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-surface-3 p-3 shadow-raise">
               <div className="flex flex-wrap items-center gap-2">
@@ -734,7 +1519,7 @@ export default function ButlerAssistantCenter() {
                     type="search"
                     value={memoryQuery}
                     onChange={(e) => setMemoryQuery(e.target.value)}
-                    placeholder="搜索记忆标题、内容、标签或工作区…"
+                    placeholder={t('butler.assistant.searchMemoryPlaceholder')}
                     className="h-8 w-64 rounded-xl border border-line bg-surface-4 pl-8 pr-3 text-xs text-ink outline-none focus:border-primary"
                   />
                 </div>
@@ -751,7 +1536,7 @@ export default function ButlerAssistantCenter() {
                           : 'bg-fill-2 text-ink-2 hover:bg-fill-hover'
                       }`}
                     >
-                      {cat.label}
+                      {t(cat.labelKey)}
                     </button>
                   ))}
                 </div>
@@ -761,25 +1546,25 @@ export default function ButlerAssistantCenter() {
                 {memories.length > 0 && (
                   confirmClearScope ? (
                     <div className="flex items-center gap-1 rounded-xl border border-danger/40 bg-danger/10 px-2.5 py-1 text-xs">
-                      <span className="text-danger">确认清空当前账号记忆？</span>
+                      <span className="text-danger">{t('butler.assistant.confirmClearMemories')}</span>
                       <button
                         type="button"
                         onClick={() =>
                           void clearScope().then((n) => {
                             setConfirmClearScope(false);
-                            toast.success(`已清空 ${n} 条长期记忆`);
+                            toast.success(tp(n, 'butler.assistant.clearedMemoriesToastOne', 'butler.assistant.clearedMemoriesToastOther'));
                           })
                         }
                         className="rounded bg-danger px-2 py-0.5 text-xs font-medium text-white"
                       >
-                        确认
+                        {t('common.confirm')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setConfirmClearScope(false)}
                         className="rounded px-1.5 py-0.5 text-xs text-ink-3 hover:text-ink"
                       >
-                        取消
+                        {t('common.cancel')}
                       </button>
                     </div>
                   ) : (
@@ -789,7 +1574,7 @@ export default function ButlerAssistantCenter() {
                       className="inline-flex items-center gap-1 rounded-xl border border-line bg-surface-4 px-2.5 py-1.5 text-xs text-ink-3 hover:border-danger/40 hover:text-danger"
                     >
                       <Trash2 size={12} />
-                      <span>清空本账号记忆</span>
+                      <span>{t('butler.assistant.clearAccountMemories')}</span>
                     </button>
                   )
                 )}
@@ -800,7 +1585,7 @@ export default function ButlerAssistantCenter() {
                   className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover"
                 >
                   <Plus size={13} />
-                  <span>新增长期记忆</span>
+                  <span>{t('butler.assistant.addMemory')}</span>
                 </button>
               </div>
             </div>
@@ -813,7 +1598,7 @@ export default function ButlerAssistantCenter() {
               >
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-semibold text-ink">
-                    {editingId ? '纠正长期记忆（保留旧版和来源）' : '新建长期记忆条目'}
+                    {t(editingId ? 'butler.assistant.editMemoryHeading' : 'butler.assistant.newMemoryHeading')}
                   </h2>
                   <button
                     type="button"
@@ -826,17 +1611,17 @@ export default function ButlerAssistantCenter() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-2">标题</label>
+                    <label className="mb-1 block text-xs font-medium text-ink-2">{t('butler.assistant.memoryTitleLabel')}</label>
                     <input
-                      aria-label="记忆标题"
+                      aria-label={t('butler.assistant.memoryTitleAria')}
                       value={memTitle}
                       onChange={(e) => setMemTitle(e.target.value)}
-                      placeholder="例如：代码提交前必须跑 regression 测试"
+                      placeholder={t('butler.assistant.memoryTitlePlaceholder')}
                       className="h-9 w-full rounded-xl border border-line bg-surface-4 px-3 text-xs text-ink outline-none focus:border-primary"
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-2">记忆分类</label>
+                    <label className="mb-1 block text-xs font-medium text-ink-2">{t('butler.assistant.memoryCategoryLabel')}</label>
                     <select
                       value={memCategory}
                       onChange={(e) => setMemCategory(e.target.value as ButlerMemoryCategory)}
@@ -844,7 +1629,7 @@ export default function ButlerAssistantCenter() {
                     >
                       {MEMORY_CATEGORIES.filter((c) => c.key !== 'all').map((cat) => (
                         <option key={cat.key} value={cat.key}>
-                          {cat.label}
+                          {t(cat.labelKey)}
                         </option>
                       ))}
                     </select>
@@ -853,14 +1638,14 @@ export default function ButlerAssistantCenter() {
 
                 <div>
                   <label className="mb-1 block text-xs font-medium text-ink-2">
-                    记忆内容（自动拦截 API Key / Token / 私钥）
+                    {t('butler.assistant.memoryContentLabel')}
                   </label>
                   <textarea
-                    aria-label="记忆内容"
+                    aria-label={t('butler.assistant.memoryContentAria')}
                     rows={3}
                     value={memContent}
                     onChange={(e) => setMemContent(e.target.value)}
-                    placeholder="填写值得跨会话保留的偏好、项目架构约定、人物分工或踩坑经验…"
+                    placeholder={t('butler.assistant.memoryContentPlaceholder')}
                     className="w-full rounded-xl border border-line bg-surface-4 p-3 text-xs text-ink outline-none focus:border-primary"
                   />
                   {!secretCheck.ok && (
@@ -873,7 +1658,7 @@ export default function ButlerAssistantCenter() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-2">标签（逗号分隔）</label>
+                    <label className="mb-1 block text-xs font-medium text-ink-2">{t('butler.assistant.memoryTagsLabel')}</label>
                     <input
                       value={memTags}
                       onChange={(e) => setMemTags(e.target.value)}
@@ -882,11 +1667,11 @@ export default function ButlerAssistantCenter() {
                     />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs font-medium text-ink-2">限定工作区（留空则全局生效）</label>
+                    <label className="mb-1 block text-xs font-medium text-ink-2">{t('butler.assistant.memoryWorkspaceLabel')}</label>
                     <input
                       value={memWorkspace}
                       onChange={(e) => setMemWorkspace(e.target.value)}
-                      placeholder="例如：d:\Repos\rocketchatx"
+                      placeholder={t('butler.assistant.memoryWorkspacePlaceholder')}
                       className="h-9 w-full rounded-xl border border-line bg-surface-4 px-3 text-xs text-ink outline-none focus:border-primary"
                     />
                   </div>
@@ -900,7 +1685,7 @@ export default function ButlerAssistantCenter() {
                       onChange={(e) => setMemPinned(e.target.checked)}
                       className="rounded border-line"
                     />
-                    <span>置顶此记忆（优先在摘要和提示词中召回）</span>
+                    <span>{t('butler.assistant.memoryPinOption')}</span>
                   </label>
 
                   <div className="flex items-center gap-2">
@@ -909,14 +1694,14 @@ export default function ButlerAssistantCenter() {
                       onClick={() => setEditorOpen(false)}
                       className="rounded-xl border border-line bg-surface-4 px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
                     >
-                      取消
+                      {t('common.cancel')}
                     </button>
                     <button
                       type="submit"
                       disabled={savingMem || !secretCheck.ok}
                       className="rounded-xl bg-primary px-4 py-1.5 text-xs font-medium text-white shadow-raise hover:bg-primary-hover disabled:opacity-50"
                     >
-                      {savingMem ? '保存中…' : '保存记忆'}
+                      {t(savingMem ? 'butler.assistant.savingMemory' : 'butler.assistant.saveMemory')}
                     </button>
                   </div>
                 </div>
@@ -927,16 +1712,16 @@ export default function ButlerAssistantCenter() {
             {loading && memories.length === 0 ? (
               <div className="flex h-48 items-center justify-center text-xs text-ink-3">
                 <Loader2 size={16} className="mr-2 animate-spin" />
-                正在加载长期记忆…
+                {t('butler.assistant.loadingMemories')}
               </div>
             ) : filteredMemories.length === 0 ? (
               <div className="flex h-56 flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-surface-3 p-6 text-center">
                 <Brain size={28} className="mb-2 text-ink-3 opacity-50" />
                 <div className="text-sm font-medium text-ink">
-                  {memories.length === 0 ? '长期记忆库为空' : '没有匹配的记忆条目'}
+                  {t(memories.length === 0 ? 'butler.assistant.emptyMemoriesTitle' : 'butler.assistant.noMatchingMemoriesTitle')}
                 </div>
                 <p className="mt-1 max-w-md text-xs text-ink-3">
-                  你可以手动添加编码规范与偏好，也可以在工作流汇报或对话后点击「沉淀长期记忆」自动提取。
+                  {t('butler.assistant.emptyMemoriesDesc')}
                 </p>
               </div>
             ) : (
@@ -959,17 +1744,17 @@ export default function ButlerAssistantCenter() {
                               <span
                                 className={`rounded-full px-2 py-0.5 text-2xs font-medium ${meta.badgeClass}`}
                               >
-                                {meta.label}
+                                {meta.labelKey ? t(meta.labelKey) : meta.fallbackLabel}
                               </span>
                               {entry.pinned && (
                                 <span className="inline-flex items-center gap-0.5 rounded-full bg-warning/15 px-2 py-0.5 text-2xs font-medium text-warning">
                                   <Pin size={10} />
-                                  置顶
+                                  {t('butler.assistant.pinnedBadge')}
                                 </span>
                               )}
                               {!entry.enabled && (
                                 <span className="rounded-full bg-fill-2 px-2 py-0.5 text-2xs text-ink-3">
-                                  {entry.supersededBy ? '已纠正' : entry.expiresAt && entry.expiresAt <= Date.now() ? '已过期' : entry.sourceKind === 'workflow_report' ? '待确认背景' : '已停用'}
+                                  {t(entry.supersededBy ? 'butler.assistant.statusSuperseded' : entry.expiresAt && entry.expiresAt <= Date.now() ? 'butler.assistant.statusExpired' : entry.sourceKind === 'workflow_report' ? 'butler.assistant.statusPendingBackground' : 'butler.assistant.statusDisabled')}
                                 </span>
                               )}
                             </div>
@@ -983,7 +1768,7 @@ export default function ButlerAssistantCenter() {
                               type="button"
                               disabled={Boolean(entry.supersededBy)}
                               onClick={() => void togglePin(entry.id)}
-                              title={entry.pinned ? '取消置顶' : '置顶'}
+                              title={t(entry.pinned ? 'butler.assistant.unpinTitle' : 'butler.assistant.pinTitle')}
                               className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"
                             >
                               {entry.pinned ? <PinOff size={13} /> : <Pin size={13} />}
@@ -991,8 +1776,8 @@ export default function ButlerAssistantCenter() {
                             <button
                               type="button"
                               disabled={Boolean(entry.supersededBy) || (entry.expiresAt != null && entry.expiresAt <= Date.now())}
-                              onClick={() => void toggleEnabled(entry.id).catch((error) => toast.error(error, '更新记忆失败'))}
-                              title={entry.enabled ? '停用此记忆' : '启用此记忆'}
+                              onClick={() => void toggleEnabled(entry.id).catch((error) => toast.error(error, t('butler.assistant.updateMemoryFailed')))}
+                              title={t(entry.enabled ? 'butler.assistant.disableMemoryTitle' : 'butler.assistant.enableMemoryTitle')}
                               className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"
                             >
                               {entry.enabled ? <Eye size={13} /> : <EyeOff size={13} />}
@@ -1001,7 +1786,7 @@ export default function ButlerAssistantCenter() {
                               type="button"
                               disabled={Boolean(entry.supersededBy)}
                               onClick={() => openEditMemoryEditor(entry)}
-                              title="纠正记忆"
+                              title={t('butler.assistant.correctMemoryTitle')}
                               className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover hover:text-ink"
                             >
                               <Edit3 size={13} />
@@ -1009,9 +1794,9 @@ export default function ButlerAssistantCenter() {
                             <button
                               type="button"
                               onClick={() =>
-                                void deleteMemory(entry.id).then(() => toast.info('已删除记忆'))
+                                void deleteMemory(entry.id).then(() => toast.info(t('butler.assistant.deletedMemoryToast')))
                               }
-                              title="删除"
+                              title={t('common.delete')}
                               className="rounded-lg p-1.5 text-ink-3 hover:bg-danger/10 hover:text-danger"
                             >
                               <Trash2 size={13} />
@@ -1023,12 +1808,25 @@ export default function ButlerAssistantCenter() {
                           {entry.content}
                         </p>
                         <details className="text-xs text-ink-3">
-                          <summary className="cursor-pointer">查看来源与有效性</summary>
-                          <p className="mt-1 break-all">来源：{entry.sourceKind} · {entry.sourceRef || '用户手动输入'}<br />作用域：{entry.workspaceRoot || '全局'}<br />更新时间：{formatDateTime(entry.updatedAt)}</p>
-                          {entry.supersededBy && <p className="break-all">已被纠正版本替代：{entry.supersededBy}</p>}
-                          {entry.expiresAt != null && <p>失效时间：{formatDateTime(entry.expiresAt)}</p>}
+                          <summary className="cursor-pointer">{t('butler.assistant.memoryProvenanceSummary')}</summary>
+                          <p className="mt-1 break-all">
+                            {t('butler.assistant.memorySourceLine', {
+                              kind: entry.sourceKind,
+                              ref: entry.sourceRef || t('butler.assistant.memoryManualSource'),
+                            })}
+                            <br />
+                            {t('butler.assistant.memoryScopeLine', {
+                              scope: entry.workspaceRoot || t('butler.assistant.memoryGlobalScope'),
+                            })}
+                            <br />
+                            {t('butler.assistant.memoryUpdatedLine', {
+                              time: formatDateTime(entry.updatedAt, DATE_TIME_OPTIONS, locale),
+                            })}
+                          </p>
+                          {entry.supersededBy && <p className="break-all">{t('butler.assistant.memorySupersededBy', { id: entry.supersededBy })}</p>}
+                          {entry.expiresAt != null && <p>{t('butler.assistant.memoryExpiresAt', { time: formatDateTime(entry.expiresAt, DATE_TIME_OPTIONS, locale) })}</p>}
                         </details>
-                        {!entry.supersededBy && isMemoryCurrent(entry) && <button type="button" onClick={() => void expireMemory(entry.id).catch((error) => toast.error(error, '标记过期失败'))} className="text-xs text-warning hover:underline">这条信息已过期</button>}
+                        {!entry.supersededBy && isMemoryCurrent(entry) && <button type="button" onClick={() => void expireMemory(entry.id).catch((error) => toast.error(error, t('butler.assistant.markExpiredFailed')))} className="text-xs text-warning hover:underline">{t('butler.assistant.markExpiredButton')}</button>}
                       </div>
 
                       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line-soft pt-2 text-xs text-ink-3">
@@ -1051,7 +1849,10 @@ export default function ButlerAssistantCenter() {
                           ))}
                         </div>
                         <span>
-                          召回 {entry.recallCount} 次 · {formatDateTime(entry.updatedAt)}
+                          {t('butler.assistant.recallStats', {
+                            count: entry.recallCount,
+                            time: formatDateTime(entry.updatedAt, DATE_TIME_OPTIONS, locale),
+                          })}
                         </span>
                       </div>
                     </article>
@@ -1068,8 +1869,8 @@ export default function ButlerAssistantCenter() {
               {digests.length === 0 ? (
                 <div className="flex h-48 flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-surface-3 p-6 text-center">
                   <Archive size={24} className="mb-2 text-ink-3 opacity-50" />
-                  <span className="text-xs font-medium text-ink">暂无归档简报</span>
-                  <span className="mt-1 text-xs text-ink-3">在晨晚报页面点击「保存归档」即可保留记录</span>
+                  <span className="text-xs font-medium text-ink">{t('butler.assistant.noArchivedDigests')}</span>
+                  <span className="mt-1 text-xs text-ink-3">{t('butler.assistant.noArchivedDigestsHint')}</span>
                 </div>
               ) : (
                 digests.map((d) => (
@@ -1086,7 +1887,7 @@ export default function ButlerAssistantCenter() {
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-xs font-semibold text-ink">{d.title}</div>
                         <div className="mt-0.5 text-xs text-ink-3">
-                          {d.dateKey} · {formatDateTime(d.createdAt)}
+                          {d.dateKey} · {formatDateTime(d.createdAt, DATE_TIME_OPTIONS, locale)}
                         </div>
                       </div>
                       <button
@@ -1095,11 +1896,11 @@ export default function ButlerAssistantCenter() {
                           e.stopPropagation();
                           void deleteDigest(d.id).then(() => {
                             if (selectedDigest?.id === d.id) setSelectedDigest(null);
-                            toast.info('已删除归档');
+                            toast.info(t('butler.assistant.deletedDigestToast'));
                           });
                         }}
                         className="rounded p-1 text-ink-3 hover:bg-danger/10 hover:text-danger"
-                        title="删除归档"
+                        title={t('butler.assistant.deleteArchiveTitle')}
                       >
                         <Trash2 size={12} />
                       </button>
@@ -1115,7 +1916,7 @@ export default function ButlerAssistantCenter() {
                   <div className="mb-3 flex items-center justify-between border-b border-line-soft pb-3">
                     <div>
                       <h2 className="text-sm font-semibold text-ink">{selectedDigest.title}</h2>
-                      <p className="text-xs text-ink-3">{formatDateTime(selectedDigest.createdAt)}</p>
+                      <p className="text-xs text-ink-3">{formatDateTime(selectedDigest.createdAt, DATE_TIME_OPTIONS, locale)}</p>
                     </div>
                     <FileText size={16} className="text-primary" />
                   </div>
@@ -1126,7 +1927,7 @@ export default function ButlerAssistantCenter() {
               ) : (
                 <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-line bg-surface-3 p-6 text-center text-xs text-ink-3">
                   <FileText size={26} className="mb-2 opacity-40" />
-                  <span>从左侧选择一条历史晨晚报或聚焦摘要以查看完整内容</span>
+                  <span>{t('butler.assistant.archiveEmptyPreview')}</span>
                 </div>
               )}
             </div>

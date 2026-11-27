@@ -1,19 +1,36 @@
 import {
   ArrowUpRight,
+  Bell,
   CircleAlert,
   Copy,
+  Cpu,
+  GripVertical,
   Loader2,
   MessageCircle,
   MessageSquarePlus,
+  Radio,
   SendHorizontal,
   Settings,
+  Share2,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { t, useI18n, useT } from '../i18n';
+import {
+  formatChatMessagesForButlerPrompt,
+  formatSharePayloadForChat,
+  hasChatToButlerDrag,
+  readChatToButlerDrag,
+  writeButlerShareDrag,
+  type ButlerSharePayload,
+} from '../lib/butlerChatBridge';
 import { getServerBase, isTauriRuntime } from '../lib/client';
 import { renderMarkdownDoc, StableStreamingMarkdown } from '../lib/markdown';
 import { useStickToBottom } from '../lib/stickToBottom';
 import { useCoalescedStoreProjection } from '../lib/useCodexStreamingText';
+import { useAcpAgents } from '../stores/acpAgents';
 import { useAuth } from '../stores/auth';
+import { useButlerCognition } from '../stores/butlerCognition';
+import { useButlerRoomBindings } from '../stores/butlerRoomBindings';
 import { useChat } from '../stores/chat';
 import { type CodexWorkspaceMessage, useCodexWorkspace } from '../stores/codexWorkspace';
 import { toast } from '../stores/toast';
@@ -59,7 +76,7 @@ export async function prepareRoomWorkspace(): Promise<boolean> {
   await workspace.ensureDefaultWorkspace();
   const latest = useCodexWorkspace.getState();
   const root = latest.butlerWorkspaceRoot || latest.defaultWorkspaceRoot;
-  if (!root) throw new Error('系统管家工作区尚未准备好');
+  if (!root) throw new Error(t('butler.workspaceNotReady'));
   if (latest.workspaceRoot !== root) {
     await latest.setWorkspaceRoot(root, { reuseRuntime: true });
   }
@@ -73,10 +90,10 @@ export async function prepareRoomWorkspace(): Promise<boolean> {
 
 function roomPrompt(roomTitle: string, rid: string, question: string): string {
   return [
-    `请在 Rocket.Chat 房间「${roomTitle}」（rid: ${rid}）的语境中回答。`,
-    '这是当前用户的私人房间 AI 会话。不要把回答发送到房间，也不要假设其他成员能看到本会话。',
-    '需要房间数据时使用对应 Skill 或 App 获取真实内容，不要猜测。',
-    '事实性结论后用 [来源](工具返回的原始 link 或 webUrl) 标注；工具没有返回链接时不要编造。',
+    t('butler.roomPanel.promptContext', { roomTitle, rid }),
+    t('butler.roomPanel.promptPrivate'),
+    t('butler.roomPanel.promptTool'),
+    t('butler.roomPanel.promptCitation'),
     ROOM_MESSAGE_SEPARATOR,
     question,
   ].join('\n');
@@ -124,25 +141,29 @@ function useRoomCodexThreadProjection(threadId: string | undefined) {
 }
 
 function PrivateNote() {
-  return <p className="mt-2 text-xs text-ink-3">仅你可见，不会向当前房间发送消息。</p>;
+  const t = useT();
+  return <p className="mt-2 text-xs text-ink-3">{t('butler.roomPanel.privateNote')}</p>;
 }
 
 function ConversationCopyButton({
   text,
-  speaker,
+  role,
   align,
 }: {
   text: string;
-  speaker: string;
+  role: 'user' | 'assistant';
   align: 'left' | 'right';
 }) {
+  const t = useT();
+  const isAssistant = role === 'assistant';
+  const copyAria = t(isAssistant ? 'butler.roomPanel.copyAriaAssistant' : 'butler.roomPanel.copyAriaUser');
   const copy = async (): Promise<void> => {
     try {
-      if (!navigator.clipboard?.writeText) throw new Error('系统剪贴板不可用');
+      if (!navigator.clipboard?.writeText) throw new Error(t('butler.roomPanel.clipboardUnavailable'));
       await navigator.clipboard.writeText(text);
-      toast.success(`${speaker}消息已复制`);
+      toast.success(t(isAssistant ? 'butler.roomPanel.copySuccessAssistant' : 'butler.roomPanel.copySuccessUser'));
     } catch (reason) {
-      toast.error(reason, '复制失败');
+      toast.error(reason, t('butler.roomPanel.copyFailed'));
     }
   };
 
@@ -150,11 +171,42 @@ function ConversationCopyButton({
     <button
       type="button"
       onClick={() => void copy()}
-      aria-label={`复制${speaker}消息`}
-      title={`复制${speaker}消息`}
+      aria-label={copyAria}
+      title={copyAria}
       className={`absolute bottom-0 flex translate-y-full items-center gap-1 rounded px-1.5 py-0.5 text-xs text-ink-3 opacity-0 transition-opacity hover:bg-fill-hover hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${align === 'right' ? 'right-0' : 'left-0'}`}
     >
-      <Copy size={11} aria-hidden="true" /> 复制
+      <Copy size={11} aria-hidden="true" /> {t('common.copy')}
+    </button>
+  );
+}
+
+function RoomReplyDraftButton({
+  text,
+  align,
+}: {
+  text: string;
+  align: 'left' | 'right';
+}) {
+  const t = useT();
+  const payload: ButlerSharePayload = {
+    kind: 'reply',
+    messageId: `room-reply:${text.slice(0, 24)}`,
+    text,
+  };
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={(e) => writeButlerShareDrag(e.dataTransfer, payload)}
+      onClick={() => {
+        useUI.getState().seedComposer(text.trim(), 'append');
+        toast.info(t('chat.butlerBridge.draftInsertedToast'));
+      }}
+      title={t('butler.roomPanel.draftToChatTooltip')}
+      aria-label={t('butler.roomPanel.draftToChatAria')}
+      className={`absolute bottom-0 flex translate-y-full items-center gap-1 rounded px-1.5 py-0.5 text-xs text-ink-3 opacity-0 transition-opacity hover:bg-fill-hover hover:text-primary focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 ${align === 'right' ? 'right-16' : 'left-16'}`}
+    >
+      <Share2 size={11} aria-hidden="true" /> {t('butler.roomPanel.draftToChatBtn')}
     </button>
   );
 }
@@ -168,12 +220,22 @@ function CodexRoomMessage({
   progressive?: boolean;
   streaming?: boolean;
 }) {
+  const t = useT();
   return (
     <article
       data-speaker={entry.role}
+      draggable={entry.role === 'assistant' && Boolean(entry.text) && !streaming}
+      onDragStart={(e) => {
+        if (entry.role !== 'assistant' || !entry.text) return;
+        writeButlerShareDrag(e.dataTransfer, {
+          kind: 'reply',
+          messageId: entry.id,
+          text: entry.text,
+        });
+      }}
       className={`codex-native-message group relative${streaming ? ' is-streaming' : ''}`}
     >
-      <span>{entry.role === 'assistant' ? 'Pi' : '你'}</span>
+      <span>{entry.role === 'assistant' ? 'Pi' : t('butler.speaker.you')}</span>
       <div className="butler-conversation-markdown">
         {entry.text
           ? entry.role === 'assistant'
@@ -190,17 +252,23 @@ function CodexRoomMessage({
         <CodexGeneratedImages images={entry.generatedImages} />
       </div>
       {entry.text && !streaming ? (
-        <ConversationCopyButton
-          text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
-          speaker={entry.role === 'assistant' ? 'Pi' : '你的'}
-          align={entry.role === 'user' ? 'right' : 'left'}
-        />
+        <>
+          <ConversationCopyButton
+            text={entry.role === 'user' ? visibleUserText(entry.text) : entry.text}
+            role={entry.role}
+            align={entry.role === 'user' ? 'right' : 'left'}
+          />
+          {entry.role === 'assistant' ? (
+            <RoomReplyDraftButton text={entry.text} align="left" />
+          ) : null}
+        </>
       ) : null}
     </article>
   );
 }
 
 function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName: string; scope: string }) {
+  const { t, tp } = useI18n();
   const desktopRuntime = isTauriRuntime();
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
   const butlerWorkspaceRoot = useCodexWorkspace((state) => state.butlerWorkspaceRoot);
@@ -221,6 +289,51 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
   const [input, setInput] = useState('');
   const [loadingRoom, setLoadingRoom] = useState(true);
   const [roomError, setRoomError] = useState<string>();
+  const [dragMessageHover, setDragMessageHover] = useState(false);
+
+  const roomDraftSeed = useUI((s) => s.roomButlerDraftSeed);
+  useEffect(() => {
+    if (!roomDraftSeed || roomDraftSeed.rid !== rid) return;
+    setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${roomDraftSeed.text}` : roomDraftSeed.text));
+  }, [rid, roomDraftSeed]);
+
+  const cognitionInsights = useButlerCognition((s) => s.insights);
+  const hydrateCognition = useButlerCognition((s) => s.hydrate);
+  const markInsightFeedback = useButlerCognition((s) => s.markInsightFeedback);
+  const acpSessions = useAcpAgents((s) => s.sessions);
+  const roomBindings = useButlerRoomBindings((s) => s.bindings);
+  const hydrateBindings = useButlerRoomBindings((s) => s.hydrate);
+  const bindToRoom = useButlerRoomBindings((s) => s.bindToRoom);
+  const unbindRoom = useButlerRoomBindings((s) => s.unbind);
+
+  useEffect(() => {
+    hydrateCognition();
+    hydrateBindings();
+  }, [hydrateBindings, hydrateCognition]);
+
+  const roomScopedInsights = useMemo(
+    () =>
+      cognitionInsights
+        .filter(
+          (ins) =>
+            ins.status === 'unread'
+            && ins.level !== 'silent_log'
+            && (ins.ref?.rid === rid || ins.kind === 'decision'),
+        )
+        .slice(0, 3),
+    [cognitionInsights, rid],
+  );
+  const liveAcpSessions = useMemo(
+    () =>
+      Object.values(acpSessions)
+        .filter((s) => s.status !== 'stopped')
+        .slice(0, 3),
+    [acpSessions],
+  );
+  const activeBindingsForRoom = useMemo(
+    () => roomBindings.filter((b) => b.enabled && b.rid === rid),
+    [rid, roomBindings],
+  );
   const running = status === 'running' || status === 'waiting-input';
   const completedMessage = !running && messages.at(-1)?.role === 'assistant'
     ? messages.at(-1)
@@ -267,12 +380,12 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
               const detail = reason instanceof Error ? reason.message : String(reason);
               if (!/not found|unknown thread|不存在|找不到/iu.test(detail)) throw reason;
               setRoomThreadId(scope, rid);
-              savedThreadId = await useCodexWorkspace.getState().startThread(`${roomName} · 房间 AI`);
+              savedThreadId = await useCodexWorkspace.getState().startThread(t('butler.roomPanel.threadTitle', { roomName }));
               setRoomThreadId(scope, rid, savedThreadId);
             }
           }
         } else {
-          savedThreadId = await useCodexWorkspace.getState().startThread(`${roomName} · 房间 AI`);
+          savedThreadId = await useCodexWorkspace.getState().startThread(t('butler.roomPanel.threadTitle', { roomName }));
           setRoomThreadId(scope, rid, savedThreadId);
         }
         if (!cancelled) setThreadId(savedThreadId);
@@ -306,14 +419,14 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
     setRoomError(undefined);
     try {
       await prepareRoomWorkspace();
-      const nextThreadId = await useCodexWorkspace.getState().startThread(`${roomName} · 房间 AI`);
+      const nextThreadId = await useCodexWorkspace.getState().startThread(t('butler.roomPanel.threadTitle', { roomName }));
       setRoomThreadId(scope, rid, nextThreadId);
       setThreadId(nextThreadId);
       setInput('');
       stickToBottom.current = true;
     } catch (reason) {
       setRoomError(reason instanceof Error ? reason.message : String(reason));
-      toast.error(reason, '无法新建私人房间 AI 会话');
+      toast.error(reason, t('butler.roomPanel.createFailed'));
     } finally {
       setLoadingRoom(false);
     }
@@ -330,7 +443,7 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
       const runtimeReconnected = await prepareRoomWorkspace();
       const workspace = useCodexWorkspace.getState();
       if (!currentThreadId) {
-        currentThreadId = await workspace.startThread(`${roomName} · 房间 AI`);
+        currentThreadId = await workspace.startThread(t('butler.roomPanel.threadTitle', { roomName }));
         setRoomThreadId(scope, rid, currentThreadId);
       } else if (runtimeReconnected || workspace.activeThreadId !== currentThreadId) {
         await workspace.resumeThread(currentThreadId);
@@ -343,61 +456,202 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
     } catch (reason) {
       setInput(question);
       setRoomError(reason instanceof Error ? reason.message : String(reason));
-      toast.error(reason, '私人房间 AI 消息没有发出');
+      toast.error(reason, t('butler.roomPanel.sendFailed'));
     }
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      className={`flex min-h-0 flex-1 flex-col transition-colors ${dragMessageHover ? 'bg-primary-light/20' : ''}`}
+      onDragOver={(event) => {
+        if (!hasChatToButlerDrag(event.dataTransfer)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'copy';
+        setDragMessageHover(true);
+      }}
+      onDragLeave={(event) => {
+        const next = event.relatedTarget;
+        if (!(next instanceof Node) || !event.currentTarget.contains(next)) {
+          setDragMessageHover(false);
+        }
+      }}
+      onDrop={(event) => {
+        const payload = readChatToButlerDrag(event.dataTransfer);
+        setDragMessageHover(false);
+        if (!payload) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const promptText = formatChatMessagesForButlerPrompt(payload);
+        setInput((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${promptText}` : promptText));
+      }}
+    >
       <div className="shrink-0 border-b border-line-soft bg-fill-1 px-4 py-2.5 text-xs">
         <div className="flex min-w-0 items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
               onClick={openFullConversation}
-              aria-label="设置管家模型与权限"
-              title="在 AI 管家中设置当前会话的模型、推理强度和权限"
+              aria-label={t('butler.roomPanel.settingsAria')}
+              title={t('butler.roomPanel.settingsTitle')}
               className="flex min-w-0 max-w-40 items-center gap-1 rounded bg-surface px-2 py-0.5 text-ink-2 hover:bg-fill-hover"
             >
               <Settings size={11} className="shrink-0" aria-hidden="true" />
               <span className="truncate">{modelLabel}</span>
             </button>
-            <span className="shrink-0 whitespace-nowrap rounded bg-surface px-2 py-0.5 text-ink-2">私人会话</span>
+            <span className="shrink-0 whitespace-nowrap rounded bg-surface px-2 py-0.5 text-ink-2">{t('butler.roomPanel.privateBadge')}</span>
           </div>
           <button
             type="button"
             disabled={loadingRoom || running}
             onClick={() => void newConversation()}
-            aria-label="新建私人房间 AI 会话"
-            title={running ? '当前回复完成后再新建会话' : '新建私人会话'}
+            aria-label={t('butler.roomPanel.newChatAria')}
+            title={running ? t('butler.roomPanel.newChatDisabledTitle') : t('butler.roomPanel.newChatTitle')}
             className="flex h-7 w-7 items-center justify-center rounded-md border border-line bg-surface text-ink-2 hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
             <MessageSquarePlus size={14} aria-hidden="true" />
           </button>
         </div>
         <div className="mt-1.5 truncate text-ink-3" title={butlerWorkspaceRoot || workspaceRoot}>
-          {butlerWorkspaceRoot || workspaceRoot || '系统管家目录'}
+          {butlerWorkspaceRoot || workspaceRoot || t('butler.roomPanel.butlerDirFallback')}
         </div>
+        {dragMessageHover ? (
+          <div className="mt-2 rounded-lg border border-dashed border-primary bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary">
+            {t('butler.roomPanel.dropMessageHint')}
+          </div>
+        ) : null}
+        {(roomScopedInsights.length > 0 || liveAcpSessions.length > 0) ? (
+          <div className="mt-2 space-y-1.5 border-t border-line-soft pt-2">
+            <div className="flex items-center justify-between text-ink-3">
+              <span className="flex items-center gap-1 font-medium text-ink-2">
+                <Bell size={11} className="text-primary" aria-hidden="true" />
+                {t('butler.roomPanel.collabBarTitle')}
+              </span>
+              <span>{t('butler.roomPanel.dragLeftHint')}</span>
+            </div>
+            {roomScopedInsights.map((ins) => {
+              const payload: ButlerSharePayload = {
+                kind: 'insight',
+                id: ins.id,
+                insightKind: ins.kind,
+                title: ins.title,
+                summary: ins.summary,
+                suggestedActions: ins.suggestedActions?.map((a) => a.label),
+                ref: ins.ref,
+              };
+              return (
+                <div
+                  key={ins.id}
+                  draggable
+                  onDragStart={(e) => writeButlerShareDrag(e.dataTransfer, payload)}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-primary/25 bg-surface px-2 py-1 cursor-grab active:cursor-grabbing"
+                >
+                  <span className="flex min-w-0 items-center gap-1 text-ink">
+                    <GripVertical size={11} className="shrink-0 text-ink-3" aria-hidden="true" />
+                    <span className="truncate font-medium">{ins.title}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      useUI.getState().seedComposer(formatSharePayloadForChat(payload), 'append');
+                      markInsightFeedback(ins.id, 'acted');
+                      toast.info(t('chat.butlerBridge.draftInsertedToast'));
+                    }}
+                    className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-xs font-medium text-primary hover:bg-primary/25"
+                  >
+                    {t('butler.roomPanel.draftToChatBtn')}
+                  </button>
+                </div>
+              );
+            })}
+            {liveAcpSessions.map((sess) => {
+              const existingBinding = activeBindingsForRoom.find(
+                (b) => b.targetKind === 'acp_session' && b.targetId === sess.sessionKey,
+              );
+              const payload: ButlerSharePayload = {
+                kind: 'acp_session',
+                sessionKey: sess.sessionKey,
+                agentId: sess.agentId,
+                agentName: sess.agentName,
+                title: sess.title,
+                status: sess.status,
+                summary: [...sess.messages].reverse().find((m) => m.role === 'assistant')?.text.slice(0, 220) || sess.title,
+                pendingApproval: sess.pendingPermissions[0]?.toolCall.title || sess.pendingPermissions[0]?.reason,
+                workspaceRoot: sess.workspaceRoot,
+              };
+              return (
+                <div
+                  key={sess.sessionKey}
+                  draggable
+                  onDragStart={(e) => writeButlerShareDrag(e.dataTransfer, payload)}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface px-2 py-1 cursor-grab active:cursor-grabbing"
+                >
+                  <span className="flex min-w-0 items-center gap-1 text-ink-2">
+                    <Cpu size={11} className="shrink-0 text-primary" aria-hidden="true" />
+                    <span className="truncate">{sess.agentName}: {sess.title}</span>
+                  </span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (existingBinding) {
+                          unbindRoom(existingBinding.id);
+                          toast.info(t('butler.chatShare.unboundRoomToast', { room: roomName }));
+                        } else {
+                          bindToRoom({
+                            targetKind: 'acp_session',
+                            targetId: sess.sessionKey,
+                            label: `${sess.agentName}: ${sess.title}`,
+                            rid,
+                            roomName,
+                            autoPost: true,
+                          });
+                          toast.success(t('butler.chatShare.boundRoomToast', { room: roomName }));
+                        }
+                      }}
+                      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs ${
+                        existingBinding ? 'bg-primary text-white' : 'border border-line text-ink-3 hover:text-ink'
+                      }`}
+                    >
+                      <Radio size={10} aria-hidden="true" />
+                      {t(existingBinding ? 'butler.chatShare.boundLabel' : 'butler.chatShare.bindStream')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        useUI.getState().seedComposer(formatSharePayloadForChat(payload), 'append');
+                        toast.info(t('chat.butlerBridge.draftInsertedToast'));
+                      }}
+                      className="rounded bg-fill-hover px-1.5 py-0.5 text-xs text-ink-2 hover:text-ink"
+                    >
+                      {t('butler.roomPanel.draftToChatBtn')}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {loadingRoom ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-ink-3">
             <Loader2 size={20} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-            正在接回私人房间会话
+            {t('butler.roomPanel.loading')}
           </div>
         ) : !desktopRuntime ? (
           <div className="rounded-xl border border-line bg-fill-1 p-4 text-sm leading-6 text-ink-2">
-            私人房间 AI 需要 RocketX 桌面端。
+            {t('butler.roomPanel.desktopRequired')}
           </div>
         ) : messages.length === 0 && !streamingText && !running ? (
           <div className="flex h-full flex-col items-center justify-center px-4 text-center">
             <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary-light text-primary">
               <MessageCircle size={21} aria-hidden="true" />
             </span>
-            <h3 className="mt-3 text-sm font-semibold text-ink">和房间 AI 私下聊聊</h3>
+            <h3 className="mt-3 text-sm font-semibold text-ink">{t('butler.roomPanel.emptyTitle')}</h3>
             <p className="mt-1 max-w-72 text-xs leading-5 text-ink-3">
-              会话使用你的系统管家目录，其他房间成员看不到这里的内容。
+              {t('butler.roomPanel.emptyDesc')}
             </p>
           </div>
         ) : (
@@ -412,10 +666,10 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
               />
             ) : running ? (
               <article data-speaker="assistant" className="codex-native-message is-streaming" role="status">
-                <span>Pi</span>
+                <span>Codex</span>
                 <div className="flex items-center gap-2 text-ink-3">
                   <Loader2 size={14} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                  Pi 正在思考…
+                  {t('butler.roomPanel.thinking')}
                 </div>
               </article>
             ) : null}
@@ -430,7 +684,7 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
             onClick={openFullConversation}
             className="mb-3 flex w-full items-center justify-between rounded-lg border border-warning/30 bg-warning-light px-3 py-2 text-left text-xs text-ink-2"
           >
-            <span>Codex 正在等待你处理 {pendingRequests.length} 项确认</span>
+            <span>{tp(pendingRequests.length, 'butler.roomPanel.pendingApprovalOne', 'butler.roomPanel.pendingApprovalOther')}</span>
             <ArrowUpRight size={14} aria-hidden="true" />
           </button>
         ) : null}
@@ -449,8 +703,8 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
                 event.preventDefault();
                 void submit();
               }}
-              aria-label="发送给私人房间 AI"
-              placeholder={running ? '输入后续要求，调整当前回答…' : '给你的房间 AI 发消息…'}
+              aria-label={t('butler.roomPanel.inputAria')}
+              placeholder={running ? t('butler.roomPanel.inputPlaceholderRunning') : t('butler.roomPanel.inputPlaceholder')}
               rows={1}
               autoFocus
               className="min-h-8 max-h-28 min-w-0 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm leading-5 text-ink outline-none placeholder:text-ink-3 disabled:cursor-not-allowed"
@@ -458,7 +712,7 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
             <button
               type="submit"
               disabled={!canCompose || !input.trim()}
-              aria-label="发送到私人房间 AI"
+              aria-label={t('butler.roomPanel.sendAria')}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
               <SendHorizontal size={15} aria-hidden="true" />
@@ -472,13 +726,14 @@ function CodexRoomConversation({ rid, roomName, scope }: { rid: string; roomName
 }
 
 function DisabledRoomConversation() {
+  const t = useT();
   const setModule = useUI((state) => state.setModule);
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
       <CircleAlert size={23} className="text-ink-3" aria-hidden="true" />
-      <h3 className="mt-3 text-sm font-semibold text-ink">当前未启用 AI</h3>
+      <h3 className="mt-3 text-sm font-semibold text-ink">{t('butler.roomPanel.disabledTitle')}</h3>
       <p className="mt-1 max-w-sm text-xs leading-5 text-ink-3">
-        私人房间 AI 暂不可发送；已有私人会话不会被删除，共享 AI 托管也不会因此变成私人会话。
+        {t('butler.roomPanel.disabledDesc')}
       </p>
       <button
         type="button"
@@ -488,13 +743,14 @@ function DisabledRoomConversation() {
         }}
         className="mt-3 flex items-center gap-1.5 rounded-md border border-line bg-surface px-3 py-1.5 text-xs text-ink-2 hover:bg-fill-hover"
       >
-        <Settings size={14} aria-hidden="true" /> AI 设置
+        <Settings size={14} aria-hidden="true" /> {t('butler.roomPanel.aiSettings')}
       </button>
     </div>
   );
 }
 
 export default function ButlerPanel() {
+  const t = useT();
   const rid = useChat((state) => state.activeRid);
   const room = useChat((state) => (state.activeRid ? state.rooms[state.activeRid] : undefined));
   const subscription = useChat((state) => (
@@ -521,7 +777,7 @@ export default function ButlerPanel() {
       id="room-butler-panel"
       role="dialog"
       aria-modal="false"
-      aria-label="私人房间 AI 对话"
+      aria-label={t('butler.roomPanel.dialogAria')}
       className="absolute inset-y-0 right-0 z-30 flex max-w-full justify-end overflow-hidden"
     >
       <PanelShell
@@ -529,7 +785,7 @@ export default function ButlerPanel() {
         title={(
           <span className="flex min-w-0 items-center gap-2">
             <MessageCircle size={17} className="shrink-0 text-primary" aria-hidden="true" />
-            <span className="truncate">房间 AI · {name}</span>
+            <span className="truncate">{t('butler.roomPanel.title', { name })}</span>
           </span>
         )}
       >

@@ -1,4 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 export const ATTACHMENT_ARCHIVE_VERSION = 1;
 const MIB = 1024 * 1024;
@@ -222,7 +223,7 @@ export function roomArchiveSummaries(state: AttachmentArchiveV1): RoomArchiveSum
   for (const record of state.records) {
     const room = rooms.get(record.rid) ?? {
       rid: record.rid,
-      roomName: record.roomName || '会话',
+      roomName: record.roomName || t('nav.search.roomFallback'),
       files: 0,
       bytes: 0,
       latestCachedAt: 0,

@@ -1,5 +1,6 @@
 /** 工作台（Azure DevOps）客户端侧：配置读写 + 直连查询 */
 
+import { t } from '../i18n';
 import { TimedLruCache } from './timedLruCache';
 
 export const WORKBENCH_CONFIG_KEY = 'rcx-workbench';
@@ -41,7 +42,7 @@ function parseStoredWorkbenchConfig(): { config: WorkbenchConfig | null; issue: 
     if (!raw) return { config: null, issue: null };
     const parsed = JSON.parse(raw) as StoredWorkbenchConfig;
     if (!parsed || typeof parsed !== 'object') {
-      return { config: null, issue: '工作台配置已损坏，请重新配置。' };
+      return { config: null, issue: t('workbench.config.corrupted') };
     }
 
     const adoBase = typeof parsed.adoBase === 'string'
@@ -53,13 +54,13 @@ function parseStoredWorkbenchConfig(): { config: WorkbenchConfig | null; issue: 
     if (parsed.mode === 'bridge' || (!parsed.mode && typeof parsed.bridge === 'string')) {
       return {
         config: null,
-        issue: '旧版 ado-bridge 配置已失效，请改用直连 Azure DevOps。',
+        issue: t('workbench.config.legacyBridgeUnsupported'),
       };
     }
     if (parsed.mode !== undefined && parsed.mode !== 'direct') {
       return {
         config: null,
-        issue: '无法识别的工作台连接模式；当前只兼容旧版 direct 配置。',
+        issue: t('workbench.config.unknownMode'),
       };
     }
 
@@ -74,7 +75,7 @@ function parseStoredWorkbenchConfig(): { config: WorkbenchConfig | null; issue: 
       issue: null,
     };
   } catch {
-    return { config: null, issue: '工作台配置已损坏，请重新配置。' };
+    return { config: null, issue: t('workbench.config.corrupted') };
   }
 }
 
@@ -299,9 +300,9 @@ export function fetchBuild(project: string, id: number): Promise<AdoBuildInfo | 
 
 export async function commentWorkItem(id: number, text: string): Promise<void> {
   const config = loadWorkbenchConfig();
-  if (!config) throw new Error('请先在工作台完成连接配置');
+  if (!config) throw new Error(t('workbench.error.configureFirst'));
   const direct = directConfig(config);
-  if (!direct) throw new Error('请先在工作台配置直连 Azure DevOps');
+  if (!direct) throw new Error(t('workbench.error.configureDirectFirst'));
   const { directComment } = await import('./adoDirect');
   await directComment(direct, id, text, config.account);
 }

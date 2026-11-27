@@ -1,4 +1,5 @@
 import { useAuth } from './stores/auth';
+import { useT } from './i18n';
 import LoginPage from './pages/LoginPage';
 import MainPage from './pages/MainPage';
 import { useOnboarding } from './stores/onboarding';
@@ -6,6 +7,7 @@ import { useFileIndex } from './stores/fileIndex';
 import { useDownloadHistory } from './stores/downloadHistory';
 import DesktopUiScaleBridge from './components/DesktopUiScaleBridge';
 import GlobalShortcutBridge from './components/GlobalShortcutBridge';
+import LocaleBridge from './components/LocaleBridge';
 import NotificationNavigationBridge from './components/NotificationNavigationBridge';
 import DiagnosticBridge from './components/DiagnosticBridge';
 import UpdaterBridge from './components/UpdaterBridge';
@@ -13,11 +15,10 @@ import WorkspaceSyncBridge from './components/WorkspaceSyncBridge';
 import Toaster from './components/Toaster';
 import { HistoryCopyDialogHost } from './components/CopyHistoryDialog';
 import { TeamPanelHost } from './components/TeamPanel';
-import { localizeDynamicText, tr, useUiLocale } from './lib/uiLocale';
 import { useUI } from './stores/ui';
 
 export default function App() {
-  const locale = useUiLocale();
+  const t = useT();
   const status = useAuth((s) => s.status);
   const localMode = useAuth((s) => s.localMode);
   const userId = useAuth((s) => s.user?._id);
@@ -33,7 +34,7 @@ export default function App() {
   if (status === 'boot') {
     content = (
       <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
-        {tr('正在加载…', 'Loading…', locale)}
+        {t('common.loading')}
       </div>
     );
   } else if (status !== 'authed' && !localMode) {
@@ -41,20 +42,16 @@ export default function App() {
   } else if (startupStage === 'error') {
     content = (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-fill-2 px-6 text-center">
-        <div className="text-lg font-medium text-ink">{tr('启动没有完成', 'Startup incomplete', locale)}</div>
+        <div className="text-lg font-medium text-ink">{t('auth.app.startupIncomplete')}</div>
         <div className="max-w-md text-sm text-ink-3">
-          {localizeDynamicText(
-            startupError?.message,
-            'Initialization did not complete. Please retry.',
-            locale,
-          ) || tr('应用初始化失败，请重试。', 'Initialization did not complete. Please retry.', locale)}
+          {startupError?.message || t('auth.app.startupInitFailed')}
         </div>
         <button
           type="button"
           onClick={() => void retryStartup()}
           className="h-10 rounded-md bg-primary px-5 text-sm font-medium text-white transition hover:bg-primary-hover active:bg-primary-active"
         >
-          {tr('重试', 'Retry', locale)}
+          {t('common.retry')}
         </button>
       </div>
     );
@@ -67,7 +64,7 @@ export default function App() {
   ) {
     content = (
       <div className="flex h-full items-center justify-center bg-fill-2 text-ink-3">
-        {tr('正在加载个人设置…', 'Loading preferences…', locale)}
+        {t('auth.app.loadingPersonalSettings')}
       </div>
     );
   } else {
@@ -78,6 +75,7 @@ export default function App() {
       <DiagnosticBridge />
       <UpdaterBridge />
       <WorkspaceSyncBridge />
+      <LocaleBridge />
       <DesktopUiScaleBridge />
       <GlobalShortcutBridge />
       <NotificationNavigationBridge />

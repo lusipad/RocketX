@@ -1,4 +1,5 @@
 import { eventsForDate, isEventDone, type CalendarEvent } from '../stores/calendar';
+import { t as translate, tp } from '../i18n';
 import { dueLabel, isOverdue, todayKey, type Todo } from '../stores/todos';
 import {
   adoDateToLocal,
@@ -93,13 +94,13 @@ export function buildQueue(input: QueueInput): QueueItem[] {
 
   for (const t of input.todos) {
     if (t.done) continue;
-    const title = t.note || t.excerpt || '（无描述）';
+    const title = t.note || t.excerpt || translate('chat.queue.noDescription');
     if (isOverdue(t, today)) {
       items.push({
         key: `todo-${t.id}`,
         kind: 'overdue-todo',
         urgency: 0,
-        label: '逾期',
+        label: translate('chat.queue.overdue'),
         title,
         meta: t.roomName,
         color: DANGER,
@@ -110,7 +111,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
         key: `todo-${t.id}`,
         kind: 'today-todo',
         urgency: 4,
-        label: '今天到期',
+        label: translate('chat.queue.dueToday'),
         title,
         meta: t.roomName,
         color: WARNING,
@@ -121,7 +122,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
         key: `todo-${t.id}`,
         kind: 'todo',
         urgency: 8,
-        label: '待办',
+        label: translate('chat.queue.todo'),
         title,
         meta: t.roomName,
         color: MUTED,
@@ -137,10 +138,10 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       key: `event-${e.id}-${today}`,
       kind: 'event',
       urgency: 2,
-      label: e.allDay ? '今天' : (e.startTime ?? '今天'),
+      label: e.allDay ? translate('chat.queue.today') : (e.startTime ?? translate('chat.queue.today')),
       title: e.title,
       meta: e.allDay
-        ? '全天'
+        ? translate('chat.queue.allDay')
         : e.endTime
           ? `${e.startTime} - ${e.endTime}`
           : undefined,
@@ -155,7 +156,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       key: `build-${b.project}-${b.id}`,
       kind: 'failed-build',
       urgency: 1,
-      label: '构建失败',
+      label: translate('chat.queue.buildFailed'),
       title: b.definition,
       meta: `${b.buildNumber} · ${b.project}`,
       color: DANGER,
@@ -176,7 +177,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
         key: `pr-${pr.id}`,
         kind: 'review-pr',
         urgency: 3,
-        label: '待我评审',
+        label: translate('chat.queue.reviewPr'),
         title: pr.title,
         meta: `!${pr.id} · ${pr.repo}`,
         color: PURPLE,
@@ -188,7 +189,7 @@ export function buildQueue(input: QueueInput): QueueItem[] {
         key: `pr-${pr.id}`,
         kind: 'approved-pr',
         urgency: 6,
-        label: '已通过评审',
+        label: translate('chat.queue.approvedPr'),
         title: pr.title,
         meta: `!${pr.id} · ${pr.repo}`,
         color: SUCCESS,
@@ -218,9 +219,9 @@ export function buildQueue(input: QueueInput): QueueItem[] {
       kind,
       urgency,
       label: overdue
-        ? '逾期'
+        ? translate('chat.queue.overdue')
         : dueToday
-          ? '今天到期'
+          ? translate('chat.queue.dueToday')
           : urgent
             ? `${w.type} P1`
             : w.type,
@@ -239,11 +240,13 @@ export function buildQueue(input: QueueInput): QueueItem[] {
 
 /** 顶部那句话：「3 项待处理 · 1 项逾期」 */
 export function queueSummary(items: QueueItem[]): string {
-  if (items.length === 0) return '今天没有待处理的事';
+  if (items.length === 0) return translate('chat.queue.empty');
   const overdue = items.filter(
     (i) =>
       i.kind === 'overdue-todo' || i.kind === 'overdue-workitem' || i.kind === 'failed-build',
   ).length;
-  const base = `${items.length} 项待处理`;
-  return overdue > 0 ? `${base} · ${overdue} 项需要立刻处理` : base;
+  const base = tp(items.length, 'chat.queue.pendingOne', 'chat.queue.pendingOther');
+  return overdue > 0
+    ? tp(overdue, 'chat.queue.urgentSuffixOne', 'chat.queue.urgentSuffixOther', { base })
+    : base;
 }

@@ -1,3 +1,4 @@
+import { compareLocaleText } from '../i18n/format';
 import { buildSections, type Conversation } from '../stores/chat';
 import { inFolder, type Folder } from '../stores/folders';
 import type { ConvFilter } from '../stores/ui';
@@ -64,7 +65,7 @@ export function buildConversationView(
   const sort = (items: Conversation[]) =>
     [...items].sort((a, b) =>
       options.sortBy === 'alphabetical'
-        ? a.name.localeCompare(b.name, 'zh-CN')
+        ? compareLocaleText(a.name, b.name)
         : b.lastTs - a.lastTs,
     );
 

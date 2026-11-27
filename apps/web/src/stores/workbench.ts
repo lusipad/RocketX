@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t, type MessageKey } from '../i18n';
 import { syncBusinessMcpAzureDevOps } from '../agent/businessMcp';
 import {
   ADO_WEB_KEY,
@@ -94,13 +95,26 @@ export function adoDateToLocal(iso?: string): string | undefined {
   ).padStart(2, '0')}`;
 }
 
+export const VOTE_LABEL_KEYS: Record<number, MessageKey> = {
+  10: 'workbench.vote.approved',
+  5: 'workbench.vote.approvedWithSuggestions',
+  0: 'workbench.vote.noVote',
+  [-5]: 'workbench.vote.waitingForAuthor',
+  [-10]: 'workbench.vote.rejected',
+};
+
+export function voteLabel(vote: number): string {
+  const key = VOTE_LABEL_KEYS[vote];
+  return key ? t(key) : t('workbench.vote.unknown');
+}
+
 /** ADO 的投票值 → 人话 */
 export const VOTE_LABELS: Record<number, string> = {
-  10: '已批准',
-  5: '有建议地批准',
-  0: '未投票',
-  [-5]: '等待作者',
-  [-10]: '已拒绝',
+  get 10() { return t(VOTE_LABEL_KEYS[10]); },
+  get 5() { return t(VOTE_LABEL_KEYS[5]); },
+  get 0() { return t(VOTE_LABEL_KEYS[0]); },
+  get [-5]() { return t(VOTE_LABEL_KEYS[-5]); },
+  get [-10]() { return t(VOTE_LABEL_KEYS[-10]); },
 };
 
 export function voteColor(vote: number): string {
@@ -262,7 +276,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         error:
           raw && raw !== 'Failed to fetch'
             ? raw
-            : '无法连接 Azure DevOps',
+            : t('workbench.error.cannotConnect'),
       });
     } finally {
       if (isCurrent()) set({ loading: false });

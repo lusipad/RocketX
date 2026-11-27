@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 /** Codex Skill 的小型结构化输出边界，不包含独立模型 Provider。 */
 export type AiCapability = 'extraction';
 
@@ -21,15 +23,15 @@ const SUCCESS_FINISH_REASONS = new Set(['stop', 'end_turn']);
 
 function parseJsonObject(content: string): unknown {
   const trimmed = content.trim();
-  if (!trimmed) throw new Error('AI 返回了空内容');
+  if (!trimmed) throw new Error(t('agent.structuredOutput.empty'));
   try {
     const value: unknown = JSON.parse(trimmed);
     if (value === null || Array.isArray(value) || typeof value !== 'object') {
-      throw new Error('AI 返回的 JSON 不是对象');
+      throw new Error(t('agent.structuredOutput.notObject'));
     }
     return value;
   } catch (error) {
-    if (error instanceof SyntaxError) throw new Error('AI 返回了无效 JSON');
+    if (error instanceof SyntaxError) throw new Error(t('agent.structuredOutput.invalidJson'));
     throw error;
   }
 }
@@ -49,28 +51,29 @@ export async function collectStructuredObject(
     content += chunk.content ?? '';
     if (chunk.finishReason) finishReason = chunk.finishReason;
   }
-  if (!finishReason) throw new Error('AI 响应未完整结束');
+  if (!finishReason) throw new Error(t('agent.structuredOutput.incomplete'));
   if (!SUCCESS_FINISH_REASONS.has(finishReason)) {
-    throw new Error(`AI 响应未完整生成（${finishReason}）`);
+    throw new Error(t('agent.structuredOutput.incompleteReason', { reason: finishReason }));
   }
   return parseJsonObject(content);
 }
 
-export function asRecord(value: unknown, label = '结果'): Record<string, unknown> {
+export function asRecord(value: unknown, label?: string): Record<string, unknown> {
+  const resolvedLabel = label ?? t('agent.structuredOutput.defaultLabel');
   if (value === null || Array.isArray(value) || typeof value !== 'object') {
-    throw new Error(`${label}必须是 JSON 对象`);
+    throw new Error(t('agent.structuredOutput.mustBeObject', { label: resolvedLabel }));
   }
   return value as Record<string, unknown>;
 }
 
 export function requiredString(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}不能为空`);
+  if (typeof value !== 'string' || !value.trim()) throw new Error(t('agent.structuredOutput.cannotBeEmpty', { label }));
   return value.trim();
 }
 
 export function optionalString(value: unknown, label: string): string | undefined {
   if (value == null || value === '') return undefined;
-  if (typeof value !== 'string') throw new Error(`${label}必须是字符串`);
+  if (typeof value !== 'string') throw new Error(t('agent.structuredOutput.mustBeString', { label }));
   const result = value.trim();
   return result || undefined;
 }
@@ -78,7 +81,7 @@ export function optionalString(value: unknown, label: string): string | undefine
 export function stringArray(value: unknown, label: string): string[] {
   if (value == null) return [];
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new Error(`${label}必须是字符串数组`);
+    throw new Error(t('agent.structuredOutput.mustBeStringArray', { label }));
   }
   return value.map((item) => item.trim()).filter(Boolean);
 }

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import type { RcTeamMember, RcTeamRoom } from '../../packages/rc-client/src/index';
 import { canManageTeam, mergeTeamRooms, sortTeamRooms, teamTypeLabel } from '../../apps/web/src/lib/teams';
 
@@ -114,18 +116,32 @@ test('三个入口都接上了：团队面板、批量加人、频道转团队',
 
   // 团队面板挂到根部，入口在群信息
   assert.match(app, /<TeamPanelHost \/>/);
-  assert.match(roomInfo, /管理所属团队/);
+  assert.match(roomInfo, /t\('panels\.roomInfo\.manageTeam'\)/);
+  assert.equal(zhCN['panels.roomInfo.manageTeam'], '管理所属团队');
+  assert.ok(enUS['panels.roomInfo.manageTeam'].length > 0);
   assert.match(roomInfo, /openTeamPanel\(\{ teamId: conv\.teamId \}\)/);
   // 非团队房间可以升级为团队
-  assert.match(roomInfo, /把这个频道转换为团队/);
+  assert.match(roomInfo, /t\('panels\.roomInfo\.convertToTeam'\)/);
+  assert.equal(zhCN['panels.roomInfo.convertToTeam'], '把这个频道转换为团队');
+  assert.ok(enUS['panels.roomInfo.convertToTeam'].length > 0);
   assert.match(roomInfo, /convertRoomToTeam\(rid, conv\.type/);
   // 团队面板覆盖成员 / 房间 / 解散退出
-  assert.match(teamPanel, /添加成员/);
-  assert.match(teamPanel, /新建团队频道/);
-  assert.match(teamPanel, /解散团队/);
-  assert.match(teamPanel, /退出团队/);
+  assert.match(teamPanel, /t\('panels\.team\.addMember'\)/);
+  assert.equal(zhCN['panels.team.addMember'], '添加成员');
+  assert.ok(enUS['panels.team.addMember'].length > 0);
+  assert.match(teamPanel, /t\('panels\.team\.newRoom'\)/);
+  assert.equal(zhCN['panels.team.newRoom'], '新建团队频道');
+  assert.ok(enUS['panels.team.newRoom'].length > 0);
+  assert.match(teamPanel, /t\('panels\.team\.deleteTeam'\)/);
+  assert.equal(zhCN['panels.team.deleteTeam'], '解散团队');
+  assert.ok(enUS['panels.team.deleteTeam'].length > 0);
+  assert.match(teamPanel, /t\('panels\.team\.leaveTeam'\)/);
+  assert.equal(zhCN['panels.team.leaveTeam'], '退出团队');
+  assert.ok(enUS['panels.team.leaveTeam'].length > 0);
   // 批量加人入口（讨论与 DM 不给）
   assert.match(members, /channels\.addAll|addAllUsersToRoom\(rid, type, activeOnly\)/);
   assert.match(members, /\(type === 'c' \|\| type === 'p'\) && !room\?\.prid/);
-  assert.match(members, /只加在线用户（推荐）/);
+  assert.match(members, /t\('panels\.members\.activeOnlyLabel'\)/);
+  assert.equal(zhCN['panels.members.activeOnlyLabel'], '只加在线用户（推荐）');
+  assert.ok(enUS['panels.members.activeOnlyLabel'].length > 0);
 });

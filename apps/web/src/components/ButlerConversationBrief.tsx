@@ -1,8 +1,8 @@
 import { ArrowUpRight } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
+import { useT } from '../i18n';
 import { isTauri, isTauriRuntime } from '../lib/http';
 import { completedWorkTurn, findWorkResultReply, unresolvedWorkDelivery } from '../lib/nativeWorkResult';
-import { tr, useUiLocale } from '../lib/uiLocale';
 import { readNativeWorkSnapshot, type NativeWorkCard } from '../platform/desktopCommands';
 import { listenDesktopEvent } from '../platform/desktopEvents';
 import { captureButlerAccountGeneration, captureButlerRuntimeAccountContext, subscribeButlerAccountSelection, waitForButlerAccountReady } from '../platform/butlerAccountReady';
@@ -25,7 +25,7 @@ type ReplyCandidate = {
 function ConversationReply({ candidate, scope, onOpen, children }: {
   candidate: ReplyCandidate; scope: string; onOpen: (target: ConversationWorkTarget) => void; children: ReactNode;
 }) {
-  const locale = useUiLocale();
+  const t = useT();
   const [reply, setReply] = useState<{ text: string; historical: boolean } | null>(null);
   const { key, card, turnId, sessionId, nativeThreadId, sourceScope, executionProfileId } = candidate;
   useEffect(() => {
@@ -51,12 +51,12 @@ function ConversationReply({ candidate, scope, onOpen, children }: {
     return () => { active = false; };
   }, [key, scope, card.id, turnId, sessionId, nativeThreadId, sourceScope, executionProfileId]);
   return reply ? <button type="button" onClick={() => onOpen({ id: card.id, target: 'reply', turnId, sessionId })}>
-    <span>{reply.historical ? tr('历史回复', 'Previous reply', locale) : tr('执行者回复', 'Agent reply', locale)}</span><strong>{card.title}</strong><small>{reply.text}</small><ArrowUpRight size={14} />
+    <span>{reply.historical ? t('butler.brief.historicalReply') : t('butler.brief.executorReply')}</span><strong>{card.title}</strong><small>{reply.text}</small><ArrowUpRight size={14} />
   </button> : children;
 }
 
 export default function ButlerConversationBrief({ onOpen }: { onOpen: (target: ConversationWorkTarget) => void }) {
-  const locale = useUiLocale();
+  const t = useT();
   const scope = useAuth(() => resolveButlerAccountScope());
   const cards = useWorkLedger(state => state.cards);
   const actions = useWorkLedger(state => state.actions);
@@ -115,13 +115,13 @@ export default function ButlerConversationBrief({ onOpen }: { onOpen: (target: C
   }
   const waiting = current.map(card => {
     const delivery = deliveries.get(card.id);
-    if (delivery) return { card, label: tr('待核对', 'Verify', locale), detail: tr('上次操作的送达结果待核对', 'Confirm previous delivery status', locale), ...delivery };
+    if (delivery) return { card, label: t('butler.brief.verifyDeliveryLabel'), detail: t('butler.brief.verifyDeliveryDetail'), ...delivery };
     const waitingSession = sessions.find(session => session.todoId === card.id
       && (!session.accountScope || session.accountScope === scope) && ['waiting_input', 'waiting_approval'].includes(session.runtimeStatus));
     const needsInput = card.state.waitState === 'waiting_input' || waitingSession?.runtimeStatus === 'waiting_input';
     const needsApproval = card.state.waitState === 'waiting_approval' || waitingSession?.runtimeStatus === 'waiting_approval'
       || actions.some(action => action.todoId === card.id && action.state === 'awaiting_approval');
-    const label = needsInput ? tr('待补充', 'Needs Input', locale) : needsApproval ? tr('待确认', 'Approval', locale) : card.state.waitState === 'blocked' ? tr('待处理', 'Attention', locale) : null;
+    const label = needsInput ? t('butler.brief.needsInput') : needsApproval ? t('butler.brief.needsApproval') : card.state.waitState === 'blocked' ? t('butler.brief.blocked') : null;
     return { card, label, detail: card.state.waitReason, sessionId: waitingSession?.id, updatedAt: card.updatedAt ?? 0 };
   }).filter(item => item.label).sort((a, b) => b.updatedAt - a.updatedAt)[0];
   const result = evidences.filter(evidence => !evidence.stale && current.some(card =>
@@ -151,10 +151,10 @@ export default function ButlerConversationBrief({ onOpen }: { onOpen: (target: C
   }
   if (!waiting && !resultCard && !reply) return null;
   const evidenceNotice = resultCard && <button type="button" onClick={() => onOpen({ id: resultCard.id, target: 'evidence' })}>
-    <span>{result.kind === 'agent_report' ? tr('执行者汇报', 'Report', locale) : tr('最新记录', 'Latest', locale)}</span>
+    <span>{result.kind === 'agent_report' ? t('butler.brief.executorReport') : t('butler.brief.latestRecord')}</span>
     <strong>{resultCard.title}</strong><small>{result.summary || result.title}</small><ArrowUpRight size={14} />
   </button>;
-  return <nav aria-label={tr('管家工作提醒', 'Butler work reminders', locale)} className="butler-work-notices">
+  return <nav aria-label={t('butler.brief.noticesAria')} className="butler-work-notices">
     {waiting && <button type="button" onClick={() => onOpen({ id: waiting.card.id, sessionId: waiting.sessionId })}>
       <span className="text-warning">{waiting.label}</span>
       <strong>{waiting.card.title}</strong>{waiting.detail && <small>{waiting.detail}</small>}<ArrowUpRight size={14} />

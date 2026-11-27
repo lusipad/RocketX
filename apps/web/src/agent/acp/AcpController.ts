@@ -1,3 +1,4 @@
+import { t } from '../../i18n';
 import {
   acpFsReadTextFile,
   acpFsWriteTextFile,
@@ -23,6 +24,7 @@ import type {
   AcpSessionNewResult,
   AcpSessionPromptResult,
   AcpSessionSetModeResult,
+  AcpSessionSetModelResult,
   AcpSessionUpdateNotificationParams,
   AcpTransport,
   AcpTransportExitHandler,
@@ -122,7 +124,7 @@ export class TauriAcpTransport implements AcpTransport {
 
   async sendLine(line: string): Promise<void> {
     if (!this.processId) {
-      throw new Error('ACP 托管进程尚未启动或已退出');
+      throw new Error(t('agent.acpController.notStartedOrExited'));
     }
     await acpProcessWrite(this.processId, line);
   }
@@ -166,8 +168,8 @@ export class TauriAcpTransport implements AcpTransport {
   private emitExit(event: AcpAgentExitEvent): void {
     const { code, reason: exitReason } = event;
     const reason = exitReason
-      ? `ACP 进程已退出（退出码 ${code ?? '未知'}）：${exitReason}`
-      : `ACP 进程已退出（退出码 ${code ?? '未知'}）`;
+      ? t('agent.acpController.exitedWithReason', { code: code ?? t('agent.acpClient.unknownCode'), reason: exitReason })
+      : t('agent.acpClient.exited', { code: code ?? t('agent.acpClient.unknownCode') });
     for (const handler of this.exitHandlers) {
       handler(code, reason);
     }
@@ -351,7 +353,7 @@ export class AcpController {
     sessionId = this.currentSessionId,
   ): Promise<AcpSessionPromptResult> {
     if (!sessionId) {
-      throw new Error('ACP 会话尚未初始化');
+      throw new Error(t('agent.acpController.sessionNotInitialized'));
     }
     const promptBlocks: AcpContentBlock[] =
       typeof input === 'string' ? [{ type: 'text', text: input }] : input;
@@ -371,9 +373,19 @@ export class AcpController {
     sessionId = this.currentSessionId,
   ): Promise<AcpSessionSetModeResult> {
     if (!sessionId) {
-      throw new Error('ACP 会话尚未初始化');
+      throw new Error(t('agent.acpController.sessionNotInitialized'));
     }
     return this.client.sessionSetMode({ sessionId, modeId });
+  }
+
+  async setModel(
+    modelId: string,
+    sessionId = this.currentSessionId,
+  ): Promise<AcpSessionSetModelResult> {
+    if (!sessionId) {
+      throw new Error(t('agent.acpController.sessionNotInitialized'));
+    }
+    return this.client.sessionSetModel({ sessionId, modelId });
   }
 
   async stop(): Promise<void> {

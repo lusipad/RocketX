@@ -54,13 +54,6 @@ import {
 } from '../lib/autostart';
 import { exportDiagnostics } from '../lib/diagnostics';
 import { saveTextFile } from '../lib/exportText';
-import {
-  readUiLocalePreference,
-  saveUiLocalePreference,
-  tr,
-  useUiLocale,
-  type UiLocalePreference,
-} from '../lib/uiLocale';
 import { loadWorkbenchConfig, loadWorkbenchConfigIssue, type WorkbenchConfig } from '../lib/ado';
 import { canUseNtlm, type ProbeStep } from '../lib/adoDirect';
 import { useAuth } from '../stores/auth';
@@ -73,9 +66,9 @@ import {
   type ArchivedAliases,
 } from '../stores/aliases';
 import { useUiPrefs } from '../stores/uiPrefs';
-import { useUI } from '../stores/ui';
 import { useWorkbench } from '../stores/workbench';
 import { useOnboarding } from '../stores/onboarding';
+import { useUI } from '../stores/ui';
 import { useWiTemplates } from '../stores/wiTemplates';
 import { useGlobalShortcut } from '../stores/globalShortcut';
 import { useChat } from '../stores/chat';
@@ -87,8 +80,10 @@ import { humanError, toast } from '../stores/toast';
 import { relaunchDesktop } from '../platform/desktopProcess';
 import Avatar from '../components/Avatar';
 import { ConfirmDialog } from '../components/Dialog';
+import LanguageSelector from '../components/LanguageSelector';
 import { RadioGroup, Row, Slider, Toggle } from '../components/SettingControls';
 import { WorkspaceConfigSection } from '../components/WorkspaceConfigImport';
+import { useI18n, useT, type MessageKey } from '../i18n';
 import { appManager, useInstalledApps } from '../kernel/installed';
 import {
   parseManifestJson,
@@ -132,48 +127,36 @@ type Section =
   | 'apps'
   | 'about';
 
-const SECTIONS: { key: Section; label: string; icon: typeof Server }[] = [
-  { key: 'account', label: '账号与状态', icon: Server },
-  { key: 'workspace', label: '团队配置', icon: UsersRound },
-  { key: 'appearance', label: '外观', icon: Palette },
-  { key: 'sidebar', label: '侧栏', icon: PanelLeft },
-  { key: 'message', label: '消息', icon: MessageSquare },
-  { key: 'notification', label: '通知', icon: Bell },
-  { key: 'desktop', label: '桌面端', icon: Monitor },
-  { key: 'shortcuts', label: '快捷键', icon: Keyboard },
-  { key: 'workbench', label: '工作台', icon: LayoutGrid },
-  { key: 'ai', label: 'AI', icon: Sparkles },
-  { key: 'apps', label: '应用', icon: Blocks },
-  { key: 'about', label: '关于', icon: Info },
+const SECTIONS: { key: Section; labelKey: MessageKey; icon: typeof Server }[] = [
+  { key: 'account', labelKey: 'settings.sections.account', icon: Server },
+  { key: 'workspace', labelKey: 'settings.sections.workspace', icon: UsersRound },
+  { key: 'appearance', labelKey: 'settings.sections.appearance', icon: Palette },
+  { key: 'sidebar', labelKey: 'settings.sections.sidebar', icon: PanelLeft },
+  { key: 'message', labelKey: 'settings.sections.message', icon: MessageSquare },
+  { key: 'notification', labelKey: 'settings.sections.notification', icon: Bell },
+  { key: 'desktop', labelKey: 'settings.sections.desktop', icon: Monitor },
+  { key: 'shortcuts', labelKey: 'settings.sections.shortcuts', icon: Keyboard },
+  { key: 'workbench', labelKey: 'settings.sections.workbench', icon: LayoutGrid },
+  { key: 'ai', labelKey: 'settings.sections.ai', icon: Sparkles },
+  { key: 'apps', labelKey: 'settings.sections.apps', icon: Blocks },
+  { key: 'about', labelKey: 'settings.sections.about', icon: Info },
 ];
-
-const SECTION_LABEL_EN: Record<Section, string> = {
-  account: 'Account & Status',
-  workspace: 'Team Config',
-  appearance: 'Appearance',
-  sidebar: 'Sidebar',
-  message: 'Messages',
-  notification: 'Notifications',
-  desktop: 'Desktop',
-  shortcuts: 'Shortcuts',
-  workbench: 'Workbench',
-  ai: 'AI',
-  apps: 'Apps',
-  about: 'About',
-};
 
 const inputCls =
   'h-9 w-full max-w-md rounded-md border border-line px-3 text-sm outline-none transition focus:border-primary';
 
 const STATUSES = [
-  { key: 'online', label: '在线', color: 'bg-success' },
-  { key: 'away', label: '离开', color: 'bg-warning' },
-  { key: 'busy', label: '忙碌', color: 'bg-danger' },
-  { key: 'offline', label: '隐身', color: 'bg-ink-3' },
+  { key: 'online', labelKey: 'settings.account.status.online', color: 'bg-success' },
+  { key: 'away', labelKey: 'settings.account.status.away', color: 'bg-warning' },
+  { key: 'busy', labelKey: 'settings.account.status.busy', color: 'bg-danger' },
+  { key: 'offline', labelKey: 'settings.account.status.offline', color: 'bg-ink-3' },
 ] as const;
+
+type PasswordErrorState = { key: MessageKey } | { raw: string } | null;
 
 /** 账号与在线状态 */
 function AccountSection() {
+  const t = useT();
   const user = useAuth((s) => s.user);
   const localMode = useAuth((s) => s.localMode);
   const exitLocalMode = useAuth((s) => s.exitLocalMode);
@@ -213,7 +196,7 @@ function AccountSection() {
   const [newPw, setNewPw] = useState('');
   const [newPw2, setNewPw2] = useState('');
   const [pwBusy, setPwBusy] = useState(false);
-  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwError, setPwError] = useState<PasswordErrorState>(null);
 
   useEffect(() => setName(user?.name ?? ''), [user?.name]);
 
@@ -254,9 +237,9 @@ function AccountSection() {
     try {
       await rest.updateOwnBasicInfo({ nickname, bio });
       await refreshUser();
-      toast.success('个人资料已更新');
+      toast.success(t('settings.account.profileUpdated'));
     } catch (err) {
-      toast.error(err, '资料更新失败');
+      toast.error(err, t('settings.account.profileUpdateFailed'));
     } finally {
       setProfileBusy(false);
     }
@@ -267,9 +250,9 @@ function AccountSection() {
     try {
       await rest.deleteCustomUserStatus(id);
       setStatuses((prev) => prev.filter((item) => item._id !== id));
-      toast.success('已删除该状态');
+      toast.success(t('settings.account.customStatusDeleted'));
     } catch (err) {
-      toast.error(err, '删除状态失败');
+      toast.error(err, t('settings.account.customStatusDeleteFailed'));
     } finally {
       setStatusBusy(false);
     }
@@ -283,9 +266,9 @@ function AccountSection() {
       const created = await rest.createCustomUserStatus(name);
       setStatuses((prev) => [...prev, created]);
       setNewStatusName('');
-      toast.success(`已创建状态「${name}」`);
+      toast.success(t('settings.account.customStatusCreated', { name }));
     } catch (err) {
-      toast.error(err, '创建状态失败');
+      toast.error(err, t('settings.account.customStatusCreateFailed'));
     } finally {
       setStatusBusy(false);
     }
@@ -312,13 +295,14 @@ function AccountSection() {
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
       setStatus(prev); // 失败回滚，不再假装成功
-      toast.error(err, '状态更新失败');
+      toast.error(err, t('settings.account.statusUpdateFailed'));
     }
   };
 
   const uploadAvatar = async (file: File) => {
     if (!file.type.startsWith('image/')) {
-      toast.error(new Error('请选择图片文件'), '请选择图片文件');
+      const msg = t('settings.account.avatarSelectImage');
+      toast.error(new Error(msg), msg);
       return;
     }
     setAvatarBusy(true);
@@ -326,9 +310,9 @@ function AccountSection() {
       await rest.setAvatar(file, file.name);
       bumpAvatar();
       await refreshUser();
-      toast.success('头像已更新');
+      toast.success(t('settings.account.avatarUpdated'));
     } catch (err) {
-      toast.error(err, '头像上传失败');
+      toast.error(err, t('settings.account.avatarUploadFailed'));
     } finally {
       setAvatarBusy(false);
     }
@@ -341,10 +325,10 @@ function AccountSection() {
     try {
       await rest.updateOwnBasicInfo({ name: next });
       await refreshUser();
-      toast.success('昵称已更新');
+      toast.success(t('settings.account.nameUpdated'));
     } catch (err) {
       setName(user?.name ?? '');
-      toast.error(err, '昵称修改失败');
+      toast.error(err, t('settings.account.nameUpdateFailed'));
     } finally {
       setNameBusy(false);
     }
@@ -353,7 +337,7 @@ function AccountSection() {
   const changePassword = async () => {
     setPwError(null);
     if (newPw !== newPw2) {
-      setPwError('两次输入的新密码不一致');
+      setPwError({ key: 'settings.account.passwordMismatch' });
       return;
     }
     setPwBusy(true);
@@ -363,28 +347,32 @@ function AccountSection() {
       setCurPw('');
       setNewPw('');
       setNewPw2('');
-      toast.success('密码已修改');
+      toast.success(t('settings.account.passwordChanged'));
     } catch (err) {
       // 服务器的密码强度策略是可配置的，猜不出来 —— 原样透出它的说法
       const raw = err instanceof Error ? err.message : String(err ?? '');
       setPwError(
         /totp/i.test(raw)
-          ? '当前密码不正确'
+          ? { key: 'settings.account.passwordIncorrect' }
           : /too many requests|rate/i.test(raw)
-            ? '操作太频繁，请一分钟后再试'
-            : raw || '密码修改失败',
+            ? { key: 'settings.account.passwordRateLimited' }
+            : raw
+              ? { raw }
+              : { key: 'settings.account.passwordChangeFailed' },
       );
     } finally {
       setPwBusy(false);
     }
   };
 
+  const pwErrorText = pwError ? ('raw' in pwError ? pwError.raw : t(pwError.key)) : null;
+
   return (
     <>
       {localMode ? (
         <Row
-          label="本地使用模式"
-          hint="当前未登录 Rocket.Chat 服务器。待办、统一看板、日历、AI 管家及本地 Git/ADO 项目配置均保存在本机，连接账号后可平滑接续"
+          label={t('settings.account.localModeLabel')}
+          hint={t('settings.account.localModeHint')}
         >
           <div className="flex flex-wrap items-center gap-2.5">
             <button
@@ -392,18 +380,18 @@ function AccountSection() {
               onClick={() => void exitLocalMode()}
               className="h-9 rounded-md bg-primary px-4 text-sm font-medium text-white transition hover:bg-primary-hover"
             >
-              连接 Rocket.Chat 账号
+              {t('settings.account.connectAccount')}
             </button>
           </div>
         </Row>
       ) : null}
       {localMode ? null : (<>
-      <Row label="当前账号" hint="点击头像可以更换">
+      <Row label={t('settings.account.currentAccountLabel')} hint={t('settings.account.currentAccountHint')}>
         <div className="flex items-center gap-3">
           <button
             onClick={() => avatarInputRef.current?.click()}
             disabled={avatarBusy}
-            title="更换头像"
+            title={t('settings.account.changeAvatar')}
             className="group relative shrink-0 overflow-hidden rounded-[10px]"
           >
             <Avatar
@@ -437,7 +425,10 @@ function AccountSection() {
         </div>
       </Row>
 
-      <Row label="昵称" hint={`其他成员看到的名字；用户名 @${user?.username ?? ''} 不会跟着变`}>
+      <Row
+        label={t('settings.account.displayNameLabel')}
+        hint={t('settings.account.displayNameHint', { username: user?.username ?? '' })}
+      >
         <div className="flex items-center gap-2">
           <input
             value={name}
@@ -452,18 +443,18 @@ function AccountSection() {
             disabled={nameBusy || !name.trim() || name.trim() === user?.name}
             className="h-9 shrink-0 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {nameBusy ? '保存中…' : '保存'}
+            {nameBusy ? t('settings.account.saving') : t('common.save')}
           </button>
         </div>
       </Row>
 
-      <Row label="修改密码" hint="改完后当前设备保持登录，其他设备需要重新登录">
+      <Row label={t('settings.account.changePasswordLabel')} hint={t('settings.account.changePasswordHint')}>
         <div className="flex max-w-md flex-col gap-2">
           <input
             type="password"
             value={curPw}
             onChange={(e) => setCurPw(e.target.value)}
-            placeholder="当前密码"
+            placeholder={t('settings.account.currentPasswordPlaceholder')}
             autoComplete="current-password"
             className={inputCls}
           />
@@ -471,7 +462,7 @@ function AccountSection() {
             type="password"
             value={newPw}
             onChange={(e) => setNewPw(e.target.value)}
-            placeholder="新密码"
+            placeholder={t('settings.account.newPasswordPlaceholder')}
             autoComplete="new-password"
             className={inputCls}
           />
@@ -479,24 +470,24 @@ function AccountSection() {
             type="password"
             value={newPw2}
             onChange={(e) => setNewPw2(e.target.value)}
-            placeholder="再输一遍新密码"
+            placeholder={t('settings.account.confirmPasswordPlaceholder')}
             autoComplete="new-password"
             className={inputCls}
           />
-          {pwError && <div className="text-xs text-danger">{pwError}</div>}
+          {pwErrorText && <div className="text-xs text-danger">{pwErrorText}</div>}
           <button
             onClick={() => void changePassword()}
             disabled={pwBusy || !curPw || !newPw || !newPw2}
             className="h-9 w-28 rounded-md bg-primary text-sm text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {pwBusy ? '修改中…' : '修改密码'}
+            {pwBusy ? t('settings.account.changingPassword') : t('settings.account.changePasswordLabel')}
           </button>
         </div>
       </Row>
 
-      <Row label="在线状态" hint="其他成员会看到你的状态">
+      <Row label={t('settings.account.onlineStatusLabel')} hint={t('settings.account.onlineStatusHint')}>
         <div className="flex flex-wrap gap-2">
-          {STATUSES.map(({ key, label, color }) => {
+          {STATUSES.map(({ key, labelKey, color }) => {
             const active = status === key;
             return (
               <button
@@ -509,19 +500,19 @@ function AccountSection() {
                 }`}
               >
                 <span className={`h-2 w-2 rounded-full ${color}`} />
-                {label}
+                {t(labelKey)}
               </button>
             );
           })}
         </div>
       </Row>
 
-      <Row label="状态消息" hint="显示在你的名字旁，例如「开会中」「远程办公」">
+      <Row label={t('settings.account.statusMessageLabel')} hint={t('settings.account.statusMessageHint')}>
         <div className="flex items-center gap-2">
           <input
             value={statusText}
             onChange={(e) => setStatusText(e.target.value)}
-            placeholder="想说点什么…"
+            placeholder={t('settings.account.statusMessagePlaceholder')}
             maxLength={120}
             className={inputCls}
           />
@@ -529,26 +520,26 @@ function AccountSection() {
             onClick={() => void applyStatus(status, statusText)}
             className="h-9 shrink-0 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover"
           >
-            {saved ? '已保存' : '保存'}
+            {saved ? t('settings.common.saved') : t('common.save')}
           </button>
         </div>
       </Row>
 
-      <Row label="昵称" hint="比姓名更短的称呼；留空则只显示姓名">
+      <Row label={t('settings.account.nicknameLabel')} hint={t('settings.account.nicknameHint')}>
         <input
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
-          placeholder="例如：老王"
+          placeholder={t('settings.account.nicknamePlaceholder')}
           maxLength={60}
           className={inputCls}
         />
       </Row>
 
-      <Row label="个人简介" hint="成员资料卡里展示的一段自我介绍">
+      <Row label={t('settings.account.bioLabel')} hint={t('settings.account.bioHint')}>
         <textarea
           value={bio}
           onChange={(e) => setBio(e.target.value)}
-          placeholder="写点什么介绍自己…"
+          placeholder={t('settings.account.bioPlaceholder')}
           maxLength={240}
           rows={3}
           className={`${inputCls} h-auto resize-none py-2`}
@@ -556,26 +547,26 @@ function AccountSection() {
       </Row>
 
       <Row
-        label="保存个人资料"
-        hint="昵称与简介一起提交：服务端对 users.updateOwnBasicInfo 限流每分钟 1 次，分开保存会被打回"
+        label={t('settings.account.saveProfileLabel')}
+        hint={t('settings.account.saveProfileHint')}
       >
         <button
           onClick={() => void saveProfile()}
           disabled={profileBusy}
           className="h-9 rounded-md bg-primary px-4 text-sm text-white transition hover:bg-primary-hover disabled:opacity-50"
         >
-          {profileBusy ? '保存中…' : '保存昵称与简介'}
+          {profileBusy ? t('settings.account.saving') : t('settings.account.saveProfileAction')}
         </button>
       </Row>
 
       <Row
-        label="自定义状态（服务端列表）"
-        hint="这里维护服务器上的自定义状态清单。注意：Rocket.Chat 的接口无法把自定义状态挂到自己身上（那部分只在官方客户端的实时协议里），所以这里只做清单管理"
+        label={t('settings.account.customStatusesLabel')}
+        hint={t('settings.account.customStatusesHint')}
       >
         <div className="space-y-2">
           <div className="flex flex-wrap gap-1.5">
             {statuses.length === 0 && (
-              <span className="text-xs text-ink-3">服务端还没有自定义状态</span>
+              <span className="text-xs text-ink-3">{t('settings.account.customStatusesEmpty')}</span>
             )}
             {statuses.map((item) => (
               <span key={item._id} className="inline-flex items-center">
@@ -584,7 +575,7 @@ function AccountSection() {
                   {item.statusType ? <span className="ml-1 text-ink-3">· {item.statusType}</span> : null}
                 </span>
                 <button
-                  title="删除这个状态"
+                  title={t('settings.account.deleteCustomStatus')}
                   disabled={statusBusy}
                   onClick={() => void removeStatus(item._id)}
                   className="h-8 rounded-r-md border border-l-0 border-line px-1.5 text-ink-3 transition hover:text-danger disabled:opacity-40"
@@ -601,7 +592,7 @@ function AccountSection() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') void createStatus();
               }}
-              placeholder="新增状态名，例如「专注中」"
+              placeholder={t('settings.account.newCustomStatusPlaceholder')}
               maxLength={60}
               className="h-8 flex-1 rounded-md border border-line bg-surface-4 px-2.5 text-xs outline-none focus:border-primary"
             />
@@ -610,49 +601,49 @@ function AccountSection() {
               onClick={() => void createStatus()}
               className="h-8 shrink-0 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover disabled:opacity-40"
             >
-              添加
+              {t('common.add')}
             </button>
           </div>
         </div>
       </Row>
 
-      <Row label="服务器地址" hint="切换服务器需要重新登录">
+      <Row label={t('settings.account.serverUrlLabel')} hint={t('settings.account.serverUrlHint')}>
         <input readOnly value={getServerBase() || location.origin} className={`${inputCls} bg-fill-2 text-ink-2`} />
       </Row>
 
-      <Row label="退出登录" hint="退出后返回登录页，可切换服务器或账号">
+      <Row label={t('settings.account.logoutLabel')} hint={t('settings.account.logoutHint')}>
         <button
           onClick={() => setConfirmLogout(true)}
           className="h-9 rounded-md border border-danger px-4 text-sm text-danger transition hover:bg-danger/10"
         >
-          退出登录
+          {t('settings.account.logoutLabel')}
         </button>
       </Row>
 
       </>)}
-      <Row label="启动引导" hint="重新选择团队配置或个人设置，并再次登录">
+      <Row label={t('settings.account.onboardingLabel')} hint={t('settings.account.onboardingHint')}>
         <button
           onClick={() => setConfirmSetup(true)}
           className="h-9 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover"
         >
-          重新运行首次设置
+          {t('settings.account.rerunOnboarding')}
         </button>
       </Row>
 
       {confirmLogout && (
         <ConfirmDialog
-          title="退出登录"
-          message="退出后需要重新输入账号密码。未发送的草稿会保留在本机。"
-          confirmLabel="退出"
+          title={t('settings.account.logoutLabel')}
+          message={t('settings.account.logoutConfirmMessage')}
+          confirmLabel={t('settings.account.logoutConfirmAction')}
           onConfirm={() => void logout()}
           onClose={() => setConfirmLogout(false)}
         />
       )}
       {confirmSetup && (
         <ConfirmDialog
-          title="重新运行首次设置"
-          message="将退出当前登录并重新显示团队配置引导。已有本地配置会保留，团队配置不会静默覆盖你的修改。"
-          confirmLabel="重新开始"
+          title={t('settings.account.rerunOnboarding')}
+          message={t('settings.account.rerunOnboardingConfirmMessage')}
+          confirmLabel={t('settings.account.rerunOnboardingConfirmAction')}
           onConfirm={() => {
             resetFirstRun();
             useUI.getState().setModule('messages');
@@ -665,38 +656,22 @@ function AccountSection() {
   );
 }
 
-const THEMES: { key: ThemeMode; label: string; icon: typeof Sun; desc: string }[] = [
-  { key: 'light', label: '浅色', icon: Sun, desc: '明亮清爽' },
-  { key: 'dark', label: '深色', icon: Moon, desc: '夜间护眼' },
-  { key: 'system', label: '跟随系统', icon: Monitor, desc: '自动切换' },
+const THEMES: { key: ThemeMode; labelKey: MessageKey; icon: typeof Sun; descKey: MessageKey }[] = [
+  { key: 'light', labelKey: 'settings.appearance.theme.light', icon: Sun, descKey: 'settings.appearance.theme.lightDesc' },
+  { key: 'dark', labelKey: 'settings.appearance.theme.dark', icon: Moon, descKey: 'settings.appearance.theme.darkDesc' },
+  { key: 'system', labelKey: 'settings.appearance.theme.system', icon: Monitor, descKey: 'settings.appearance.theme.systemDesc' },
 ];
 
-const THEMES_EN: Record<ThemeMode, { label: string; desc: string }> = {
-  light: { label: 'Light', desc: 'Bright & crisp' },
-  dark: { label: 'Dark', desc: 'Easy on eyes at night' },
-  system: { label: 'System', desc: 'Follow OS theme' },
-};
-
-/** 外观：主题与界面语言 */
+/** 外观：主题与语言 */
 function AppearanceSection() {
-  const locale = useUiLocale();
+  const t = useT();
   const [theme, setTheme] = useState<ThemeMode>(loadTheme);
-  const [localePreference, setLocalePreference] = useState<UiLocalePreference>(
-    () => readUiLocalePreference(),
-  );
 
   return (
     <>
-      <Row
-        label={tr('主题', 'Theme', locale)}
-        hint={tr(
-          '整体配色立即切换；「跟随系统」会随系统的浅色/深色模式变化',
-          'Switches the overall color palette immediately; “System” follows your OS appearance.',
-          locale,
-        )}
-      >
+      <Row label={t('settings.appearance.themeLabel')} hint={t('settings.appearance.themeHint')}>
         <div className="flex gap-3">
-          {THEMES.map(({ key, label, icon: Icon, desc }) => {
+          {THEMES.map(({ key, labelKey, icon: Icon, descKey }) => {
             const active = theme === key;
             return (
               <button
@@ -713,54 +688,16 @@ function AppearanceSection() {
               >
                 <Icon size={22} className={active ? 'text-primary' : 'text-ink-2'} />
                 <span className={`text-sm font-medium ${active ? 'text-primary' : 'text-ink'}`}>
-                  {tr(label, THEMES_EN[key].label, locale)}
+                  {t(labelKey)}
                 </span>
-                <span className="text-xs text-ink-3">{tr(desc, THEMES_EN[key].desc, locale)}</span>
+                <span className="text-xs text-ink-3">{t(descKey)}</span>
               </button>
             );
           })}
         </div>
       </Row>
-      <Row
-        label={tr('界面语言', 'Interface Language', locale)}
-        hint={tr(
-          '自动模式在中文系统使用简体中文，在非中文系统（如 English / C）使用英文',
-          'Auto uses Simplified Chinese on Chinese locales and English elsewhere (including C/POSIX).',
-          locale,
-        )}
-      >
-        <RadioGroup
-          value={localePreference}
-          onChange={(next) => {
-            if (next === localePreference) return;
-            const resolved = saveUiLocalePreference(next);
-            setLocalePreference(next);
-            toast.success(
-              resolved === 'en' ? 'Interface language switched to English' : '界面语言已切换为简体中文',
-            );
-          }}
-          options={[
-            {
-              key: 'auto',
-              label: tr('跟随系统', 'System Default', locale),
-              hint: tr(
-                '中文环境显示简体中文，其余环境显示 English',
-                'Chinese on zh locales, English otherwise',
-                locale,
-              ),
-            },
-            {
-              key: 'zh',
-              label: '简体中文',
-              hint: 'Simplified Chinese',
-            },
-            {
-              key: 'en',
-              label: 'English',
-              hint: 'English UI',
-            },
-          ]}
-        />
+      <Row label={t('locale.label')} hint={t('locale.hint')}>
+        <LanguageSelector variant="cards" />
       </Row>
     </>
   );
@@ -768,6 +705,7 @@ function AppearanceSection() {
 
 /** Windows 桌面端本机快捷键，不跟随 Rocket.Chat 账号同步。 */
 function ShortcutSection() {
+  const t = useT();
   const config = useGlobalShortcut((state) => state.config);
   const status = useGlobalShortcut((state) => state.status);
   const error = useGlobalShortcut((state) => state.error);
@@ -777,20 +715,20 @@ function ShortcutSection() {
     isTauri && typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
 
   const statusText = !windowsDesktop
-    ? '仅 Windows 桌面端支持系统全局快捷键'
+    ? t('settings.shortcuts.windowsOnly')
     : !config.enabled || status === 'disabled'
-      ? '已关闭'
+      ? t('settings.shortcuts.disabled')
       : status === 'registered'
-        ? '已注册，在其他窗口或 RocketX 隐藏到托盘时也可使用'
+        ? t('settings.shortcuts.registered')
         : status === 'conflict'
-          ? '注册失败，快捷键可能已被其他程序占用'
-          : '正在注册…';
+          ? t('settings.shortcuts.conflict')
+          : t('settings.shortcuts.registering');
 
   return (
     <>
       <Row
-        label="全局指令中心"
-        hint="唤起 RocketX；直接回车打开下一条未读，输入内容则搜索会话、消息、联系人和频道"
+        label={t('settings.shortcuts.commandCenterLabel')}
+        hint={t('settings.shortcuts.commandCenterHint')}
         inline
       >
         <Toggle
@@ -799,7 +737,7 @@ function ShortcutSection() {
           onChange={setEnabled}
         />
       </Row>
-      <Row label="系统快捷键" hint="设置保存在本机，不跟随账号同步">
+      <Row label={t('settings.shortcuts.systemShortcutLabel')} hint={t('settings.shortcuts.systemShortcutHint')}>
         <select
           value={config.shortcut}
           disabled={!windowsDesktop || !config.enabled}
@@ -825,7 +763,7 @@ function ShortcutSection() {
 
 /** 操作系统级桌面偏好，不跟随 Rocket.Chat 账号同步。 */
 function DesktopSection() {
-  const locale = useUiLocale();
+  const t = useT();
   const [mode, setMode] = useState<RuntimeMode>(getRuntimeMode);
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(autostartAvailable);
@@ -873,27 +811,29 @@ function DesktopSection() {
     try {
       const actual = await updateAutostartEnabled(next);
       setEnabled(actual);
-      if (actual !== next) throw new Error(tr('系统没有保存该设置，请重试', 'OS did not save the setting, retry', locale));
-      toast.success(next ? tr('已开启开机自启', 'Launch at login enabled', locale) : tr('已关闭开机自启', 'Launch at login disabled', locale));
+      if (actual !== next) throw new Error(t('settings.desktop.autostartNotSaved'));
+      toast.success(
+        next ? t('settings.desktop.autostartEnabledToast') : t('settings.desktop.autostartDisabledToast'),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      toast.error(err, tr('开机自启设置失败', 'Issue updating launch at login', locale));
+      toast.error(err, t('settings.desktop.autostartFailed'));
     } finally {
       setLoading(false);
     }
   };
 
   const statusText = !isTauri
-    ? tr('仅桌面客户端支持，网页版不会修改系统设置', 'Desktop client only; browser mode does not modify OS settings', locale)
+    ? t('settings.desktop.autostartDesktopOnly')
     : !autostartAvailable
-      ? tr('Debug 版依赖开发服务器，请使用正式安装版验证开机启动', 'Dev builds depend on Vite dev server; test launch at login on release builds', locale)
+      ? t('settings.desktop.autostartDebugHint')
     : loading
-      ? tr('正在读取系统设置…', 'Reading OS settings…', locale)
+      ? t('settings.desktop.autostartLoading')
       : error
-        ? tr(`读取或保存失败：${error}`, `Setting issue: ${error}`, locale)
+        ? t('settings.desktop.autostartError', { error })
         : enabled
-          ? tr('已开启，登录系统后会静默启动到托盘', 'Enabled; launches quietly to tray at login', locale)
-          : tr('已关闭', 'Disabled', locale);
+          ? t('settings.desktop.autostartActive')
+          : t('settings.desktop.autostartOff');
 
   const changeUiScale = async (value: `${UiScale}`) => {
     const next = normalizeUiScale(Number(value));
@@ -901,9 +841,9 @@ function DesktopSection() {
     try {
       await applyDesktopUiScale(next);
       setUiScale(next);
-      toast.success(tr(`界面缩放已设为 ${next}%`, `Interface scale set to ${next}%`, locale));
+      toast.success(t('settings.desktop.uiScaleSet', { scale: next }));
     } catch (err) {
-      toast.error(err, tr('界面缩放设置失败', 'Issue updating interface scale', locale));
+      toast.error(err, t('settings.desktop.uiScaleFailed'));
     } finally {
       setScaleChanging(false);
     }
@@ -927,9 +867,9 @@ function DesktopSection() {
         serverOrigin,
         adoConfigured: Boolean(ado?.adoBase),
       });
-      if (saved) toast.success(tr('诊断日志已导出', 'Diagnostic logs exported', locale));
+      if (saved) toast.success(t('settings.desktop.diagnosticsExported'));
     } catch (err) {
-      toast.error(err, tr('诊断日志导出失败', 'Issue exporting diagnostic logs', locale));
+      toast.error(err, t('settings.desktop.diagnosticsExportFailed'));
     } finally {
       setExporting(false);
     }
@@ -938,12 +878,8 @@ function DesktopSection() {
   return (
     <>
       <Row
-        label={tr('运行模式', 'Runtime Mode', locale)}
-        hint={tr(
-          '精简模式不加载 AI、管家、托管、轮询与 OCR，并减少动画；切换后会立即刷新当前页面',
-          'Lite mode skips AI, Butler, hosted sessions, polling, and OCR with reduced motion; reloads right away.',
-          locale,
-        )}
+        label={t('settings.desktop.runtimeModeLabel')}
+        hint={t('settings.desktop.runtimeModeHint')}
       >
         <RadioGroup
           value={mode}
@@ -956,20 +892,20 @@ function DesktopSection() {
           options={[
             {
               key: 'standard',
-              label: tr('标准模式', 'Standard', locale),
-              hint: tr('默认体验，保留全部能力', 'Default experience with all capabilities', locale),
+              label: t('settings.desktop.runtimeModeStandard'),
+              hint: t('settings.desktop.runtimeModeStandardHint'),
             },
             {
               key: 'performance',
-              label: tr('精简模式', 'Lite Mode', locale),
-              hint: tr('不加载 AI，仅保留常规 Rocket.Chat 功能', 'Skips AI; keeps core Rocket.Chat messaging', locale),
+              label: t('settings.desktop.runtimeModePerformance'),
+              hint: t('settings.desktop.runtimeModePerformanceHint'),
             },
           ]}
         />
       </Row>
       <Row
-        label={tr('开机时启动 RocketX', 'Launch RocketX at Login', locale)}
-        hint={tr('由操作系统管理，设置保存在本机，不跟随账号同步', 'Managed by your OS locally, not synced across devices', locale)}
+        label={t('settings.desktop.autostartLabel')}
+        hint={t('settings.desktop.autostartHint')}
         inline
       >
         <div className="flex min-w-0 flex-col items-end gap-1.5">
@@ -988,14 +924,10 @@ function DesktopSection() {
       </Row>
       {isTauri && (
         <Row
-          label={tr('界面缩放', 'Interface Scale', locale)}
-          hint={tr(
-            '默认 100%，保存在本机；也可使用 Ctrl/Cmd +、Ctrl/Cmd - 与 Ctrl/Cmd 0 快速调整',
-            'Defaults to 100% locally; also adjustable with Ctrl/Cmd +, -, and 0.',
-            locale,
-          )}
+          label={t('settings.desktop.uiScaleLabel')}
+          hint={t('settings.desktop.uiScaleHint')}
         >
-          <div role="radiogroup" aria-label={tr('界面缩放', 'Interface Scale', locale)} className="flex flex-wrap gap-3">
+          <div role="radiogroup" aria-label={t('settings.desktop.uiScaleLabel')} className="flex flex-wrap gap-3">
             {UI_SCALE_OPTIONS.map((scale) => {
               const selected = scale === uiScale;
               return (
@@ -1020,35 +952,28 @@ function DesktopSection() {
         </Row>
       )}
       <Row
-        label={tr('局域网 P2P 直传', 'LAN Direct Transfer', locale)}
-        hint={tr(
-          '仅从聊天输入区的 P2P 图标手动发起；普通消息和普通附件始终走 Rocket.Chat',
-          'Triggered manually from chat composer P2P icon; standard messages and attachments always go via Rocket.Chat.',
-          locale,
-        )}
+        label={t('settings.desktop.lanP2pLabel')}
+        hint={t('settings.desktop.lanP2pHint')}
       >
         <div className="max-w-md text-sm text-ink-2">
           {!isTauri ? (
-            tr('网页版不启用原生 LAN socket，文件继续走 Rocket.Chat。', 'Browser mode skips native LAN sockets; files go via Rocket.Chat.', locale)
+            t('settings.desktop.lanP2pWebOnly')
           ) : (
             <>
               <div>
-                {tr(
-                  `在线候选 ${lanStatus.peers} 台，其中可信 ${lanStatus.trusted} 台。`,
-                  `${lanStatus.peers} peer(s) online, ${lanStatus.trusted} trusted.`,
-                  locale,
-                )}
+                {t('settings.desktop.lanP2pPeers', {
+                  peers: lanStatus.peers,
+                  trusted: lanStatus.trusted,
+                })}
               </div>
-              <div className="mt-1 text-xs text-ink-3">
-                {tr('P2P 仅在输入区手动触发。', 'P2P only runs when triggered in the composer.', locale)}
-              </div>
+              <div className="mt-1 text-xs text-ink-3">{t('settings.desktop.lanP2pManualOnly')}</div>
             </>
           )}
         </div>
       </Row>
       <Row
-        label="导出诊断日志"
-        hint="包含应用版本、连接状态和脱敏后的近期错误；不会包含密码、PAT、令牌或消息正文"
+        label={t('settings.desktop.exportLogsLabel')}
+        hint={t('settings.desktop.exportLogsHint')}
         inline
       >
         <button
@@ -1058,15 +983,24 @@ function DesktopSection() {
           className="flex h-9 items-center gap-2 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           {exporting ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
-          {exporting ? '正在导出…' : '导出日志'}
+          {exporting ? t('settings.desktop.exportingLogs') : t('settings.desktop.exportLogsAction')}
         </button>
       </Row>
     </>
   );
 }
 
+type AliasFileResultState =
+  | { kind: 'exported'; count: number }
+  | { kind: 'invalid' }
+  | { kind: 'imported'; added: number; skippedRooms: number }
+  | null;
+
+type ArchivedAliasResultState = { serverBase: string; added: number } | null;
+
 /** 侧栏偏好（服务端同步，跨设备生效） */
 function SidebarSection() {
+  const { t, tp } = useI18n();
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
   const nameFormat = useAliases((s) => s.nameFormat);
@@ -1075,9 +1009,9 @@ function SidebarSection() {
   const importAliases = useAliases((s) => s.importAliases);
   // 换过服务器地址（如 IP 变了）前的备注被账号隔离机制归档，提供找回入口
   const [archives, setArchives] = useState<ArchivedAliases[]>(() => listArchivedAliases());
-  const [importResult, setImportResult] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<ArchivedAliasResultState>(null);
   const aliasFileRef = useRef<HTMLInputElement>(null);
-  const [fileResult, setFileResult] = useState<string | null>(null);
+  const [fileResult, setFileResult] = useState<AliasFileResultState>(null);
   // 导出只含人的备注（u: 键）；会话备注（r: 键）走账号同步，不进导出文件
   const userAliasCount = useAliases(
     (s) => Object.keys(s.aliases).filter((k) => k.startsWith('u:')).length,
@@ -1090,62 +1024,107 @@ function SidebarSection() {
       extension: 'json',
       mimeType: 'application/json',
     });
-    if (saved) setFileResult(`已导出 ${userAliasCount} 条联系人备注`);
+    if (saved) setFileResult({ kind: 'exported', count: userAliasCount });
   };
 
   const importAliasFile = async (file: File) => {
     const parsed = parseAliasExport(await file.text());
     if (!parsed) {
-      setFileResult('文件格式不对：需要本应用导出的备注 JSON');
+      setFileResult({ kind: 'invalid' });
       return;
     }
     const added = await importAliases(parsed.aliases);
-    const skipped =
-      parsed.skippedRooms > 0 ? `；跳过 ${parsed.skippedRooms} 条会话备注（随账号同步，不从文件导入）` : '';
-    setFileResult(
-      added > 0
-        ? `已导入 ${added} 条备注（已有的同名备注保持不动）${skipped}`
-        : `没有可导入的新备注：文件里的备注本机都已有${skipped}`,
-    );
+    setFileResult({ kind: 'imported', added, skippedRooms: parsed.skippedRooms });
   };
+
+  const fileResultText = fileResult
+    ? fileResult.kind === 'exported'
+      ? tp(
+          fileResult.count,
+          'settings.sidebar.aliasesExportedOne',
+          'settings.sidebar.aliasesExportedOther',
+          { count: fileResult.count },
+        )
+      : fileResult.kind === 'invalid'
+        ? t('settings.sidebar.aliasesInvalidFile')
+        : (() => {
+            const skipped = fileResult.skippedRooms > 0
+              ? tp(
+                  fileResult.skippedRooms,
+                  'settings.sidebar.aliasesSkippedRoomsOne',
+                  'settings.sidebar.aliasesSkippedRoomsOther',
+                  { count: fileResult.skippedRooms },
+                )
+              : '';
+            return fileResult.added > 0
+              ? tp(
+                  fileResult.added,
+                  'settings.sidebar.aliasesImportedOne',
+                  'settings.sidebar.aliasesImportedOther',
+                  { count: fileResult.added, skipped },
+                )
+              : t('settings.sidebar.aliasesNoneImported', { skipped });
+          })()
+    : null;
+
+  const importResultText = importResult
+    ? tp(
+        importResult.added,
+        'settings.sidebar.archivedAliasesImportedOne',
+        'settings.sidebar.archivedAliasesImportedOther',
+        { server: importResult.serverBase, count: importResult.added },
+      )
+    : null;
 
   return (
     <>
-      <Row label="显示密度" hint="会话列表每一项的高度与信息量">
+      <Row label={t('settings.sidebar.densityLabel')} hint={t('settings.sidebar.densityHint')}>
         <RadioGroup
           value={prefs.sidebarViewMode}
           onChange={(v) => void update({ sidebarViewMode: v })}
           options={[
-            { key: 'extended', label: '宽松', hint: '显示消息预览' },
-            { key: 'medium', label: '标准', hint: '默认' },
-            { key: 'condensed', label: '紧凑', hint: '一屏更多会话' },
+            {
+              key: 'extended',
+              label: t('settings.sidebar.densityExtended'),
+              hint: t('settings.sidebar.densityExtendedHint'),
+            },
+            {
+              key: 'medium',
+              label: t('settings.sidebar.densityMedium'),
+              hint: t('settings.sidebar.densityMediumHint'),
+            },
+            {
+              key: 'condensed',
+              label: t('settings.sidebar.densityCondensed'),
+              hint: t('settings.sidebar.densityCondensedHint'),
+            },
           ]}
         />
       </Row>
 
-      <Row label="排序方式">
+      <Row label={t('settings.sidebar.sortByLabel')}>
         <RadioGroup
           value={prefs.sidebarSortby}
           onChange={(v) => void update({ sidebarSortby: v })}
           options={[
-            { key: 'activity', label: '按活跃时间' },
-            { key: 'alphabetical', label: '按名称' },
+            { key: 'activity', label: t('settings.sidebar.sortByActivity') },
+            { key: 'alphabetical', label: t('settings.sidebar.sortByAlphabetical') },
           ]}
         />
       </Row>
 
-      <Row label="备注名显示" hint="给联系人起了备注后，名字怎么显示（随账号同步）">
+      <Row label={t('settings.sidebar.nameFormatLabel')} hint={t('settings.sidebar.nameFormatHint')}>
         <RadioGroup
           value={nameFormat}
           onChange={(v) => setNameFormat(v)}
           options={[
-            { key: 'alias', label: '只显示备注名' },
-            { key: 'aliasWithReal', label: '备注名（原名）' },
+            { key: 'alias', label: t('settings.sidebar.nameFormatAlias') },
+            { key: 'aliasWithReal', label: t('settings.sidebar.nameFormatAliasWithReal') },
           ]}
         />
       </Row>
 
-      <Row label="导入 / 导出备注" hint="把联系人（人）的备注导出成 JSON 备份或迁到别的设备；会话备注随账号同步，不含在文件里。导入只补缺，不覆盖已有备注">
+      <Row label={t('settings.sidebar.aliasesImportExportLabel')} hint={t('settings.sidebar.aliasesImportExportHint')}>
         <div className="flex max-w-md flex-col gap-2">
           <div className="flex items-center gap-2">
             <button
@@ -1153,13 +1132,13 @@ function SidebarSection() {
               disabled={userAliasCount === 0}
               className="h-7 rounded-md border border-line px-3 text-xs text-primary transition hover:bg-fill-hover disabled:opacity-40"
             >
-              导出为 JSON
+              {t('settings.sidebar.exportJson')}
             </button>
             <button
               onClick={() => aliasFileRef.current?.click()}
               className="h-7 rounded-md border border-line px-3 text-xs text-primary transition hover:bg-fill-hover"
             >
-              从文件导入
+              {t('settings.sidebar.importFromFile')}
             </button>
             <input
               ref={aliasFileRef}
@@ -1173,13 +1152,13 @@ function SidebarSection() {
               }}
             />
           </div>
-          {fileResult && <div className="text-xs text-ink-3">{fileResult}</div>}
+          {fileResultText && <div className="text-xs text-ink-3">{fileResultText}</div>}
         </div>
       </Row>
 
       {/* importResult 留在条件里：导入成功后归档被消费、archives 清空，结果提示仍需可见 */}
-      {(archives.length > 0 || importResult) && (
-        <Row label="导入历史备注" hint="换过服务器地址（如 IP 变化）前的备注还留在本机，可合并回来（已有的同名备注不会被覆盖）">
+      {(archives.length > 0 || importResultText) && (
+        <Row label={t('settings.sidebar.archivedAliasesLabel')} hint={t('settings.sidebar.archivedAliasesHint')}>
           <div className="flex max-w-md flex-col gap-2">
             {archives.map((a) => (
               <div
@@ -1187,47 +1166,52 @@ function SidebarSection() {
                 className="flex items-center justify-between gap-3 rounded-md border border-line px-3 py-2"
               >
                 <span className="min-w-0 truncate text-sm text-ink-2">
-                  来自旧地址 {a.serverBase} 的 {a.count} 条备注
+                  {tp(
+                    a.count,
+                    'settings.sidebar.archivedAliasesItemOne',
+                    'settings.sidebar.archivedAliasesItemOther',
+                    { server: a.serverBase, count: a.count },
+                  )}
                 </span>
                 <button
                   onClick={async () => {
                     const added = await importArchived(a.owner);
-                    setImportResult(`已从 ${a.serverBase} 导入 ${added} 条备注`);
+                    setImportResult({ serverBase: a.serverBase, added });
                     setArchives(listArchivedAliases());
                   }}
                   className="h-7 shrink-0 rounded-md border border-line px-3 text-xs text-primary transition hover:bg-fill-hover"
                 >
-                  导入
+                  {t('settings.sidebar.importAction')}
                 </button>
               </div>
             ))}
-            {importResult && <div className="text-xs text-ink-3">{importResult}</div>}
+            {importResultText && <div className="text-xs text-ink-3">{importResultText}</div>}
           </div>
         </Row>
       )}
 
-      <Row label="按类型分区" hint="把会话分成 收藏 / 团队 / 讨论 / 频道 / 私聊 几个可折叠的分区" inline>
+      <Row label={t('settings.sidebar.groupByTypeLabel')} hint={t('settings.sidebar.groupByTypeHint')} inline>
         <Toggle
           checked={prefs.sidebarGroupByType}
           onChange={(v) => void update({ sidebarGroupByType: v })}
         />
       </Row>
 
-      <Row label="收藏单独成区" hint="收藏的会话集中显示在顶部" inline>
+      <Row label={t('settings.sidebar.showFavoritesLabel')} hint={t('settings.sidebar.showFavoritesHint')} inline>
         <Toggle
           checked={prefs.sidebarShowFavorites}
           onChange={(v) => void update({ sidebarShowFavorites: v })}
         />
       </Row>
 
-      <Row label="未读单独置顶" hint="有未读的会话集中显示在最上方" inline>
+      <Row label={t('settings.sidebar.showUnreadLabel')} hint={t('settings.sidebar.showUnreadHint')} inline>
         <Toggle
           checked={prefs.sidebarShowUnread}
           onChange={(v) => void update({ sidebarShowUnread: v })}
         />
       </Row>
 
-      <Row label="显示头像" hint="关闭后会话列表更紧凑" inline>
+      <Row label={t('settings.sidebar.displayAvatarLabel')} hint={t('settings.sidebar.displayAvatarHint')} inline>
         <Toggle
           checked={prefs.sidebarDisplayAvatar}
           onChange={(v) => void update({ sidebarDisplayAvatar: v })}
@@ -1241,6 +1225,7 @@ const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
 
 function AttachmentArchiveSettings() {
+  const { t, tp } = useI18n();
   const [snapshot, setSnapshot] = useState(readAttachmentArchiveSnapshot);
   const [deleteRid, setDeleteRid] = useState<string | null>(null);
   const rooms = roomArchiveSummaries(snapshot.archive);
@@ -1261,7 +1246,7 @@ function AttachmentArchiveSettings() {
       const chat = useChat.getState();
       for (const [rid, messages] of Object.entries(chat.messages)) {
         const roomName = chat.subscriptions[rid]?.fname || chat.subscriptions[rid]?.name ||
-          chat.rooms[rid]?.fname || chat.rooms[rid]?.name || '会话';
+          chat.rooms[rid]?.fname || chat.rooms[rid]?.name || t('settings.message.archive.roomFallback');
         enqueueAttachmentArchives(messages, roomName);
       }
     }
@@ -1270,10 +1255,10 @@ function AttachmentArchiveSettings() {
   return (
     <>
       <Row
-        label="自动留存附件到本机"
+        label={t('settings.message.archive.autoLabel')}
         hint={isTauri
-          ? '默认关闭；开启后，客户端看到的所有房间附件会在服务端清理前保存本地副本。不会删除或修改 Rocket.Chat 原文件。'
-          : '仅桌面端支持本地附件留存；网页版仍由浏览器管理文件。'}
+          ? t('settings.message.archive.autoHintDesktop')
+          : t('settings.message.archive.autoHintWeb')}
         inline
       >
         <Toggle
@@ -1284,12 +1269,12 @@ function AttachmentArchiveSettings() {
       </Row>
 
       {isTauri && snapshot.settings.enabled && (
-        <Row label="本地留存限制" hint="超过保留期或账号总配额时，只删除最旧的本地副本。">
+        <Row label={t('settings.message.archive.limitsLabel')} hint={t('settings.message.archive.limitsHint')}>
           <div className="grid max-w-2xl grid-cols-3 gap-3">
             <label className="text-xs text-ink-3">
-              单文件上限
+              {t('settings.message.archive.maxFileLabel')}
               <select
-                aria-label="附件留存单文件上限"
+                aria-label={t('settings.message.archive.maxFileAriaLabel')}
                 value={snapshot.settings.maxFileBytes}
                 onChange={(event) => updateSettings({ maxFileBytes: Number(event.target.value) })}
                 className={`${inputCls} mt-1 max-w-none`}
@@ -1300,9 +1285,9 @@ function AttachmentArchiveSettings() {
               </select>
             </label>
             <label className="text-xs text-ink-3">
-              账号总配额
+              {t('settings.message.archive.maxTotalLabel')}
               <select
-                aria-label="附件留存账号总配额"
+                aria-label={t('settings.message.archive.maxTotalAriaLabel')}
                 value={snapshot.settings.maxTotalBytes}
                 onChange={(event) => updateSettings({ maxTotalBytes: Number(event.target.value) })}
                 className={`${inputCls} mt-1 max-w-none`}
@@ -1313,15 +1298,17 @@ function AttachmentArchiveSettings() {
               </select>
             </label>
             <label className="text-xs text-ink-3">
-              保留时间
+              {t('settings.message.archive.retentionLabel')}
               <select
-                aria-label="附件留存时间"
+                aria-label={t('settings.message.archive.retentionAriaLabel')}
                 value={snapshot.settings.retentionDays}
                 onChange={(event) => updateSettings({ retentionDays: Number(event.target.value) })}
                 className={`${inputCls} mt-1 max-w-none`}
               >
                 {[7, 30, 90, 365].map((value) => (
-                  <option key={value} value={value}>{value} 天</option>
+                  <option key={value} value={value}>
+                    {tp(value, 'settings.message.archive.daysOne', 'settings.message.archive.daysOther', { count: value })}
+                  </option>
                 ))}
               </select>
             </label>
@@ -1331,27 +1318,39 @@ function AttachmentArchiveSettings() {
 
       {isTauri && rooms.length > 0 && (
         <Row
-          label={`本地附件（${snapshot.archive.records.length} 个，${fmtSize(totalBytes)}）`}
-          hint="按房间查看或删除本地副本；删除后无法由 RocketX 恢复，但服务器原文件不受影响。"
+          label={tp(
+            snapshot.archive.records.length,
+            'settings.message.archive.localFilesLabelOne',
+            'settings.message.archive.localFilesLabelOther',
+            { count: snapshot.archive.records.length, size: fmtSize(totalBytes) },
+          )}
+          hint={t('settings.message.archive.localFilesHint')}
         >
           <div className="max-w-2xl overflow-hidden rounded-lg border border-line">
             {rooms.map((room) => (
               <div key={room.rid} className="flex items-center gap-3 border-b border-line px-3 py-2.5 last:border-b-0">
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm text-ink">{room.roomName}</div>
-                  <div className="text-xs text-ink-3">{room.files} 个文件 · {fmtSize(room.bytes)}</div>
+                  <div className="text-xs text-ink-3">
+                    {tp(
+                      room.files,
+                      'settings.message.archive.roomFilesOne',
+                      'settings.message.archive.roomFilesOther',
+                      { count: room.files, size: fmtSize(room.bytes) },
+                    )}
+                  </div>
                 </div>
                 <button
-                  onClick={() => void openRoomAttachmentArchive(room.rid).catch((error) => toast.error(error, '无法打开本地附件目录'))}
+                  onClick={() => void openRoomAttachmentArchive(room.rid).catch((error) => toast.error(error, t('settings.message.archive.openDirFailed')))}
                   className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
                 >
-                  打开目录
+                  {t('settings.message.archive.openDir')}
                 </button>
                 <button
                   onClick={() => setDeleteRid(room.rid)}
                   className="h-8 rounded-md border border-danger px-3 text-xs text-danger hover:bg-danger/10"
                 >
-                  删除本地副本
+                  {t('settings.message.archive.deleteLocalCopies')}
                 </button>
               </div>
             ))}
@@ -1361,10 +1360,10 @@ function AttachmentArchiveSettings() {
 
       {deleteRid && (
         <ConfirmDialog
-          title="删除这个房间的本地附件"
-          message="将删除该房间由 RocketX 自动留存的全部本地副本。Rocket.Chat 服务器上的消息和原文件不会被删除。"
-          confirmLabel="删除本地副本"
-          onConfirm={() => void deleteRoomAttachmentArchive(deleteRid).catch((error) => toast.error(error, '删除本地副本失败'))}
+          title={t('settings.message.archive.deleteConfirmTitle')}
+          message={t('settings.message.archive.deleteConfirmMessage')}
+          confirmLabel={t('settings.message.archive.deleteLocalCopies')}
+          onConfirm={() => void deleteRoomAttachmentArchive(deleteRid).catch((error) => toast.error(error, t('settings.message.archive.deleteFailed')))}
           onClose={() => setDeleteRid(null)}
         />
       )}
@@ -1374,6 +1373,7 @@ function AttachmentArchiveSettings() {
 
 /** 消息偏好 */
 function MessageSection() {
+  const t = useT();
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
   const hoverDelayMs = useUiPrefs((s) => s.hoverDelayMs);
@@ -1381,33 +1381,41 @@ function MessageSection() {
 
   return (
     <>
-      <Row label="悬浮工具栏触发" hint="鼠标在消息上停留多久后弹出表情/回复等快捷按钮（本机设置）">
+      <Row label={t('settings.message.hoverDelayLabel')} hint={t('settings.message.hoverDelayHint')}>
         <RadioGroup
           value={String(hoverDelayMs)}
           onChange={(v) => setHoverDelayMs(Number(v))}
           options={[
-            { key: '500', label: '0.5 秒' },
-            { key: '1000', label: '1 秒' },
-            { key: '2000', label: '2 秒' },
-            { key: '3000', label: '3 秒' },
+            { key: '500', label: t('settings.message.hoverDelay500') },
+            { key: '1000', label: t('settings.message.hoverDelay1000') },
+            { key: '2000', label: t('settings.message.hoverDelay2000') },
+            { key: '3000', label: t('settings.message.hoverDelay3000') },
           ]}
         />
       </Row>
 
-      <Row label="发送方式" hint="决定 Enter 键是发送还是换行">
+      <Row label={t('settings.message.sendModeLabel')} hint={t('settings.message.sendModeHint')}>
         <RadioGroup
           value={prefs.sendOnEnter}
           onChange={(v) => void update({ sendOnEnter: v })}
           options={[
-            { key: 'normal', label: 'Enter 发送', hint: 'Alt+Enter 换行' },
-            { key: 'alternative', label: 'Ctrl+Enter 发送', hint: 'Enter 换行' },
+            {
+              key: 'normal',
+              label: t('settings.message.sendModeNormal'),
+              hint: t('settings.message.sendModeNormalHint'),
+            },
+            {
+              key: 'alternative',
+              label: t('settings.message.sendModeAlt'),
+              hint: t('settings.message.sendModeAltHint'),
+            },
           ]}
         />
       </Row>
 
       <Row
-        label="中英文自动加空格"
-        hint="发送时在汉字与英文或数字之间自动补空格（随账号同步）"
+        label={t('settings.message.mixedSpaceLabel')}
+        hint={t('settings.message.mixedSpaceHint')}
         inline
       >
         <Toggle
@@ -1416,7 +1424,7 @@ function MessageSection() {
         />
       </Row>
 
-      <Row label="折叠超长消息" hint="特别长的消息只显示预览，点「展开全部」看全文（随账号同步）" inline>
+      <Row label={t('settings.message.collapseLongLabel')} hint={t('settings.message.collapseLongHint')} inline>
         <Toggle
           checked={prefs.rcxCollapseLongMessages}
           onChange={(v) => void update({ rcxCollapseLongMessages: v })}
@@ -1424,20 +1432,24 @@ function MessageSection() {
       </Row>
 
       {prefs.rcxCollapseLongMessages && (
-        <Row label="折叠时机" hint="消息超过多长才折叠成预览（随账号同步）">
+        <Row label={t('settings.message.foldAtLabel')} hint={t('settings.message.foldAtHint')}>
           <RadioGroup
             value={prefs.rcxLongMessageFoldAt}
             onChange={(v) => void update({ rcxLongMessageFoldAt: v })}
             options={[
-              { key: 'half', label: '超过半屏', hint: '默认' },
-              { key: 'one', label: '超过一屏' },
-              { key: 'two', label: '超过两屏' },
+              {
+                key: 'half',
+                label: t('settings.message.foldAtHalf'),
+                hint: t('settings.message.foldAtHalfHint'),
+              },
+              { key: 'one', label: t('settings.message.foldAtOne') },
+              { key: 'two', label: t('settings.message.foldAtTwo') },
             ]}
           />
         </Row>
       )}
 
-      <Row label="自动加载图片" hint="关闭后图片需要点击才加载（省流量）" inline>
+      <Row label={t('settings.message.autoImageLoadLabel')} hint={t('settings.message.autoImageLoadHint')} inline>
         <Toggle
           checked={prefs.autoImageLoad}
           onChange={(v) => void update({ autoImageLoad: v })}
@@ -1446,18 +1458,18 @@ function MessageSection() {
 
       <AttachmentArchiveSettings />
 
-      <Row label="在消息中显示头像" inline>
+      <Row label={t('settings.message.displayAvatarsLabel')} inline>
         <Toggle
           checked={prefs.displayAvatars}
           onChange={(v) => void update({ displayAvatars: v })}
         />
       </Row>
 
-      <Row label="显示表情" hint="关闭后 :emoji: 以文本显示" inline>
+      <Row label={t('settings.message.useEmojisLabel')} hint={t('settings.message.useEmojisHint')} inline>
         <Toggle checked={prefs.useEmojis} onChange={(v) => void update({ useEmojis: v })} />
       </Row>
 
-      <Row label="话题回复也显示在主会话" hint="开启后，话题里的回复也会出现在主会话的消息流里" inline>
+      <Row label={t('settings.message.threadsInMainLabel')} hint={t('settings.message.threadsInMainHint')} inline>
         <Toggle
           checked={prefs.showThreadsInMainChannel}
           onChange={(v) => void update({ showThreadsInMainChannel: v })}
@@ -1469,6 +1481,7 @@ function MessageSection() {
 
 /** 通知偏好 */
 function NotificationSection() {
+  const { t, tp } = useI18n();
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
   const markChecklist = useOnboarding((s) => s.markChecklist);
@@ -1497,14 +1510,14 @@ function NotificationSection() {
 
   return (
     <>
-      <Row label="系统通知权限" hint="系统授权由操作系统管理；这里的关闭只停止 RocketX 的桌面通知" inline>
+      <Row label={t('settings.notification.systemPermLabel')} hint={t('settings.notification.systemPermHint')} inline>
         <div className="flex items-center gap-2">
           <span
             className={`rounded px-2 py-1 text-xs ${
               permission === 'granted' ? 'bg-success/15 text-success' : 'bg-fill-1 text-ink-2'
             }`}
           >
-            {permission === 'granted' ? '已开启' : '未开启'}
+            {permission === 'granted' ? t('settings.notification.permGranted') : t('settings.notification.permOff')}
           </span>
           {permission === 'default' && (
             <button
@@ -1516,7 +1529,7 @@ function NotificationSection() {
               }
               className="h-8 rounded-md bg-primary px-3 text-xs text-white hover:bg-primary-hover"
             >
-              开启
+              {t('settings.notification.enableAction')}
             </button>
           )}
           {permission === 'granted' && (
@@ -1528,98 +1541,117 @@ function NotificationSection() {
               }
               className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
             >
-              {prefs.desktopNotifications === 'nothing' ? '开启桌面通知' : '关闭桌面通知'}
+              {prefs.desktopNotifications === 'nothing'
+                ? t('settings.notification.enableDesktop')
+                : t('settings.notification.disableDesktop')}
             </button>
           )}
         </div>
       </Row>
 
       <Row
-        label="桌面通知"
-        hint="免打扰的会话不弹通知、只计未读和任务栏角标；@我 会穿透免打扰"
+        label={t('settings.notification.desktopNotifyLabel')}
+        hint={t('settings.notification.desktopNotifyHint')}
       >
         <RadioGroup
           value={prefs.desktopNotifications}
           onChange={(v) => void update({ desktopNotifications: v })}
           options={[
-            { key: 'all', label: '全部消息' },
-            { key: 'mentions', label: '私聊和 @我', hint: '群聊普通消息只计未读，不弹窗' },
-            { key: 'nothing', label: '不通知' },
+            { key: 'all', label: t('settings.notification.desktopNotifyAll') },
+            {
+              key: 'mentions',
+              label: t('settings.notification.desktopNotifyMentions'),
+              hint: t('settings.notification.desktopNotifyMentionsHint'),
+            },
+            { key: 'nothing', label: t('settings.notification.desktopNotifyNothing') },
           ]}
         />
       </Row>
 
       {aggregationState && (
         <>
-          <Row label="禅模式" hint="开启后按会话聚合普通通知，紧急消息仍立即穿透" inline>
+          <Row label={t('settings.notification.zenModeLabel')} hint={t('settings.notification.zenModeHint')} inline>
             <Toggle
               checked={aggregationState.config.enabled}
               onChange={(enabled) => updateAggregation({ enabled })}
             />
           </Row>
-          <Row label="聚合窗口" hint="同一会话在窗口结束后只弹一条摘要">
+          <Row label={t('settings.notification.windowLabel')} hint={t('settings.notification.windowHint')}>
             <select
               value={aggregationState.config.windowMinutes}
               onChange={(event) => updateAggregation({ windowMinutes: Number(event.target.value) })}
               className="h-8 rounded-md border border-line bg-surface-4 px-2 text-sm text-ink outline-none"
             >
               {[1, 3, 5, 10, 15, 30].map((minutes) => (
-                <option key={minutes} value={minutes}>{minutes} 分钟</option>
+                <option key={minutes} value={minutes}>
+                  {tp(minutes, 'settings.notification.minutesOne', 'settings.notification.minutesOther', {
+                    count: minutes,
+                  })}
+                </option>
               ))}
             </select>
           </Row>
-          <Row label="紧急穿透" hint="这些消息不等待聚合，直接弹出">
+          <Row label={t('settings.notification.urgentLabel')} hint={t('settings.notification.urgentHint')}>
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-ink-2">
               {([
-                ['directMentions', '@我'],
-                ['directMessages', '私聊'],
-                ['broadcastMentions', '@all / @here'],
-                ['priorityOne', 'P1'],
-              ] as const).map(([key, label]) => (
+                ['directMentions', 'settings.notification.urgentDirectMentions'],
+                ['directMessages', 'settings.notification.urgentDirectMessages'],
+                ['broadcastMentions', 'settings.notification.urgentBroadcast'],
+                ['priorityOne', 'settings.notification.urgentP1'],
+              ] as const).map(([key, labelKey]) => (
                 <label key={key} className="flex items-center gap-1.5">
                   <input
                     type="checkbox"
                     checked={aggregationState.config.urgent[key]}
                     onChange={(event) => updateAggregation({ urgent: { [key]: event.target.checked } })}
                   />
-                  {label}
+                  {t(labelKey)}
                 </label>
               ))}
             </div>
             <input
-              value={aggregationState.config.urgent.keywords.join('；')}
+              value={aggregationState.config.urgent.keywords.join(t('settings.notification.keywordSeparator'))}
               onChange={(event) => updateAggregation({
                 urgent: { keywords: event.target.value.split(/[;；]/) },
               })}
-              placeholder="紧急关键词，用分号分隔"
+              placeholder={t('settings.notification.keywordsPlaceholder')}
               className="mt-2 h-8 w-full max-w-md rounded-md border border-line bg-surface-4 px-2 text-xs text-ink outline-none"
             />
           </Row>
-          <Row label="看看少打扰了多少" hint="先记 7 天现在的弹窗量做对比，再开 14 天聚合，之后这里会告诉你弹窗少了多少">
+          <Row label={t('settings.notification.measureLabel')} hint={t('settings.notification.measureHint')}>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => beginMeasurement('baseline', today)}
                 className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
               >
-                开始记录对比期
+                {t('settings.notification.startBaseline')}
               </button>
               <button
                 onClick={() => beginMeasurement('dogfood', today)}
                 className="h-8 rounded-md border border-line px-3 text-xs text-ink-2 hover:bg-fill-hover"
               >
-                开始记录聚合期
+                {t('settings.notification.startDogfood')}
               </button>
               <span className="text-xs text-ink-3">
                 {reduction?.reductionRate == null
-                  ? `对比期已记 ${reduction?.baselineDays ?? 0} 天 · 聚合期 ${reduction?.dogfoodDays ?? 0} 天`
-                  : `弹窗比之前少了 ${Math.round(reduction.reductionRate * 100)}%${reduction.eligible ? '' : ' · 天数还不够，先接着用'}`}
+                  ? t('settings.notification.measureProgress', {
+                      baselineDays: reduction?.baselineDays ?? 0,
+                      dogfoodDays: reduction?.dogfoodDays ?? 0,
+                    })
+                  : reduction.eligible
+                    ? t('settings.notification.measureResult', {
+                        rate: Math.round(reduction.reductionRate * 100),
+                      })
+                    : t('settings.notification.measureResultPending', {
+                        rate: Math.round(reduction.reductionRate * 100),
+                      })}
               </span>
             </div>
           </Row>
         </>
       )}
 
-      <Row label="提示音音量">
+      <Row label={t('settings.notification.soundVolumeLabel')}>
         <Slider
           value={prefs.notificationsSoundVolume ?? 100}
           onChange={(v) => void update({ notificationsSoundVolume: v })}
@@ -1627,14 +1659,14 @@ function NotificationSection() {
         />
       </Row>
 
-      <Row label="当前会话不打扰" hint="正在看的会话收到消息时不弹通知" inline>
+      <Row label={t('settings.notification.muteFocusedLabel')} hint={t('settings.notification.muteFocusedHint')} inline>
         <Toggle
           checked={prefs.muteFocusedConversations}
           onChange={(v) => void update({ muteFocusedConversations: v })}
         />
       </Row>
 
-      <Row label="任务栏窗口闪烁" hint="关闭后仍保留未读角标和系统通知" inline>
+      <Row label={t('settings.notification.taskbarFlashLabel')} hint={t('settings.notification.taskbarFlashHint')} inline>
         <Toggle
           checked={taskbarFlash}
           onChange={(enabled) => {
@@ -1644,14 +1676,14 @@ function NotificationSection() {
         />
       </Row>
 
-      <Row label="托盘图标闪烁" hint="关闭后仍保留未读数字和任务栏提醒" inline>
+      <Row label={t('settings.notification.unreadAlertLabel')} hint={t('settings.notification.unreadAlertHint')} inline>
         <Toggle
           checked={prefs.unreadAlert}
           onChange={(v) => void update({ unreadAlert: v })}
         />
       </Row>
 
-      <Row label="自动离开" hint="长时间无操作后自动把状态改为「离开」" inline>
+      <Row label={t('settings.notification.autoAwayLabel')} hint={t('settings.notification.autoAwayHint')} inline>
         <Toggle
           checked={prefs.enableAutoAway}
           onChange={(v) => void update({ enableAutoAway: v })}
@@ -1659,13 +1691,13 @@ function NotificationSection() {
       </Row>
 
       {(prefs.enableAutoAway) && (
-        <Row label="无操作多久后离开">
+        <Row label={t('settings.notification.idleTimeLabel')}>
           <Slider
             value={Math.round((prefs.idleTimeLimit ?? 300) / 60)}
             onChange={(v) => void update({ idleTimeLimit: v * 60 })}
             min={1}
             max={60}
-            suffix=" 分钟"
+            suffix={t('settings.notification.minutesSuffix')}
           />
         </Row>
       )}
@@ -1673,15 +1705,18 @@ function NotificationSection() {
   );
 }
 
-const AUTH_LABELS: Record<string, string> = {
-  ntlm: 'Windows 集成认证',
-  pat: 'PAT',
-  bearer: 'Bearer Token',
-  none: '不带凭据',
+const AUTH_LABEL_KEYS: Record<string, MessageKey> = {
+  ntlm: 'settings.workbench.auth.ntlm',
+  pat: 'settings.workbench.auth.pat',
+  bearer: 'settings.workbench.auth.bearer',
+  none: 'settings.workbench.auth.none',
 };
 
 /** 工作台（Azure DevOps） */
 function WorkbenchSection() {
+  const { t, tp } = useI18n();
+  const authLabelText = (auth: string): string =>
+    AUTH_LABEL_KEYS[auth] ? t(AUTH_LABEL_KEYS[auth]) : auth;
   const initialIssue = loadWorkbenchConfigIssue();
   const [config, setConfig] = useState<WorkbenchConfig>(
     () =>
@@ -1731,7 +1766,7 @@ function WorkbenchSection() {
     setResult(null);
     setSteps([]);
     try {
-      if (!config.adoBase?.trim()) throw new Error('请填写 ADO 地址');
+      if (!config.adoBase?.trim()) throw new Error(t('settings.workbench.adoBaseRequired'));
       const { probeAdo, directGetIdentity } = await import('../lib/adoDirect');
       const found: ProbeStep[] = [];
       const res = await probeAdo(config.adoBase.trim(), config.pat?.trim() ?? '', (s) => {
@@ -1766,27 +1801,34 @@ function WorkbenchSection() {
         });
         const authLabel =
           auth === 'ntlm'
-            ? 'Windows 集成认证（当前登录用户，无需 PAT）'
-            : AUTH_LABELS[auth];
+            ? t('settings.workbench.authNtlmNoPat')
+            : authLabelText(auth);
+        const listSep = t('settings.common.listSeparator');
         setResult({
           ok: true,
-          msg:
-            `连接成功！集合地址：${adoBase}（${authLabel}），` +
-            `可见 ${res.found.projects.length} 个项目：${res.found.projects.slice(0, 3).join('、')}。` +
-            (account ? `已识别你的账号：${who || account}。` : '') +
-            '已自动填入，点「保存」生效。',
+          msg: t('settings.workbench.probeSuccess', {
+            adoBase,
+            authLabel,
+            projectCount: res.found.projects.length,
+            projects: res.found.projects.slice(0, 3).join(listSep),
+            accountPart: account
+              ? t('settings.workbench.probeDetectedAccount', { account: who || account })
+              : '',
+          }),
         });
       } else {
         const tried = [...new Set(found.map((s) => s.auth))];
-        const triedLabel = tried.map((a) => AUTH_LABELS[a] ?? a).join('、');
+        const triedLabel =
+          tried.map((a) => authLabelText(a)).join(t('settings.common.listSeparator'))
+          || t('settings.workbench.probeNoneTried');
         const hint = !canUseNtlm
-          ? '当前环境不能走 Windows 集成认证，所以必须提供 PAT。'
+          ? t('settings.workbench.probeHintNeedPat')
           : !config.pat?.trim()
-            ? 'Windows 集成认证被服务器拒绝了。要么当前登录用户在这台 Azure DevOps 上没有权限，要么服务器关掉了 NTLM/Negotiate —— 后一种情况请填一个 PAT。'
-            : 'PAT 也没通过，检查它是否过期、或缺少 Work Items 读写、Code / Build 读取权限。';
+            ? t('settings.workbench.probeHintNtlmRejected')
+            : t('settings.workbench.probeHintPatFailed');
         setResult({
           ok: false,
-          msg: `探测失败。试过的认证方式：${triedLabel || '（无）'}。${hint}`,
+          msg: t('settings.workbench.probeFailed', { tried: triedLabel, hint }),
         });
       }
     } catch (err) {
@@ -1799,11 +1841,11 @@ function WorkbenchSection() {
   return (
     <>
       <Row
-        label="ADO 地址"
+        label={t('settings.workbench.adoBaseLabel')}
         hint={
           isTauri
-            ? '直接把浏览器地址栏里的地址粘进来即可（项目页地址也行）。点「自动探测」会逐级找到正确的集合根，并优先尝试 Windows 集成认证 —— 域内环境通常填完地址就能连上。'
-            : '直接把浏览器地址栏里的地址粘进来即可（项目页地址也行）。点「自动探测」会逐级找到正确的集合根，不必自己拼。'
+            ? t('settings.workbench.adoBaseHintDesktop')
+            : t('settings.workbench.adoBaseHintWeb')
         }
       >
         <input
@@ -1812,60 +1854,60 @@ function WorkbenchSection() {
             adoBase: e.target.value,
             allowInsecureAdoHttp: undefined,
           })}
-          placeholder="http://ado-server:8080/DefaultCollection/项目名"
+          placeholder={t('settings.workbench.adoBasePlaceholder')}
           className={inputCls}
         />
       </Row>
       <Row
-        label="个人访问令牌（PAT）"
+        label={t('settings.workbench.patLabel')}
         hint={
           isTauri
-            ? '通常留空即可 —— 桌面端默认用 Windows 集成认证，直接拿你当前登录的域账号连，不需要 PAT。只有服务器禁用了集成认证时才需要填（在 ADO 的「用户设置 → 个人访问令牌」创建，勾选 Work Items 读写、Code / Build 读取）。'
-            : '当前环境必须填 PAT：不能依赖 Windows 集成认证。仅保存在本机；请勾选 Work Items 读写、Code / Build 读取。'
+            ? t('settings.workbench.patHintDesktop')
+            : t('settings.workbench.patHintWeb')
         }
       >
         <input
           type="password"
           value={config.pat ?? ''}
           onChange={(e) => update({ pat: e.target.value })}
-          placeholder="粘贴 PAT（没有可留空）"
+          placeholder={t('settings.workbench.patPlaceholder')}
           className={inputCls}
         />
       </Row>
       {config.auth && (
-        <Row label="认证方式" hint="探测得出，通常无需手动改">
+        <Row label={t('settings.workbench.authMethodLabel')} hint={t('settings.workbench.authMethodHint')}>
           <div className="text-sm text-ink-2">
             {config.auth === 'pat'
-              ? 'PAT（Basic）'
+              ? t('settings.workbench.authMethodPatBasic')
               : config.auth === 'bearer'
-                ? 'Bearer Token'
-                : 'Windows 集成认证（免凭据）'}
+                ? t('settings.workbench.authMethodBearer')
+                : t('settings.workbench.authMethodNtlmFree')}
           </div>
         </Row>
       )}
 
       {usesInsecureAdoHttp && (
         <Row
-          label="允许内网 HTTP 认证"
-          hint="仅在这是受信任内网、且 ADO Server 没有 HTTPS 时开启。HTTP 无法防止中间人窃取 PAT 或中继 Windows 集成认证。"
+          label={t('settings.workbench.allowInsecureHttpLabel')}
+          hint={t('settings.workbench.allowInsecureHttpHint')}
           inline
         >
           <Toggle
             checked={config.allowInsecureAdoHttp === true}
             onChange={(value) => update({ allowInsecureAdoHttp: value || undefined })}
-            label="允许通过 HTTP 使用 ADO 凭据"
+            label={t('settings.workbench.allowInsecureHttpToggle')}
           />
         </Row>
       )}
 
       <Row
-        label="我的 ADO 账号"
-        hint="留空即可 —— 连接测试会向服务器确认你是谁并自动填入，用于识别“待我评审 / 我提的”PR。“我的工作项”恒用 ADO 的 @Me 宏查询，不依赖这一栏。"
+        label={t('settings.workbench.accountLabel')}
+        hint={t('settings.workbench.accountHint')}
       >
         <input
           value={config.account}
           onChange={(e) => update({ account: e.target.value })}
-          placeholder="自动识别（也可手填 user@corp.com 或 DOMAIN\\user）"
+          placeholder={t('settings.workbench.accountPlaceholder')}
           className={inputCls}
         />
       </Row>
@@ -1877,7 +1919,7 @@ function WorkbenchSection() {
           className="flex h-9 items-center gap-2 rounded-md border border-line px-4 text-sm text-ink-2 transition hover:bg-fill-hover disabled:opacity-50"
         >
           {testing && <Loader2 size={14} className="animate-spin" />}
-          自动探测
+          {t('settings.workbench.autoDetect')}
         </button>
         <button
           onClick={() => {
@@ -1894,7 +1936,7 @@ function WorkbenchSection() {
             setOnboardingAdo('configured');
             setSaved(true);
             setDirty(false);
-            toast.success('工作台配置已保存');
+            toast.success(t('settings.workbench.savedToast'));
             setTimeout(() => setSaved(false), 2500);
           }}
           // 账号不再是必填：Windows 集成认证下由服务器识别，工作项查询用 @Me 宏。
@@ -1905,9 +1947,9 @@ function WorkbenchSection() {
             dirty ? 'bg-primary hover:bg-primary-hover' : 'bg-primary/70 hover:bg-primary'
           }`}
         >
-          {saved ? '已保存' : '保存'}
+          {saved ? t('settings.common.saved') : t('common.save')}
         </button>
-        {dirty && <span className="text-xs text-warning">有未保存的改动</span>}
+        {dirty && <span className="text-xs text-warning">{t('settings.workbench.unsavedChanges')}</span>}
       </div>
 
       {result && (
@@ -1931,7 +1973,12 @@ function WorkbenchSection() {
       {steps.length > 0 && (
         <div className="mt-3 max-w-2xl overflow-hidden rounded-lg border border-line">
           <div className="border-b border-line bg-fill-2 px-3 py-2 text-xs font-medium text-ink-2">
-            探测记录（{steps.length} 次尝试）
+            {tp(
+              steps.length,
+              'settings.workbench.probeLogTitleOne',
+              'settings.workbench.probeLogTitleOther',
+              { count: steps.length },
+            )}
           </div>
           <div className="max-h-64 overflow-y-auto">
             {steps.map((s, i) => (
@@ -1949,7 +1996,7 @@ function WorkbenchSection() {
                   <div className={`mt-0.5 break-words ${s.ok ? 'text-success' : 'text-ink-3'}`}>
                     {/* 这里以前把 none（不带凭据）也写成「Windows 集成认证」，
                         看日志的人会以为试过集成认证了，其实压根没试 */}
-                    {AUTH_LABELS[s.auth] ?? s.auth}：{s.detail}
+                    {authLabelText(s.auth)}：{s.detail}
                   </div>
                 </div>
               </div>
@@ -1962,6 +2009,7 @@ function WorkbenchSection() {
 }
 
 function TemplateUrlSection() {
+  const { t, tp } = useI18n();
   const url = useWiTemplates((s) => s.url);
   const setUrl = useWiTemplates((s) => s.setUrl);
   const templates = useWiTemplates((s) => s.templates);
@@ -1972,22 +2020,22 @@ function TemplateUrlSection() {
 
   return (
     <div className="mt-6 max-w-2xl border-t border-line pt-4">
-      <h3 className="text-sm font-semibold text-ink">工作项模板</h3>
+      <h3 className="text-sm font-semibold text-ink">{t('settings.workbench.templatesHeading')}</h3>
       <p className="mt-1 text-xs text-ink-3">
-        团队可共享一个模板配置文件（JSON），放在 Git 仓库或任意 URL。留空则使用内置模板。
+        {t('settings.workbench.templatesHint')}
       </p>
       <div className="mt-2 flex gap-2">
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="模板 JSON 的 URL（留空使用内置模板）"
+          placeholder={t('settings.workbench.templatesUrlPlaceholder')}
           className="h-8 flex-1 rounded-md border border-line bg-surface-4 px-3 text-sm text-ink outline-none focus:border-primary"
         />
         <button
           onClick={() => setUrl(draft.trim())}
           className="h-8 rounded-md bg-primary px-3 text-sm text-white transition hover:bg-primary-hover"
         >
-          保存
+          {t('common.save')}
         </button>
         {url && (
           <button
@@ -1995,37 +2043,45 @@ function TemplateUrlSection() {
             disabled={loading}
             className="h-8 rounded-md border border-line px-3 text-sm text-ink-2 transition hover:bg-fill-hover disabled:opacity-40"
           >
-            {loading ? '拉取中…' : '重新拉取'}
+            {loading ? t('settings.workbench.templatesFetching') : t('settings.workbench.templatesRefetch')}
           </button>
         )}
       </div>
       {error && <div className="mt-1 text-xs text-danger">{error}</div>}
       <div className="mt-2 text-xs text-ink-3">
-        当前 {templates.length} 个模板：{templates.map((t) => t.name).join('、')}
+        {tp(
+          templates.length,
+          'settings.workbench.templatesCountOne',
+          'settings.workbench.templatesCountOther',
+          {
+            count: templates.length,
+            names: templates.map((item) => item.name).join(t('settings.common.listSeparator')),
+          },
+        )}
       </div>
     </div>
   );
 }
 
-const PERMISSION_LABELS: Partial<Record<AppPermission, string>> = {
-  'chat:read': '读取当前会话',
-  'rooms:list': '读取会话列表',
-  'users:read': '读取成员',
-  'storage:local': '使用应用私有存储',
-  'ui:notify': '发送通知',
-  'app:info': '读取应用自身信息',
-  'chat:write': '代发消息',
-  'chat:history': '读取历史消息',
-  'files:read': '读取文件',
-  'files:write': '写入文件',
-  'net:fetch': '访问声明的网络地址',
-  'ai:invoke': '调用 AI',
-  'lan:discover': '发现局域网设备',
-  'agent:spawn': '启动 Agent（每次确认）',
-  'process:spawn': '启动本地进程（每次确认）',
-  'native:service': '运行内置签名后台服务',
-  'config:read': '读取声明的环境变量',
-  'secrets:use': '向签名原生服务注入密钥',
+const PERMISSION_LABEL_KEYS: Partial<Record<AppPermission, MessageKey>> = {
+  'chat:read': 'settings.apps.perm.chatRead',
+  'rooms:list': 'settings.apps.perm.roomsList',
+  'users:read': 'settings.apps.perm.usersRead',
+  'storage:local': 'settings.apps.perm.storageLocal',
+  'ui:notify': 'settings.apps.perm.uiNotify',
+  'app:info': 'settings.apps.perm.appInfo',
+  'chat:write': 'settings.apps.perm.chatWrite',
+  'chat:history': 'settings.apps.perm.chatHistory',
+  'files:read': 'settings.apps.perm.filesRead',
+  'files:write': 'settings.apps.perm.filesWrite',
+  'net:fetch': 'settings.apps.perm.netFetch',
+  'ai:invoke': 'settings.apps.perm.aiInvoke',
+  'lan:discover': 'settings.apps.perm.lanDiscover',
+  'agent:spawn': 'settings.apps.perm.agentSpawn',
+  'process:spawn': 'settings.apps.perm.processSpawn',
+  'native:service': 'settings.apps.perm.nativeService',
+  'config:read': 'settings.apps.perm.configRead',
+  'secrets:use': 'settings.apps.perm.secretsUse',
 };
 
 function AppPermissionPicker({
@@ -2037,6 +2093,11 @@ function AppPermissionPicker({
   selected: AppPermission[];
   onChange: (permissions: AppPermission[]) => void;
 }) {
+  const t = useT();
+  const permissionLabel = (permission: AppPermission): string => {
+    const key = PERMISSION_LABEL_KEYS[permission];
+    return key ? t(key) : permission;
+  };
   const sensitive = manifest.permissions.filter((permission) =>
     SENSITIVE_PERMISSIONS.includes(permission),
   );
@@ -2045,22 +2106,24 @@ function AppPermissionPicker({
       <div className="text-sm font-medium text-ink">
         {manifest.name} <span className="text-xs font-normal text-ink-3">v{manifest.version}</span>
       </div>
-      <div className="mt-1 text-xs text-ink-3">发布者：{manifest.publisher}</div>
+      <div className="mt-1 text-xs text-ink-3">
+        {t('settings.apps.publisher', { publisher: manifest.publisher })}
+      </div>
       {manifest.runtime === 'worker' && (
         <div className="mt-2 text-xs text-warning">
-          Worker 应用仅允许从本地目录安装；请只安装你信任并审阅过的代码。
+          {t('settings.apps.workerWarning')}
         </div>
       )}
-      <div className="mt-3 text-xs font-medium text-ink-2">安装时告知</div>
+      <div className="mt-3 text-xs font-medium text-ink-2">{t('settings.apps.basicPermissionsTitle')}</div>
       <div className="mt-1 text-xs text-ink-3">
         {manifest.permissions
           .filter((permission) => !SENSITIVE_PERMISSIONS.includes(permission))
-          .map((permission) => PERMISSION_LABELS[permission] ?? permission)
-          .join('、') || '无'}
+          .map((permission) => permissionLabel(permission))
+          .join(t('settings.common.listSeparator')) || t('settings.apps.noPermissions')}
       </div>
       {sensitive.length > 0 && (
         <>
-          <div className="mt-3 text-xs font-medium text-ink-2">敏感权限（逐项勾选）</div>
+          <div className="mt-3 text-xs font-medium text-ink-2">{t('settings.apps.sensitivePermissionsTitle')}</div>
           <div className="mt-1 flex flex-col gap-1.5">
             {sensitive.map((permission) => (
               <label key={permission} className="flex items-center gap-2 text-xs text-ink-2">
@@ -2075,7 +2138,7 @@ function AppPermissionPicker({
                     )
                   }
                 />
-                {PERMISSION_LABELS[permission] ?? permission}
+                {permissionLabel(permission)}
               </label>
             ))}
           </div>
@@ -2086,6 +2149,7 @@ function AppPermissionPicker({
 }
 
 function AppsSection() {
+  const t = useT();
   const apps = useInstalledApps();
   const directoryInput = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<
@@ -2108,14 +2172,14 @@ function AppsSection() {
   const chooseDirectory = async (files: File[]) => {
     const manifestFile = files.find((file) => /(^|\/)rcx\.app\.json$/i.test(file.webkitRelativePath || file.name));
     if (!manifestFile) {
-      toast.error('所选目录里没有 rcx.app.json');
+      toast.error(t('settings.apps.missingManifest'));
       return;
     }
     try {
       setPending({ kind: 'directory', manifest: parseManifestJson(await manifestFile.text()), files });
       setSensitiveGrants([]);
     } catch (error) {
-      toast.error(error, '应用清单无效');
+      toast.error(error, t('settings.apps.invalidManifest'));
     }
   };
 
@@ -2127,7 +2191,7 @@ function AppsSection() {
       setPending({ kind: 'url', manifest: parseManifestJson(await response.text()), url: manifestUrl, hash: expectedHash });
       setSensitiveGrants([]);
     } catch (error) {
-      toast.error(error, '读取远程应用清单失败');
+      toast.error(error, t('settings.apps.fetchManifestFailed'));
     }
   };
 
@@ -2138,12 +2202,12 @@ function AppsSection() {
       const app = pending.kind === 'directory'
         ? await appManager().installDirectory(pending.files, { sensitiveGrants })
         : await appManager().installUrl(pending.url, pending.hash, { sensitiveGrants });
-      toast.success(`已安装 ${app.manifest.name}`);
+      toast.success(t('settings.apps.installedToast', { name: app.manifest.name }));
       setPending(null);
       setSensitiveGrants([]);
       if (directoryInput.current) directoryInput.current.value = '';
     } catch (error) {
-      toast.error(error, '安装失败');
+      toast.error(error, t('settings.apps.installFailed'));
     } finally {
       setBusy(false);
     }
@@ -2152,9 +2216,9 @@ function AppsSection() {
   return (
     <div className="space-y-5">
       <section>
-        <div className="text-sm font-medium text-ink">安装本地应用</div>
+        <div className="text-sm font-medium text-ink">{t('settings.apps.installLocalHeading')}</div>
         <div className="mt-1 text-xs text-ink-3">
-          选择包含 rcx.app.json 的目录。M6 本地 iframe 应用使用单文件 HTML 入口。
+          {t('settings.apps.installLocalHint')}
         </div>
         <input
           ref={directoryInput}
@@ -2167,13 +2231,13 @@ function AppsSection() {
           onClick={() => directoryInput.current?.click()}
           className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-line px-3 text-xs text-ink hover:bg-fill-hover"
         >
-          <FolderOpen size={14} /> 选择目录
+          <FolderOpen size={14} /> {t('settings.apps.chooseDirectory')}
         </button>
       </section>
 
       <section>
-        <div className="text-sm font-medium text-ink">从 URL 安装</div>
-        <div className="mt-1 text-xs text-ink-3">必须提供发布者给出的 SHA-256；不匹配时拒绝安装。</div>
+        <div className="text-sm font-medium text-ink">{t('settings.apps.installUrlHeading')}</div>
+        <div className="mt-1 text-xs text-ink-3">{t('settings.apps.installUrlHint')}</div>
         <input
           value={manifestUrl}
           onChange={(event) => setManifestUrl(event.target.value)}
@@ -2183,7 +2247,7 @@ function AppsSection() {
         <input
           value={expectedHash}
           onChange={(event) => setExpectedHash(event.target.value.trim())}
-          placeholder="64 位 SHA-256"
+          placeholder={t('settings.apps.sha256Placeholder')}
           className={`${inputCls} mt-2 font-mono text-xs`}
         />
         <button
@@ -2191,7 +2255,7 @@ function AppsSection() {
           disabled={!manifestUrl || !/^[a-f0-9]{64}$/i.test(expectedHash)}
           className="mt-2 h-8 rounded-md border border-line px-3 text-xs text-ink hover:bg-fill-hover disabled:opacity-40"
         >
-          检查清单
+          {t('settings.apps.inspectManifest')}
         </button>
       </section>
 
@@ -2208,19 +2272,19 @@ function AppsSection() {
               disabled={busy}
               className="h-8 rounded-md bg-primary px-4 text-xs text-white disabled:opacity-50"
             >
-              {busy ? '安装中…' : '安装'}
+              {busy ? t('settings.apps.installing') : t('settings.apps.installAction')}
             </button>
             <button onClick={() => setPending(null)} className="h-8 rounded-md border border-line px-4 text-xs">
-              取消
+              {t('common.cancel')}
             </button>
           </div>
         </section>
       )}
 
       <section>
-        <div className="text-sm font-medium text-ink">已安装应用</div>
+        <div className="text-sm font-medium text-ink">{t('settings.apps.installedHeading')}</div>
         {apps.length === 0 ? (
-          <div className="mt-2 text-xs text-ink-3">还没有安装应用。</div>
+          <div className="mt-2 text-xs text-ink-3">{t('settings.apps.noneInstalled')}</div>
         ) : (
           <div className="mt-2 divide-y divide-line rounded-md border border-line bg-surface-2">
             {apps.map((app) => {
@@ -2235,7 +2299,9 @@ function AppsSection() {
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm text-ink">
                         {app.manifest.name} · v{app.manifest.version}
-                        {bundled && <span className="ml-2 text-xs text-primary">内置 · 默认关闭</span>}
+                        {bundled && (
+                          <span className="ml-2 text-xs text-primary">{t('settings.apps.bundledDefaultOff')}</span>
+                        )}
                       </div>
                       <div className="truncate font-mono text-xs text-ink-3" title={app.bundleHash}>
                         SHA-256 {app.bundleHash}
@@ -2243,7 +2309,7 @@ function AppsSection() {
                     </div>
                     {!bundled && sensitive.length > 0 && (
                       <button
-                        title="权限"
+                        title={t('settings.apps.permissionsAction')}
                         onClick={() => {
                           setEditingPermissions(editingPermissions === app.manifest.id ? null : app.manifest.id);
                           setEditedGrants(app.granted.filter((permission) => SENSITIVE_PERMISSIONS.includes(permission)));
@@ -2259,7 +2325,7 @@ function AppsSection() {
                     />
                     {!bundled && (
                       <button
-                        title="卸载"
+                        title={t('settings.apps.uninstallAction')}
                         onClick={() => setRemoving(app.manifest.id)}
                         className="flex h-7 w-7 items-center justify-center rounded text-ink-3 hover:bg-fill-hover hover:text-danger"
                       >
@@ -2279,14 +2345,14 @@ function AppsSection() {
                           void appManager()
                             .setSensitiveGrants(app.manifest.id, editedGrants)
                             .then(() => {
-                              toast.success('应用权限已更新');
+                              toast.success(t('settings.apps.permissionsUpdated'));
                               setEditingPermissions(null);
                             })
-                            .catch((error) => toast.error(error, '权限更新失败'));
+                            .catch((error) => toast.error(error, t('settings.apps.permissionsUpdateFailed')));
                         }}
                         className="mt-2 h-8 rounded-md bg-primary px-4 text-xs text-white"
                       >
-                        保存权限
+                        {t('settings.apps.savePermissions')}
                       </button>
                     </div>
                   )}
@@ -2299,15 +2365,15 @@ function AppsSection() {
 
       {removing && (
         <ConfirmDialog
-          title="卸载应用"
-          message="将移除应用及其私有数据，操作不可撤销。"
-          confirmLabel="卸载"
+          title={t('settings.apps.uninstallTitle')}
+          message={t('settings.apps.uninstallConfirmMessage')}
+          confirmLabel={t('settings.apps.uninstallAction')}
           danger
           onConfirm={() => {
             void appManager()
               .uninstall(removing)
-              .then(() => toast.success('应用已卸载'))
-              .catch((error) => toast.error(error, '卸载失败'));
+              .then(() => toast.success(t('settings.apps.uninstalledToast')))
+              .catch((error) => toast.error(error, t('settings.apps.uninstallFailed')));
             setRemoving(null);
           }}
           onClose={() => setRemoving(null)}
@@ -2317,18 +2383,25 @@ function AppsSection() {
   );
 }
 
-const UPDATE_SOURCE_OPTIONS: { value: UpdateSourceKind; label: string }[] = [
-  { value: 'github', label: 'GitHub Releases（默认）' },
-  { value: 'http', label: '内网 HTTP 源' },
-  { value: 'dir', label: '共享目录' },
+const UPDATE_SOURCE_OPTIONS: { value: UpdateSourceKind; labelKey: MessageKey }[] = [
+  { value: 'github', labelKey: 'settings.about.updateSource.github' },
+  { value: 'http', labelKey: 'settings.about.updateSource.http' },
+  { value: 'dir', labelKey: 'settings.about.updateSource.dir' },
 ];
+
+type UpdateStatusState =
+  | { kind: 'upToDate' }
+  | { kind: 'upToDateSource'; version: string }
+  | { kind: 'error'; message: string }
+  | null;
 
 /** 更新源配置 + 手动检查（issue #106）：内网/受限网络用 HTTP 源或共享目录替代 GitHub */
 function UpdateSourceRow() {
+  const t = useT();
   const [config, setConfig] = useState(() => loadUpdateSource());
   const [checking, setChecking] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useState<UpdateStatusState>(null);
   const [probe, setProbe] = useState<UpdateProbe | null>(null);
 
   function update(next: Partial<UpdateSourceConfig>): void {
@@ -2351,21 +2424,21 @@ function UpdateSourceRow() {
         if (found) {
           setProbe({ hasUpdate: true, version: found.version });
         }
-        else setStatus('已是最新版本');
+        else setStatus({ kind: 'upToDate' });
       } else if (config.kind === 'http') {
         const found = await checkHttpUpdate(config.location, installed);
         if (found) {
           setProbe({ hasUpdate: true, version: found.version });
         } else {
-          setStatus('已是最新版本');
+          setStatus({ kind: 'upToDate' });
         }
       } else {
         const result = await probeConfiguredSource(config, installed);
         if (result.hasUpdate) setProbe(result);
-        else setStatus(`已是最新版本（源上为 v${result.version}）`);
+        else setStatus({ kind: 'upToDateSource', version: result.version });
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      setStatus({ kind: 'error', message: error instanceof Error ? error.message : String(error) });
     } finally {
       setChecking(false);
     }
@@ -2381,18 +2454,18 @@ function UpdateSourceRow() {
           ? await checkGithubUpdate(installed)
           : await checkHttpUpdate(config.location, installed);
         if (!found) return;
-        const toastId = toast.loading(`正在下载并验证 RocketX ${found.version}…`);
+        const toastId = toast.loading(t('settings.about.downloadingUpdate', { version: found.version }));
         try {
           await found.downloadAndInstall();
-          toast.update(toastId, { kind: 'success', message: '更新已安装，正在重启…' });
+          toast.update(toastId, { kind: 'success', message: t('settings.about.updateInstalledRestarting') });
           await relaunchDesktop();
         } catch (error) {
-          toast.update(toastId, { kind: 'error', message: humanError(error, '更新失败') });
+          toast.update(toastId, { kind: 'error', message: humanError(error, t('settings.about.updateFailed')) });
         }
       } else if (probe.installerPath) {
-        if (!probe.sha256) throw new Error('更新包缺少 SHA-256');
-        if (!probe.installerType) throw new Error('无法确认当前安装类型');
-        const toastId = toast.loading(`正在退出并安装 RocketX ${probe.version}…`);
+        if (!probe.sha256) throw new Error(t('settings.about.missingSha256'));
+        if (!probe.installerType) throw new Error(t('settings.about.unknownInstallerType'));
+        const toastId = toast.loading(t('settings.about.installingDirUpdate', { version: probe.version }));
         try {
           await launchDirInstaller({
             dir: config.location,
@@ -2407,14 +2480,22 @@ function UpdateSourceRow() {
         }
       }
     } catch (error) {
-      toast.error(error, '更新失败');
+      toast.error(error, t('settings.about.updateFailed'));
     } finally {
       setUpdating(false);
     }
   }
 
+  const statusText = status === null
+    ? null
+    : status.kind === 'upToDate'
+      ? t('settings.about.upToDate')
+      : status.kind === 'upToDateSource'
+        ? t('settings.about.upToDateWithSource', { version: status.version })
+        : status.message;
+
   return (
-    <Row label="更新" hint="内网 HTTP 必须使用带 signature 的 latest.json；共享目录可省略 signature，未签名包会明确提示并用 SHA-256 固定本次检查内容">
+    <Row label={t('settings.about.updateLabel')} hint={t('settings.about.updateHint')}>
       <div className="flex flex-col gap-2">
         <select
           value={config.kind}
@@ -2422,7 +2503,7 @@ function UpdateSourceRow() {
           className="w-64 rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink"
         >
           {UPDATE_SOURCE_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
+            <option key={option.value} value={option.value}>{t(option.labelKey)}</option>
           ))}
         </select>
         {config.kind !== 'github' && (
@@ -2430,8 +2511,8 @@ function UpdateSourceRow() {
             value={config.location}
             onChange={(event) => update({ location: event.target.value })}
             placeholder={config.kind === 'http'
-              ? 'https://updates.example.com/rocketx（目录下有 latest.json）'
-              : '\\\\server\\share\\rocketx 或 D:\\updates\\rocketx'}
+              ? t('settings.about.httpPlaceholder')
+              : t('settings.about.dirPlaceholder')}
             className="w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-3"
           />
         )}
@@ -2441,7 +2522,7 @@ function UpdateSourceRow() {
             disabled={checking || updating}
             className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-ink hover:bg-fill-hover disabled:opacity-50"
           >
-            {checking ? '检查中…' : '检查更新'}
+            {checking ? t('settings.about.checkingUpdate') : t('settings.about.checkUpdate')}
           </button>
           {probe?.hasUpdate && (
             <button
@@ -2450,48 +2531,87 @@ function UpdateSourceRow() {
               className="rounded-md bg-primary px-3 py-1.5 text-sm text-white hover:bg-primary-hover disabled:opacity-50"
             >
               {updating
-                ? '正在更新…'
+                ? t('settings.about.updating')
                 : config.kind === 'github' || config.kind === 'http'
-                ? `更新到 v${probe.version} 并重启`
+                ? t('settings.about.updateAndRestart', { version: probe.version })
                 : probe.installerPath
-                  ? `更新到 v${probe.version} 并重启`
-                  : `下载 v${probe.version}`}
+                  ? t('settings.about.updateAndRestart', { version: probe.version })
+                  : t('settings.about.downloadVersion', { version: probe.version })}
             </button>
           )}
-          {status && <span className="text-xs text-ink-3">{status}</span>}
+          {statusText && <span className="text-xs text-ink-3">{statusText}</span>}
         </div>
       </div>
     </Row>
   );
 }
 
+type RcVersionState =
+  | { state: 'loading' | 'unknown' | 'error' }
+  | { state: 'ready'; value: string };
+
 function AboutSection() {
-  const [rcVersion, setRcVersion] = useState('查询中…');
+  const t = useT();
+  const localMode = useAuth((s) => s.localMode);
+  const [rcVersion, setRcVersion] = useState<RcVersionState>({
+    state: localMode ? 'unknown' : 'loading',
+  });
 
   useEffect(() => {
-    fetch(`${getServerBase()}/api/info`)
-      .then((r) => r.json())
-      .then((d: { version?: string; info?: { version?: string } }) =>
-        setRcVersion(d.version ?? d.info?.version ?? '未知'),
-      )
-      .catch(() => setRcVersion('无法获取'));
-  }, []);
+    const base = getServerBase().trim();
+    if (localMode || !base) {
+      setRcVersion({ state: 'unknown' });
+      return;
+    }
+    let active = true;
+    setRcVersion({ state: 'loading' });
+    void (async () => {
+      try {
+        const target = new URL(`${base}/api/info`);
+        const res = await httpFetch(target);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const d = await res.json() as { version?: string; info?: { version?: string } };
+        if (!active) return;
+        const version = d.version ?? d.info?.version;
+        setRcVersion(version ? { state: 'ready', value: version } : { state: 'unknown' });
+      } catch {
+        if (active) setRcVersion({ state: 'error' });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [localMode]);
+
+  const rcVersionText = rcVersion.state === 'ready'
+    ? rcVersion.value
+    : rcVersion.state === 'loading'
+      ? t('settings.about.serverVersionQuerying')
+      : rcVersion.state === 'unknown'
+        ? t('settings.about.serverVersionUnknown')
+        : t('settings.about.serverVersionUnavailable');
 
   return (
     <>
-      <Row label="RocketX">
+      <Row label={t('app.name')}>
         <div className="text-sm text-ink-2">
-          版本 {APP_VERSION} · {isTauri ? '桌面客户端' : '网页版'}
+          {t('settings.about.appVersionLine', {
+            version: APP_VERSION,
+            platform: isTauri ? t('settings.about.platformDesktop') : t('settings.about.platformWeb'),
+          })}
         </div>
-        <div className="mt-1 text-xs text-ink-3">飞书体验的 Rocket.Chat 客户端</div>
+        <div className="mt-1 text-xs text-ink-3">{t('settings.about.tagline')}</div>
       </Row>
       {isTauri && <UpdateSourceRow />}
-      <Row label="Rocket.Chat 服务器">
+      <Row label={t('settings.about.serverLabel')}>
         <div className="text-sm text-ink-2">
-          {getServerBase() || location.origin} · 版本 {rcVersion}
+          {t('settings.about.serverVersionLine', {
+            url: getServerBase() || location.origin,
+            version: rcVersionText,
+          })}
         </div>
       </Row>
-      <Row label="项目地址">
+      <Row label={t('settings.about.repoLabel')}>
         <a
           href="https://github.com/lusipad/RocketX"
           target="_blank"
@@ -2506,7 +2626,7 @@ function AboutSection() {
 }
 
 export default function SettingsPage({ initialSection = 'account' }: { initialSection?: Section }) {
-  const locale = useUiLocale();
+  const t = useT();
   const [section, setSection] = useState<Section>(initialSection);
   const loaded = usePrefs((s) => s.loaded);
   const prefsError = usePrefs((s) => s.error);
@@ -2535,13 +2655,13 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
   return (
     <div className="flex min-w-0 flex-1">
       <aside className="flex w-[220px] shrink-0 flex-col border-r border-line bg-surface-2 p-3">
-        <div className="px-2.5 py-2 text-base font-semibold text-ink">{tr('设置', 'Settings', locale)}</div>
+        <div className="px-2.5 py-2 text-base font-semibold text-ink">{t('settings.title')}</div>
         <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
-          {visibleSections.map(({ key, label, icon: Icon }) => (
+          {visibleSections.map(({ key, labelKey, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setSection(key)}
-                aria-current={section === key ? 'page' : undefined}
+              aria-current={section === key ? 'page' : undefined}
               className={`flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition ${
                 section === key
                   ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line/80'
@@ -2549,7 +2669,7 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
               }`}
             >
               <Icon size={16} className={section === key ? 'text-primary' : ''} />
-              <span className="truncate">{tr(label, SECTION_LABEL_EN[key], locale)}</span>
+              <span className="truncate">{t(labelKey)}</span>
             </button>
           ))}
         </div>
@@ -2559,12 +2679,12 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
           <div className="flex items-center gap-2.5">
             {activeSectionMeta && <activeSectionMeta.icon size={18} className="text-primary" />}
             <h1 className="text-base font-semibold text-ink">
-              {activeSectionMeta ? tr(activeSectionMeta.label, SECTION_LABEL_EN[activeSectionMeta.key], locale) : ''}
+              {activeSectionMeta ? t(activeSectionMeta.labelKey) : ''}
             </h1>
           </div>
           {needsPrefs && (
             <span className="rounded-full border border-line-soft bg-surface-2 px-3 py-1 text-xs text-ink-3">
-              {tr('保存在 Rocket.Chat 服务器，跨设备同步', 'Synced across devices via Rocket.Chat', locale)}
+              {t('settings.serverSyncedBadge')}
             </span>
           )}
         </header>
@@ -2579,20 +2699,20 @@ export default function SettingsPage({ initialSection = 'account' }: { initialSe
                   onClick={() => void loadPrefs()}
                   className="h-8 rounded-xl border border-line bg-surface-3 px-4 text-sm text-ink shadow-raise transition hover:bg-fill-hover"
                 >
-                  {tr('重试', 'Retry', locale)}
+                  {t('common.retry')}
                 </button>
               </div>
             ) : needsPrefs && !loaded ? (
               <div className="flex items-center justify-center gap-2 rounded-2xl border border-line bg-surface-4 py-12 text-sm text-ink-3 shadow-card">
                 <Loader2 size={14} className="animate-spin" />
-                {tr('加载设置中…', 'Loading settings…', locale)}
+                {t('settings.loadingPrefs')}
               </div>
             ) : section === 'ai' && aiSettingsVisible ? (
               <Suspense
                 fallback={
                   <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface-4 px-6 py-10 text-sm text-ink-3 shadow-card">
                     <Loader2 size={14} className="animate-spin" />
-                    {tr('加载 AI 设置中…', 'Loading AI settings…', locale)}
+                    {t('settings.loadingAi')}
                   </div>
                 }
               >

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { t } from '../i18n';
 import { agentDeviceId } from '../agent/device';
 import { getServerBase } from '../lib/client';
 
@@ -78,7 +79,7 @@ export function normalizeEnvironmentPath(value: string): string {
 }
 
 export function environmentNameFromPath(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) || '本地环境';
+  return path.split(/[\\/]/).filter(Boolean).at(-1) || t('agent.env.defaultName');
 }
 
 export function findEnvironmentByPath(
@@ -205,9 +206,9 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
 
   addEnvironment: (input) => {
     const path = input.path.trim();
-    if (!path) throw new Error('请选择本地目录');
+    if (!path) throw new Error(t('agent.env.selectPath'));
     if (findEnvironmentByPath(get().environments, path)) {
-      throw new Error('这个本地目录已经配置过了');
+      throw new Error(t('agent.env.duplicatePath'));
     }
     const now = Date.now();
     const environment: LocalAgentEnvironment = {
@@ -229,7 +230,7 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
 
   ensureEnvironment: (input) => {
     const path = input.path.trim();
-    if (!path) throw new Error('请选择本地目录');
+    if (!path) throw new Error(t('agent.env.selectPath'));
     const existing = findEnvironmentByPath(get().environments, path);
     if (existing) return existing;
     return get().addEnvironment({
@@ -287,7 +288,7 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
         || (patch.enabled !== undefined && patch.enabled !== environment.enabled)
       )
     ) {
-      throw new Error('该项目正在被活动讨论使用，不能修改目录或启停状态');
+      throw new Error(t('agent.env.busyCannotEdit'));
     }
     if (
       nextPath
@@ -296,7 +297,7 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
         && normalizeEnvironmentPath(item.path) === normalizeEnvironmentPath(nextPath)
       ))
     ) {
-      throw new Error('这个本地目录已经配置过了');
+      throw new Error(t('agent.env.duplicatePath'));
     }
     const nextEnvironments = get().environments.map((environment) =>
       environment.id === environmentId
@@ -319,7 +320,7 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
   },
 
   removeEnvironment: (environmentId) => {
-    if (environmentIsBusy(environmentId, get().bindings)) throw new Error('该环境正在被活动讨论使用，请先结束 Agent 会话');
+    if (environmentIsBusy(environmentId, get().bindings)) throw new Error(t('agent.env.busyEndFirst'));
     const environments = get().environments.filter((environment) => environment.id !== environmentId);
     const lastEnvironmentByProject = Object.fromEntries(
       Object.entries(get().lastEnvironmentByProject).filter(([, value]) => value !== environmentId),
@@ -331,7 +332,7 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
 
   bindDiscussion: (input) => {
     if (environmentIsBusy(input.environmentId, get().bindings, input.discussionRid)) {
-      throw new Error('该本地环境已被另一个活动讨论占用');
+      throw new Error(t('agent.env.busyOtherDiscussion'));
     }
     const existing = get().bindings.find(
       (binding) =>
@@ -341,7 +342,7 @@ export const useAgentEnvironments = create<AgentEnvironmentState>((set, get) => 
         binding.status === 'active',
     );
     if (existing && existing.discussionRid !== input.discussionRid) {
-      throw new Error('这个工作项已经绑定了一个活动讨论');
+      throw new Error(t('agent.env.workItemAlreadyBound'));
     }
     const now = Date.now();
     const binding: WorkItemDiscussionBinding = {

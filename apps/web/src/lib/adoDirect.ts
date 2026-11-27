@@ -3,6 +3,8 @@
  * 桌面端走 Tauri Rust 通道没有 CORS 限制，可直接连内网 ADO；
  * Web 端仅当 ADO 服务器允许跨域时可用；Windows 集成认证只在桌面端提供。
  */
+import { t, tp } from '../i18n';
+import { compareLocaleText } from '../i18n/format';
 import { ensureHttpOrigin, httpFetch, isTauri } from './http';
 
 /** 认证方式。企业内网的 ADO Server 默认是 Windows 集成认证，所以 ntlm 排在最前。 */
@@ -52,7 +54,7 @@ export class AdoRequestTimeoutError extends Error {
     readonly url: string,
     readonly timeoutMs: number,
   ) {
-    super(`ADO ${method} 请求超过 ${Math.ceil(timeoutMs / 1_000)} 秒时限：${url}`);
+    super(t('workbench.direct.requestTimeout', { method, seconds: Math.ceil(timeoutMs / 1_000), url }));
     this.name = 'AdoRequestTimeoutError';
   }
 }
@@ -69,6 +71,16 @@ export class ControlledWorkItemStateError extends Error {
   ) {
     super(message);
     this.name = 'ControlledWorkItemStateError';
+  }
+}
+
+class NtlmDesktopOnlyError extends Error {}
+
+class AdoNetworkError extends Error {}
+
+class AdoHttpError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
   }
 }
 
@@ -172,10 +184,10 @@ interface AdoRawResponse {
 
 function authFailureMessage(cfg: DirectConfig): string {
   return cfg.auth === 'ntlm'
-    ? 'Windows 集成认证被拒：当前登录用户在该 Azure DevOps 上没有权限，或服务器未启用 NTLM/Negotiate'
+    ? t('workbench.direct.authNtlmDenied')
     : cfg.auth === 'none' || !cfg.pat?.trim()
-      ? '服务器要求认证：桌面端可用 Windows 集成认证（自动探测会试），网页端请填 PAT'
-      : '认证失败：PAT 无效、已过期、或权限不足（需要 Work Items 读写、Code / Build 读取）';
+      ? t('workbench.direct.authRequired')
+      : t('workbench.direct.authPatFailed');
 }
 
 async function adoRequestRaw(
@@ -190,7 +202,7 @@ async function adoRequestRaw(
   if (options?.signal?.aborted) {
     throw options.signal.reason instanceof Error
       ? options.signal.reason
-      : new DOMException('请求已取消', 'AbortError');
+      : new DOMException(t('workbench.direct.requestAborted'), 'AbortError');
   }
   const deadlineAt = options?.deadlineAt ?? createAdoDeadline();
   const timeoutMs = remainingMsUntil(deadlineAt);
@@ -203,15 +215,13 @@ async function adoRequestRaw(
   try {
     if (cfg.auth === 'ntlm') {
       if (!canUseNtlm) {
-        throw new Error(
-          'Windows 集成认证只能在桌面客户端使用（浏览器的跨域规则不允许携带系统凭据）。网页端请填写 PAT。',
-        );
+        throw new NtlmDesktopOnlyError(t('workbench.direct.ntlmDesktopOnly'));
       }
       ({ status, text } = await ntlmRequest(url, method, payload, contentType, timeoutMs));
       if (options?.signal?.aborted) {
         throw options.signal.reason instanceof Error
           ? options.signal.reason
-          : new DOMException('请求已取消', 'AbortError');
+          : new DOMException(t('workbench.direct.requestAborted'), 'AbortError');
       }
     } else {
       await ensureHttpOrigin(url);
@@ -239,14 +249,12 @@ async function adoRequestRaw(
       }
     }
   } catch (err) {
-    if (isAdoRequestTimeoutError(err)) throw err;
+    if (isAdoRequestTimeoutError(err) || err instanceof NtlmDesktopOnlyError) throw err;
     const raw = err instanceof Error ? err.message : String(err);
-    if (/只能在桌面客户端/.test(raw)) throw err;
-    throw new Error(
-      /fetch|network|load failed/i.test(raw)
-        ? `无法连接 ${base(cfg)}（网页端可能受浏览器跨域限制，请改用桌面客户端）`
-        : raw,
-    );
+    if (/fetch|network|load failed/i.test(raw)) {
+      throw new AdoNetworkError(t('workbench.direct.networkUnreachable', { base: base(cfg) }));
+    }
+    throw new Error(raw);
   }
 
   return { status, text, url, contentType: responseContentType };
@@ -266,18 +274,18 @@ async function adoRequest<T>(
     throw new Error(authFailureMessage(cfg));
   }
   if (status === 404) {
-    throw new Error(`地址不对：${url} 返回 404`);
+    throw new Error(t('workbench.direct.notFoundUrl', { url }));
   }
   if (status < 200 || status >= 300) {
-    throw new Error(`ADO 返回 ${status}：${text.slice(0, 160) || path}`);
+    throw new AdoHttpError(status, t('workbench.direct.httpStatus', { status, detail: text.slice(0, 160) || path }));
   }
   try {
     return JSON.parse(text) as T;
   } catch {
     throw new Error(
       text.trimStart().startsWith('<')
-        ? '返回了 HTML 而非 JSON：认证被重定向到登录页，或地址不是 API 根'
-        : '响应解析失败',
+        ? t('workbench.direct.htmlNotJson')
+        : t('workbench.direct.parseFailed'),
     );
   }
 }
@@ -291,25 +299,31 @@ export interface AdoRepositoryFileLocation {
 
 function requiredTrimmed(value: string, label: string): string {
   const trimmed = value.trim();
-  if (!trimmed) throw new Error(`${label}不能为空`);
+  if (!trimmed) throw new Error(t('workbench.direct.fieldRequired', { label }));
   return trimmed;
 }
 
 function normalizeRepositoryFilePath(path: string): string {
-  const trimmed = requiredTrimmed(path, '仓库文件路径');
+  const trimmed = requiredTrimmed(path, t('workbench.direct.field.repoFilePath'));
   const normalized = trimmed.replace(/\\/g, '/');
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
 function gitVersionDescriptor(ref: string): { version: string; versionType: 'branch' | 'tag' | 'commit' } {
-  const value = requiredTrimmed(ref, 'Git 引用');
+  const value = requiredTrimmed(ref, t('workbench.direct.field.gitRef'));
   if (/^refs\/heads\//i.test(value)) {
-    return { version: requiredTrimmed(value.slice('refs/heads/'.length), '分支名'), versionType: 'branch' };
+    return {
+      version: requiredTrimmed(value.slice('refs/heads/'.length), t('workbench.direct.field.branchName')),
+      versionType: 'branch',
+    };
   }
   if (/^refs\/tags\//i.test(value)) {
-    return { version: requiredTrimmed(value.slice('refs/tags/'.length), '标签名'), versionType: 'tag' };
+    return {
+      version: requiredTrimmed(value.slice('refs/tags/'.length), t('workbench.direct.field.tagName')),
+      versionType: 'tag',
+    };
   }
-  if (/^refs\//i.test(value)) throw new Error('Git 引用只支持分支、标签或提交 SHA');
+  if (/^refs\//i.test(value)) throw new Error(t('workbench.direct.unsupportedGitRef'));
   if (/^[0-9a-f]{7,40}$/i.test(value)) return { version: value, versionType: 'commit' };
   return { version: value, versionType: 'branch' };
 }
@@ -322,13 +336,13 @@ async function ensureAdoProjectAccess(cfg: DirectConfig, project: string): Promi
   );
   if (response.status === 401 || response.status === 203) throw new Error(authFailureMessage(cfg));
   if (response.status === 403) {
-    throw new Error(`当前账号没有权限访问 ADO 项目「${project}」`);
+    throw new Error(t('workbench.direct.projectForbidden', { project }));
   }
   if (response.status === 404) {
-    throw new Error(`ADO 项目「${project}」不存在，或当前账号无权访问`);
+    throw new Error(t('workbench.direct.projectNotFound', { project }));
   }
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(`ADO 项目校验失败（HTTP ${response.status}）`);
+    throw new Error(t('workbench.direct.projectCheckFailed', { status: response.status }));
   }
 }
 
@@ -336,8 +350,8 @@ export async function directReadRepositoryFile(
   cfg: DirectConfig,
   source: AdoRepositoryFileLocation,
 ): Promise<string> {
-  const project = requiredTrimmed(source.project, '项目');
-  const repository = requiredTrimmed(source.repository, '仓库');
+  const project = requiredTrimmed(source.project, t('workbench.direct.field.project'));
+  const repository = requiredTrimmed(source.repository, t('workbench.direct.field.repository'));
   const path = normalizeRepositoryFilePath(source.path);
   const version = gitVersionDescriptor(source.ref);
   await ensureAdoProjectAccess(cfg, project);
@@ -353,15 +367,15 @@ export async function directReadRepositoryFile(
 
   if (response.status === 401 || response.status === 203) throw new Error(authFailureMessage(cfg));
   if (response.status === 403) {
-    throw new Error(`没有权限读取 ADO 仓库文件：项目「${project}」/ 仓库「${repository}」`);
+    throw new Error(t('workbench.direct.repoFileForbidden', { project, repository }));
   }
   if (response.status === 404) {
     throw new Error(
-      `找不到 ADO 仓库、Git 引用或文件：${project}/${repository} · ${source.ref} · ${path}`,
+      t('workbench.direct.repoFileNotFound', { project, repository, ref: source.ref, path }),
     );
   }
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(`读取 ADO 仓库文件失败（HTTP ${response.status}）`);
+    throw new Error(t('workbench.direct.repoFileReadFailed', { status: response.status }));
   }
 
   let parsed: { isFolder?: boolean; content?: unknown };
@@ -370,12 +384,12 @@ export async function directReadRepositoryFile(
   } catch {
     throw new Error(
       response.text.trimStart().startsWith('<')
-        ? 'ADO 仓库文件请求被重定向到登录页，请检查当前认证方式'
-        : 'ADO 仓库文件响应解析失败',
+        ? t('workbench.direct.repoFileRedirectedHtml')
+        : t('workbench.direct.repoFileParseFailed'),
     );
   }
-  if (parsed.isFolder) throw new Error(`ADO 路径「${path}」指向的是文件夹，不是单个配置文件`);
-  if (typeof parsed.content !== 'string') throw new Error('ADO 仓库文件不是可直接读取的文本文件');
+  if (parsed.isFolder) throw new Error(t('workbench.direct.repoFileIsFolder', { path }));
+  if (typeof parsed.content !== 'string') throw new Error(t('workbench.direct.repoFileNotText'));
   return parsed.content;
 }
 
@@ -387,8 +401,9 @@ export async function directTestConnection(cfg: DirectConfig): Promise<string> {
     '/_apis/projects?api-version=7.0&$top=5',
   );
   const names = (res.value ?? []).map((p) => p.name);
-  if (names.length === 0) throw new Error('连接成功但没有可见的项目（检查 PAT 权限范围）');
-  return `可见 ${res.count ?? names.length} 个项目：${names.slice(0, 3).join('、')}`;
+  if (names.length === 0) throw new Error(t('workbench.direct.noVisibleProjects'));
+  const count = res.count ?? names.length;
+  return tp(count, 'workbench.direct.visibleProjectsOne', 'workbench.direct.visibleProjectsOther', { count, projects: names.slice(0, 3).join(t('workbench.common.listSeparator')) });
 }
 
 // ---- 自动探测 ----
@@ -490,7 +505,7 @@ export async function probeAdo(
           url,
           auth,
           ok: true,
-          detail: `成功，${res.count ?? projects.length} 个项目`,
+          detail: tp(res.count ?? projects.length, 'workbench.direct.probeSuccessDetailOne', 'workbench.direct.probeSuccessDetailOther', { count: res.count ?? projects.length }),
         };
         steps.push(step);
         onStep?.(step);
@@ -501,7 +516,7 @@ export async function probeAdo(
         steps.push(step);
         onStep?.(step);
         // 连不上主机（网络/跨域）就没必要换认证方式重试
-        if (/无法连接/.test(msg)) break;
+        if (err instanceof AdoNetworkError) break;
       }
     }
   }
@@ -627,7 +642,7 @@ export async function directComment(
   text: string,
   author?: string,
 ): Promise<void> {
-  const value = author ? `[来自 RocketX，${author}]<br/>${text}` : text;
+  const value = author ? `${t('workbench.direct.commentAuthorPrefix', { author })}<br/>${text}` : text;
   await adoRequest(
     cfg,
     'PATCH',
@@ -656,7 +671,7 @@ export async function directGetProjectRefs(
     projects.push(...page.map((project) => ({ id: project.id ?? '', name: project.name })));
     if (page.length < pageSize) break;
   }
-  return projects.sort((left, right) => left.name.localeCompare(right.name));
+  return projects.sort((left, right) => compareLocaleText(left.name, right.name));
 }
 
 export async function directGetProjects(cfg: DirectConfig): Promise<string[]> {
@@ -773,8 +788,8 @@ export function createWorkItemRequest(
 ): CreateWorkItemRequest {
   const projectName = project.trim();
   const typeName = type.trim();
-  if (!projectName) throw new Error('项目不能为空');
-  if (!typeName) throw new Error('工作项类型不能为空');
+  if (!projectName) throw new Error(t('workbench.direct.projectRequired'));
+  if (!typeName) throw new Error(t('workbench.direct.workItemTypeRequired'));
 
   const ops: { op: string; path: string; value: any }[] = [
     { op: 'add', path: '/fields/System.Title', value: title },
@@ -830,10 +845,10 @@ export function updateWorkItemStateRequest(
   expectedRevision?: number,
 ): UpdateWorkItemStateRequest {
   const value = state.trim();
-  if (!Number.isInteger(id) || id <= 0) throw new Error('工作项编号无效');
-  if (!value) throw new Error('目标状态不能为空');
+  if (!Number.isInteger(id) || id <= 0) throw new Error(t('workbench.direct.invalidWorkItemId'));
+  if (!value) throw new Error(t('workbench.direct.targetStateRequired'));
   if (expectedRevision != null && (!Number.isInteger(expectedRevision) || expectedRevision <= 0)) {
-    throw new Error('期望 revision 无效');
+    throw new Error(t('workbench.direct.invalidExpectedRevision'));
   }
   const body: UpdateWorkItemStateRequest['body'] = [];
   if (expectedRevision != null) body.push({ op: 'test', path: '/rev', value: expectedRevision });
@@ -859,7 +874,7 @@ export interface ControlledWorkItemStateResult {
 
 function normalizeWorkItemState(state: string, field: string): string {
   const value = state.trim();
-  if (!value) throw new Error(`${field}不能为空`);
+  if (!value) throw new Error(t('workbench.direct.fieldRequired', { label: field }));
   return value;
 }
 
@@ -870,10 +885,10 @@ function describeWorkItemStateConflict(
 ): string | null {
   const expectedState = opts?.expectedState.trim();
   if (expectedState && item.state !== expectedState) {
-    return `工作项 #${id} 状态已从「${expectedState}」变为「${item.state}」，未执行写入`;
+    return t('workbench.direct.stateConflictChanged', { id, expected: expectedState, current: item.state });
   }
   if (opts && item.revision !== opts.expectedRevision) {
-    return `工作项 #${id} 已被其他人更新：期望 rev ${opts.expectedRevision}，当前 rev ${item.revision ?? '未知'}`;
+    return t('workbench.direct.revisionConflict', { id, expected: opts.expectedRevision, current: item.revision ?? t('workbench.direct.unknownValue') });
   }
   return null;
 }
@@ -901,13 +916,13 @@ async function mustGetWorkItemWithOptions(
   options?: DirectRequestOptions,
 ): Promise<DirectWorkItem> {
   const item = await directGetWorkItemWithOptions(cfg, id, options);
-  if (!item) throw new Error(`工作项 #${id} 不存在或当前账号无权访问`);
+  if (!item) throw new Error(t('workbench.direct.workItemNotFound', { id }));
   return item;
 }
 
 function updateWorkItemStateFailure(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err ?? '');
-  return raw || '未知错误';
+  return raw || t('common.unknownError');
 }
 
 export async function directSetWorkItemStateControlled(
@@ -918,10 +933,10 @@ export async function directSetWorkItemStateControlled(
 ): Promise<ControlledWorkItemStateResult> {
   const deadlineAt = createAdoDeadline();
   const writeDeadlineAt = deadlineAt - CONTROLLED_WRITE_READBACK_RESERVE_MS;
-  const nextState = normalizeWorkItemState(targetState, '目标状态');
-  const expectedState = normalizeWorkItemState(opts.expectedState, '期望状态');
+  const nextState = normalizeWorkItemState(targetState, t('workbench.direct.field.targetState'));
+  const expectedState = normalizeWorkItemState(opts.expectedState, t('workbench.direct.field.expectedState'));
   if (!Number.isInteger(opts.expectedRevision) || opts.expectedRevision <= 0) {
-    throw new Error('期望 revision 无效');
+    throw new Error(t('workbench.direct.invalidExpectedRevision'));
   }
   const current = await mustGetWorkItemWithOptions(cfg, id, { deadlineAt });
   if (current.state === nextState) return { item: current, changed: false };
@@ -932,7 +947,7 @@ export async function directSetWorkItemStateControlled(
   if (remainingMsUntil(writeDeadlineAt) <= 0) {
     throw new ControlledWorkItemStateError(
       'deadline-before-write',
-      `工作项 #${id} 预读已耗尽 15 秒写入时限，未执行写入`,
+      t('workbench.direct.deadlineBeforeWrite', { id }),
     );
   }
 
@@ -951,7 +966,7 @@ export async function directSetWorkItemStateControlled(
     if (remainingMsUntil(deadlineAt) <= 0) {
       throw new ControlledWorkItemStateError(
         'write-attempted-unknown',
-        `工作项 #${id} 写入已尝试但 15 秒预算已耗尽，结果暂时无法确认：${updateWorkItemStateFailure(err)}`,
+        t('workbench.direct.writeBudgetExhausted', { id, error: updateWorkItemStateFailure(err) }),
       );
     }
     let reread: DirectWorkItem;
@@ -961,12 +976,12 @@ export async function directSetWorkItemStateControlled(
       if (isAdoRequestTimeoutError(readError)) {
         throw new ControlledWorkItemStateError(
           'readback-timeout',
-          `工作项 #${id} 写入后回读超时，结果暂时无法确认`,
+          t('workbench.direct.readbackTimeout', { id }),
         );
       }
       throw new ControlledWorkItemStateError(
         'write-attempted-unknown',
-        `工作项 #${id} 写入请求失败且回读也失败，结果暂时无法确认：${updateWorkItemStateFailure(readError)}`,
+        t('workbench.direct.writeAndReadbackFailed', { id, error: updateWorkItemStateFailure(readError) }),
       );
     }
     if (reread.state === nextState && reread.revision > expected.expectedRevision) {
@@ -976,19 +991,19 @@ export async function directSetWorkItemStateControlled(
     const rereadConflict = reread.state !== nextState
       ? describeWorkItemStateConflict(id, reread, expected)
       : null;
-    if (/ADO 返回 4\d\d/.test(failure)) {
+    if ((err instanceof AdoHttpError && err.status >= 400 && err.status < 500) || /ADO 返回 4\d\d/.test(failure)) {
       if (rereadConflict) throw new Error(rereadConflict);
       throw new Error(failure);
     }
     if (patchTimedOut) {
       throw new ControlledWorkItemStateError(
         'write-attempted-unknown',
-        `工作项 #${id} PATCH 超时；当前远端结果仍需人工确认`,
+        t('workbench.direct.patchTimedOut', { id }),
       );
     }
     throw new ControlledWorkItemStateError(
       'write-attempted-unknown',
-      `工作项 #${id} 状态更新结果暂时无法确认：${rereadConflict ?? failure}`,
+      t('workbench.direct.stateUpdateUnconfirmed', { id, reason: rereadConflict ?? failure }),
     );
   }
 
@@ -996,7 +1011,7 @@ export async function directSetWorkItemStateControlled(
   if (remainingMsUntil(deadlineAt) <= 0) {
     throw new ControlledWorkItemStateError(
       'readback-timeout',
-      `工作项 #${id} PATCH 已提交，但 15 秒预算内来不及回读确认`,
+      t('workbench.direct.patchCommittedReadbackBudgetExhausted', { id }),
     );
   }
   try {
@@ -1005,24 +1020,24 @@ export async function directSetWorkItemStateControlled(
     if (isAdoRequestTimeoutError(readError)) {
       throw new ControlledWorkItemStateError(
         'readback-timeout',
-        `工作项 #${id} PATCH 已提交但回读超时，结果暂时无法确认`,
+        t('workbench.direct.patchCommittedReadbackTimeout', { id }),
       );
     }
     throw new ControlledWorkItemStateError(
       'write-attempted-unknown',
-      `工作项 #${id} PATCH 已提交但回读失败，结果暂时无法确认：${updateWorkItemStateFailure(readError)}`,
+      t('workbench.direct.patchCommittedReadbackFailed', { id, error: updateWorkItemStateFailure(readError) }),
     );
   }
   if (reread.state !== nextState) {
     throw new ControlledWorkItemStateError(
       'write-attempted-unknown',
-      `工作项 #${id} PATCH 后回读仍为「${reread.state}」，期望「${nextState}」`,
+      t('workbench.direct.patchReadbackStateMismatch', { id, actual: reread.state, expected: nextState }),
     );
   }
   if (reread.revision <= expected.expectedRevision) {
     throw new ControlledWorkItemStateError(
       'write-attempted-unknown',
-      `工作项 #${id} PATCH 后 revision 未前进，结果暂时无法确认：当前 rev ${reread.revision ?? '未知'}`,
+      t('workbench.direct.patchRevisionUnadvanced', { id, current: reread.revision ?? t('workbench.direct.unknownValue') }),
     );
   }
   return { item: reread, changed: true };
@@ -1064,7 +1079,7 @@ export async function directCreateCascade(
     const type = resolve(item.type);
     const parent = item.parent != null ? created[item.parent] : undefined;
     if (item.parent != null && !parent) {
-      throw new Error(`层级模板第 ${created.length + 1} 项引用了无效父项 ${item.parent + 1}`);
+      throw new Error(t('workbench.direct.invalidCascadeParent', { index: created.length + 1, parentIndex: item.parent + 1 }));
     }
     const wi = await directCreateWorkItem(cfg, project, type, title, {
       tags: item.parent == null ? opts?.tags : undefined,
@@ -1276,13 +1291,15 @@ export async function directGetWorkItemRevisionPage(
     try {
       const next = new URL(response.nextLink, base(cfg));
       if (next.origin !== new URL(base(cfg)).origin) {
-        throw new Error('reporting work item revisions 返回了跨源 nextLink');
+        throw new Error(t('workbench.direct.crossOriginNextLink'));
       }
       continuationToken = next.searchParams.get('continuationToken') ?? undefined;
     } catch (err) {
-      throw new Error(`reporting work item revisions 分页链接无效：${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(t('workbench.direct.invalidNextLink', {
+        error: err instanceof Error ? err.message : String(err),
+      }));
     }
-    if (!continuationToken) throw new Error('reporting work item revisions 分页链接缺少 continuationToken');
+    if (!continuationToken) throw new Error(t('workbench.direct.missingNextLinkToken'));
   }
   return {
     values: response.values ?? response.value ?? [],
@@ -1325,13 +1342,15 @@ export async function directGetWorkItemCommentsPage(
     try {
       const next = new URL(response.nextPage, base(cfg));
       if (next.origin !== new URL(base(cfg)).origin) {
-        throw new Error('Work Item Comments API 返回了跨源 nextPage');
+        throw new Error(t('workbench.direct.commentsCrossOriginNextPage'));
       }
       continuationToken = next.searchParams.get('continuationToken') ?? undefined;
     } catch (err) {
-      throw new Error(`Work Item Comments API 分页链接无效：${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(t('workbench.direct.commentsInvalidNextPage', {
+        error: err instanceof Error ? err.message : String(err),
+      }));
     }
-    if (!continuationToken) throw new Error('Work Item Comments API 分页链接缺少 continuationToken');
+    if (!continuationToken) throw new Error(t('workbench.direct.commentsMissingNextPageToken'));
   }
   return {
     comments: response.comments ?? [],

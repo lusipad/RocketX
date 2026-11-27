@@ -2,6 +2,7 @@ import { appDataDir, join } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-dialog';
 import { exists, mkdir, readDir, readFile, readTextFile, remove, writeFile } from '@tauri-apps/plugin-fs';
 import type { StickerCatalog, StickerEntry, StickerGroup } from './stickerManifest';
+import { t, tp } from '../i18n';
 import { getServerBase, isTauri, loadStoredAuth, rest } from './client';
 import { inferStickerMimeType } from './stickerLoader';
 import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
@@ -9,9 +10,7 @@ import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
 const APP_ID = 'builtin:sticker-library';
 const VERSION = 1 as const;
 const PACKAGE_ID = 'personal-library';
-const PACKAGE_TITLE = '个人贴纸库';
 const GROUP_ID = 'my-stickers';
-const GROUP_TITLE = '我的贴纸';
 const MIB = 1024 * 1024;
 
 export interface PersonalStickerRecordV1 {
@@ -111,7 +110,7 @@ function toPathName(path: string): string {
 function fileStem(path: string): string {
   const name = toPathName(path);
   const index = name.lastIndexOf('.');
-  return (index > 0 ? name.slice(0, index) : name).trim() || '贴纸';
+  return (index > 0 ? name.slice(0, index) : name).trim() || t('chat.sticker.defaultTitle');
 }
 
 function safeFileName(name: string): string {
@@ -148,7 +147,7 @@ function imageMimeTypeOf(path: string, declared?: string | null): string | null 
 }
 
 function defaultTitle(path: string): string {
-  return fileStem(path) || '贴纸';
+  return fileStem(path) || t('chat.sticker.defaultTitle');
 }
 
 function digestFileName(digest: string, fileName: string): string {
@@ -215,9 +214,9 @@ function personalStickerEntry(record: PersonalStickerRecordV1, src: string): Sti
     id: record.id,
     title: record.title,
     packageId: PACKAGE_ID,
-    packageTitle: PACKAGE_TITLE,
+    packageTitle: t('chat.sticker.personalPackageTitle'),
     groupId: GROUP_ID,
-    groupTitle: GROUP_TITLE,
+    groupTitle: t('chat.sticker.personalGroupTitle'),
     src,
     fileName: record.fileName,
     mimeType: record.mimeType,
@@ -266,9 +265,9 @@ export async function loadPersonalStickerCatalog(): Promise<StickerCatalog> {
   if (entries.length === 0) return { groups: [], entries: [] };
   const group: StickerGroup = {
     id: GROUP_ID,
-    title: GROUP_TITLE,
+    title: t('chat.sticker.personalGroupTitle'),
     packageId: PACKAGE_ID,
-    packageTitle: PACKAGE_TITLE,
+    packageTitle: t('chat.sticker.personalPackageTitle'),
     items: entries,
   };
   return { groups: [group], entries };
@@ -291,7 +290,7 @@ export function parseQqStickerDirectory(
 ): Array<Pick<StickerImportCandidate, 'title' | 'fileName' | 'tags'>> & Array<{ path: string }> {
   if (!packInfo || typeof packInfo !== 'object') return [];
   const value = packInfo as { packName?: unknown; stickers?: unknown };
-  const packName = typeof value.packName === 'string' && value.packName.trim() ? value.packName.trim() : 'QQ 导入';
+  const packName = typeof value.packName === 'string' && value.packName.trim() ? value.packName.trim() : t('chat.sticker.qqImportPack');
   const stickers = Array.isArray(value.stickers) ? value.stickers : [];
   const remaining = files
     .filter((entry) => entry.isFile !== false)
@@ -305,7 +304,7 @@ export function parseQqStickerDirectory(
     const candidate = sticker as { stickerId?: unknown; name?: unknown };
     const stickerId = typeof candidate.stickerId === 'string' ? candidate.stickerId.trim() : '';
     if (!stickerId) continue;
-    const title = typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name.trim() : `表情 ${stickerId}`;
+    const title = typeof candidate.name === 'string' && candidate.name.trim() ? candidate.name.trim() : t('chat.sticker.qqFallbackTitle', { id: stickerId });
     const matchedIndex = remaining.findIndex((entry) => entry.fileName.toLocaleLowerCase().startsWith(qqStickerPrefix(stickerId)));
     if (matchedIndex < 0) continue;
     const matched = remaining.splice(matchedIndex, 1)[0];
@@ -519,9 +518,9 @@ export async function importStickerFilesFromDialog(): Promise<StickerImportRepor
   if (!scope) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
   const selected = await open({
     multiple: true,
-    title: '选择要导入的贴纸图片',
+    title: t('chat.sticker.dialog.selectFilesTitle'),
     filters: [{
-      name: '图片',
+      name: t('chat.common.imageFilterName'),
       extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'],
     }],
   });
@@ -536,7 +535,7 @@ export async function importStickerDirectoryFromDialog(): Promise<StickerImportR
   const selected = await open({
     directory: true,
     multiple: false,
-    title: '选择贴纸目录',
+    title: t('chat.sticker.dialog.selectDirTitle'),
   });
   if (!selected || Array.isArray(selected)) {
     return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
@@ -624,7 +623,7 @@ export async function collectStickerFromMessage(message: RcMessage): Promise<Sti
   const collectible = resolveCollectibleStickerSource(message);
   if (!collectible) return { total: 0, imported: 0, duplicates: 0, unsupported: 0, quotaSkipped: 0 };
   const response = await rest.fetchFileResponse(collectible.sourcePath);
-  if (!response.ok) throw new Error(`加载图片失败（${response.status}）`);
+  if (!response.ok) throw new Error(t('chat.sticker.loadImageFailedStatus', { status: response.status }));
   const bytes = new Uint8Array(await response.arrayBuffer());
   const responseMimeType = response.headers.get('content-type');
   const mimeType = imageMimeTypeOf(collectible.fileName, responseMimeType ?? collectible.mimeType);
@@ -639,11 +638,11 @@ export async function collectStickerFromMessage(message: RcMessage): Promise<Sti
 }
 
 export function describeStickerImport(report: StickerImportReport): string {
-  if (report.total === 0) return '没有导入任何贴纸';
+  if (report.total === 0) return t('chat.sticker.import.none');
   const parts: string[] = [];
-  if (report.imported > 0) parts.push(`导入 ${report.imported} 张`);
-  if (report.duplicates > 0) parts.push(`${report.duplicates} 张已存在`);
-  if (report.unsupported > 0) parts.push(`${report.unsupported} 张格式不支持`);
-  if (report.quotaSkipped > 0) parts.push(`${report.quotaSkipped} 张超过配额`);
-  return parts.join('，') || '没有导入任何贴纸';
+  if (report.imported > 0) parts.push(tp(report.imported, 'chat.sticker.import.importedOne', 'chat.sticker.import.importedOther'));
+  if (report.duplicates > 0) parts.push(tp(report.duplicates, 'chat.sticker.import.duplicatesOne', 'chat.sticker.import.duplicatesOther'));
+  if (report.unsupported > 0) parts.push(tp(report.unsupported, 'chat.sticker.import.unsupportedOne', 'chat.sticker.import.unsupportedOther'));
+  if (report.quotaSkipped > 0) parts.push(tp(report.quotaSkipped, 'chat.sticker.import.quotaOne', 'chat.sticker.import.quotaOther'));
+  return parts.join(t('chat.common.commaSep')) || t('chat.sticker.import.none');
 }

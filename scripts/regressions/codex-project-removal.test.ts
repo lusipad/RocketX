@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import { resetCodexWorkspaceForTests, useCodexWorkspace } from '../../apps/web/src/stores/codexWorkspace';
 
 test('项目行直接提供移除入口，不产生下拉层滚动条，并明确不会删除磁盘目录或 Codex 会话', () => {
@@ -11,12 +13,24 @@ test('项目行直接提供移除入口，不产生下拉层滚动条，并明�
   assert.match(history, /className="butler-codex-workspace-actions"/);
   assert.match(history, /const projectEntries = useMemo/);
   assert.match(history, /entry\.configurable \? \(/);
-  assert.match(history, /aria-label=\{tr\(`移除项目：\$\{entry\.label\}`, `Remove project: \$\{entry\.label\}`, locale\)\}/);
-  assert.match(history, /title=\{entry\.busy \? tr\('活动讨论结束后才能移除项目',[^)]+\) : tr\('移除项目', 'Remove project', locale\)\}/);
+  assert.match(history, /aria-label=\{t\('butler\.history\.removeProjectAria', \{ label: entry\.label \}\)\}/);
+  assert.equal(zhCN['butler.history.removeProjectAria'], '移除项目：{label}');
+  assert.ok(enUS['butler.history.removeProjectAria'].includes('{label}'));
+  assert.match(
+    history,
+    /title=\{t\(entry\.busy \? 'butler\.history\.removeProjectBusyTitle' : 'butler\.history\.removeProjectTitle'\)\}/,
+  );
+  assert.equal(zhCN['butler.history.removeProjectBusyTitle'], '活动讨论结束后才能移除项目');
+  assert.equal(zhCN['butler.history.removeProjectTitle'], '移除项目');
+  assert.ok(enUS['butler.history.removeProjectBusyTitle'].length > 0);
+  assert.ok(enUS['butler.history.removeProjectTitle'].length > 0);
   assert.match(history, /<FolderMinus size=\{14\} aria-hidden="true" \/>/);
   assert.doesNotMatch(history, /title=\{path\}/);
   assert.doesNotMatch(history, /role="menu" aria-label="项目操作"/);
-  assert.match(history, /不会删除磁盘目录或 Codex 会话/);
+  assert.equal(Object.values(zhCN).includes('项目操作'), false);
+  assert.match(history, /t\('butler\.history\.removeProjectDialogMessage', \{ path: workspaceToRemove \}\)/);
+  assert.match(zhCN['butler.history.removeProjectDialogMessage'], /不会删除磁盘目录或 Codex 会话/);
+  assert.ok(enUS['butler.history.removeProjectDialogMessage'].length > 0);
   assert.match(styles, /\.butler-codex-workspace-actions > button \{[^}]*opacity: 0\.72;/s);
 });
 

@@ -1,6 +1,7 @@
 import type { RcMessage, RcMessageAttachment } from '@rcx/rc-client';
 import type { CapabilityBus } from './bus';
 import type { KernelHost } from '../host';
+import { t } from '../../i18n';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
@@ -61,7 +62,9 @@ export function registerHostCapabilities(
       const current = host.chat.current();
       const rid = stringParam(params, 'rid', current.rid ?? '');
       const count = Math.min(200, Math.max(1, Number((params as { count?: unknown } | undefined)?.count) || 50));
-      if (!rid || (!host.rooms.isMember(rid) && rid !== current.rid)) throw new Error('无权读取这个会话');
+      if (!rid || (!host.rooms.isMember(rid) && rid !== current.rid)) {
+        throw new Error(t('settings.kernel.host.unauthorizedRoomRead'));
+      }
       return host.chat.history(rid, count).map(plainMessage);
     }),
   );
@@ -70,8 +73,8 @@ export function registerHostCapabilities(
       const rid = stringParam(params, 'rid', host.chat.current().rid ?? '');
       const text = stringParam(params, 'text');
       const tmid = stringParam(params, 'tmid') || undefined;
-      if (!rid || !host.rooms.isMember(rid)) throw new Error('只能向已加入的会话发送消息');
-      if (!text.trim()) throw new Error('消息不能为空');
+      if (!rid || !host.rooms.isMember(rid)) throw new Error(t('settings.kernel.host.mustBeMemberToSend'));
+      if (!text.trim()) throw new Error(t('settings.kernel.host.emptyMessage'));
       return host.chat.postMessage(rid, text, tmid);
     }),
   );
@@ -82,9 +85,9 @@ export function registerHostCapabilities(
       const messageId = stringParam(params, 'messageId');
       const emoji = stringParam(params, 'emoji');
       const shouldReact = (params as { shouldReact?: unknown } | undefined)?.shouldReact;
-      if (!messageId || !emoji) throw new Error('chat.react 需要 messageId 和 emoji');
+      if (!messageId || !emoji) throw new Error(t('settings.kernel.host.reactMissingParams'));
       if (!emoji.startsWith(':') || !emoji.endsWith(':') || emoji.length < 3) {
-        throw new Error('emoji 必须是 :name: 短名格式');
+        throw new Error(t('settings.kernel.host.reactInvalidEmoji'));
       }
       await host.chat.react(messageId, emoji, typeof shouldReact === 'boolean' ? shouldReact : undefined);
       return { ok: true };
@@ -96,13 +99,13 @@ export function registerHostCapabilities(
       const msg = stringParam(params, 'msg');
       const tmid = stringParam(params, 'tmid') || undefined;
       const rawAttachments = (params as { attachments?: unknown } | undefined)?.attachments;
-      if (!rid || !host.rooms.isMember(rid)) throw new Error('只能向已加入的会话发送消息');
+      if (!rid || !host.rooms.isMember(rid)) throw new Error(t('settings.kernel.host.mustBeMemberToSend'));
       if (rawAttachments !== undefined && !Array.isArray(rawAttachments)) {
-        throw new Error('attachments 必须是数组');
+        throw new Error(t('settings.kernel.host.attachmentsMustBeArray'));
       }
-      if (!msg.trim() && !Array.isArray(rawAttachments)) throw new Error('消息不能为空');
+      if (!msg.trim() && !Array.isArray(rawAttachments)) throw new Error(t('settings.kernel.host.emptyMessage'));
       if (Array.isArray(rawAttachments) && JSON.stringify(rawAttachments).length > 32_768) {
-        throw new Error('附件载荷超出 32 KB 上限');
+        throw new Error(t('settings.kernel.host.attachmentsTooLarge'));
       }
       const message = await host.chat.send({
         rid,
@@ -116,10 +119,10 @@ export function registerHostCapabilities(
   cleanups.push(
     capabilityBus.register('chat.threads', 'chat:history', async (params) => {
       const tmid = stringParam(params, 'tmid');
-      if (!tmid) throw new Error('chat.threads 需要 tmid');
+      if (!tmid) throw new Error(t('settings.kernel.host.threadsMissingTmid'));
       const messages = await host.chat.thread(tmid);
       const rid = messages[0]?.rid;
-      if (!rid || !host.rooms.isMember(rid)) throw new Error('只能读取已加入会话的话题');
+      if (!rid || !host.rooms.isMember(rid)) throw new Error(t('settings.kernel.host.mustBeMemberToReadThread'));
       return { messages: messages.map(plainMessage) };
     }),
   );
@@ -130,7 +133,9 @@ export function registerHostCapabilities(
     capabilityBus.register('users.read', 'users:read', (params) => {
       const current = host.chat.current();
       const rid = stringParam(params, 'rid', current.rid ?? '');
-      if (!rid || (!host.rooms.isMember(rid) && rid !== current.rid)) throw new Error('只能读取已加入会话的成员');
+      if (!rid || (!host.rooms.isMember(rid) && rid !== current.rid)) {
+        throw new Error(t('settings.kernel.host.mustBeMemberToReadUsers'));
+      }
       return host.users.read(rid);
     }),
   );
@@ -138,7 +143,7 @@ export function registerHostCapabilities(
     capabilityBus.register('files.list', 'files:read', async (params) => {
       const rid = stringParam(params, 'rid', host.chat.current().rid ?? '');
       const type = host.rooms.typeOf(rid);
-      if (!rid || !type) throw new Error('只能读取已加入会话的文件');
+      if (!rid || !type) throw new Error(t('settings.kernel.host.mustBeMemberToReadFiles'));
       const count = Math.min(200, Math.max(1, Number((params as { count?: unknown } | undefined)?.count) || 50));
       return host.files.list(rid, type, count);
     }),
@@ -147,10 +152,10 @@ export function registerHostCapabilities(
     capabilityBus.register('files.read', 'files:read', async (params) => {
       const path = stringParam(params, 'path');
       if (!isCurrentServerFilePath(path, serverBase())) {
-        throw new Error('只能读取当前 Rocket.Chat 服务器的文件');
+        throw new Error(t('settings.kernel.host.mustBeCurrentServerFile'));
       }
       const blob = await host.files.read(path);
-      if (blob.size > MAX_FILE_BYTES) throw new Error('Bridge 单次文件读取上限为 10 MB');
+      if (blob.size > MAX_FILE_BYTES) throw new Error(t('settings.kernel.host.fileReadLimit'));
       return encodeBlob(blob);
     }),
   );

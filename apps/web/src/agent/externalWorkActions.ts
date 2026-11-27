@@ -1,13 +1,14 @@
 import { RcApiError } from '@rcx/rc-client';
+import { t } from '../i18n';
 import { loadWorkbenchConfig } from '../lib/ado';
-import { directGetWorkItem, directSetWorkItemStateControlled, isControlledWorkItemStateOutcomeUnknown } from '../lib/adoDirect';
+import { directComment, directGetWorkItem, directSetWorkItemStateControlled, isControlledWorkItemStateOutcomeUnknown } from '../lib/adoDirect';
 import { getPublicSetting, getServerBase, rest } from '../lib/client';
 import { normalizeMessageMaxAllowedSize, toSendableMessageChunks } from '../lib/messageChunks';
 import type { NativeDispatchActionRecord, NativeWorkCard } from '../platform/desktopCommands';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useWorkLedger } from '../stores/workLedger';
-import { createExternalActionExecutor, readExternalActionSpec, type AdoStateActionSpec, type ExternalActionActor, type ExternalActionSpec, type ReportActionSpec } from './externalActionExecutor';
+import { createExternalActionExecutor, readExternalActionSpec, type AdoCommentActionSpec, type AdoStateActionSpec, type ExternalActionActor, type ExternalActionSpec, type ReportActionSpec } from './externalActionExecutor';
 import { evaluateCardCompletionGate } from './workCoordinator';
 import { observeWorkArtifacts } from './workArtifacts';
 
@@ -15,7 +16,7 @@ export async function withExternalActionDeadline<T>(operation: Promise<T>, timeo
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('外部请求超时，结果待回读确认')), timeoutMs);
+      timer = setTimeout(() => reject(new Error(t('agent.externalWork.timeout'))), timeoutMs);
     })]);
   } finally { if (timer) clearTimeout(timer); }
 }
@@ -31,14 +32,14 @@ function currentActor(): ExternalActionActor {
 
 function cardFor(workId: string): NativeWorkCard {
   const card = useWorkLedger.getState().cards.find((item) => item.id === workId);
-  if (!card) throw new Error('工作不存在，请重新打开工作后操作');
+  if (!card) throw new Error(t('agent.externalWork.workMissing'));
   return card;
 }
 
-function configFor(spec: AdoStateActionSpec) {
+function configFor(spec: AdoStateActionSpec | AdoCommentActionSpec) {
   const config = loadWorkbenchConfig();
   if (!config?.adoBase || config.adoBase !== spec.adoBase || config.account !== spec.actor.adoAccount) {
-    throw new Error('ADO 连接或操作者已改变，未使用新账号执行旧动作');
+    throw new Error(t('agent.externalWork.adoChanged'));
   }
   return { adoBase: config.adoBase, pat: config.pat ?? '', auth: config.auth };
 }
@@ -63,45 +64,51 @@ const executor = createExternalActionExecutor({
   }),
   validate: async (spec, mode = 'send') => {
     const actor = currentActor();
-    if (actor.userId !== spec.actor.userId || actor.server !== spec.actor.server) throw new Error('账号或服务器已改变，拒绝处理其他账号的外部动作');
+    if (actor.userId !== spec.actor.userId || actor.server !== spec.actor.server) throw new Error(t('agent.externalWork.accountChanged'));
     if (mode === 'send' && spec.kind === 'ado_state_write' && /^(closed|done|resolved|已关闭|已完成|已解决|已修复)$/i.test(spec.targetState)) {
       await observeWorkArtifacts(spec.workId);
       const latestActor = currentActor();
-      if (latestActor.userId !== spec.actor.userId || latestActor.server !== spec.actor.server) throw new Error('核对成果期间账号已改变');
+      if (latestActor.userId !== spec.actor.userId || latestActor.server !== spec.actor.server) throw new Error(t('agent.externalWork.accountChangedDuringVerify'));
     }
     const card = cardFor(spec.workId);
     if (mode === 'send') {
-      if ((card.state.requirementsVersion ?? 0) !== spec.requirementsVersion || card.state.projectKey !== spec.projectKey) throw new Error('工作要求版本或项目已改变，请重新审阅并生成动作');
-      if (spec.contentVersion !== undefined && spec.contentVersion !== (card.state.contentVersion ?? 0)) throw new Error('工作成果已改变，请重新核验并生成动作');
-      if (card.state.waitState === 'paused' || card.state.waitState === 'canceled' || card.state.autonomyMode === 'readonly') throw new Error('工作已暂停、取消或只读，未执行外部写入');
+      if ((card.state.requirementsVersion ?? 0) !== spec.requirementsVersion || card.state.projectKey !== spec.projectKey) throw new Error(t('agent.externalWork.requirementsChanged'));
+      if (spec.contentVersion !== undefined && spec.contentVersion !== (card.state.contentVersion ?? 0)) throw new Error(t('agent.externalWork.contentChanged'));
+      if (card.state.waitState === 'paused' || card.state.waitState === 'canceled' || card.state.autonomyMode === 'readonly') throw new Error(t('agent.externalWork.readonlyOrPaused'));
     }
-    if (spec.kind === 'ado_state_write') {
+    if (spec.kind === 'ado_state_write' || spec.kind === 'ado_comment') {
       configFor(spec);
-      if (card.adoWorkItemId !== spec.workItemId) throw new Error('ADO 工作项与当前工作关联不一致');
-      if (mode === 'send' && /^(closed|done|resolved|已关闭|已完成|已解决|已修复)$/i.test(spec.targetState)) {
+      if (card.adoWorkItemId !== spec.workItemId) throw new Error(t('agent.externalWork.adoMismatch'));
+      if (spec.kind === 'ado_state_write' && mode === 'send' && /^(closed|done|resolved|已关闭|已完成|已解决|已修复)$/i.test(spec.targetState)) {
         const gate = evaluateCardCompletionGate(card, useWorkLedger.getState().evidences);
-        if (!gate.canMarkDone) throw new Error(`当前工作尚未通过验收，未将 ADO 更新为完成：${gate.reason}`);
+        if (!gate.canMarkDone) throw new Error(t('agent.externalWork.gateFailed', { reason: gate.reason }));
       }
       return;
     }
     const auth = useAuth.getState();
-    if (auth.localMode || auth.status !== 'authed' || !auth.user) throw new Error('请先连接 Rocket.Chat，再核对或投递汇报');
+    if (auth.localMode || auth.status !== 'authed' || !auth.user) throw new Error(t('agent.externalWork.connectRocketChat'));
     const sub = Object.values(useChat.getState().subscriptions).find((item) => item.rid === spec.rid);
-    if (!sub) throw new Error('当前账号未加入目标讨论室，未发送汇报');
+    if (!sub) throw new Error(t('agent.externalWork.notRoomMember'));
     const action = useWorkLedger.getState().actions.find((item) => item.idempotencyKey === spec.operationId);
     const review = action && readReceipt(action).review as { actorId?: string; reportId?: string; rid?: string } | undefined;
     const explicitlyReviewed = spec.sharedContentReviewed || review?.actorId === actor.userId && review?.reportId === spec.reportId && review?.rid === spec.rid;
     if (mode === 'send' && !explicitlyReviewed && (card.state.visibility !== 'room_shared' || card.rid !== spec.rid)) {
-      throw new Error('私人工作或跨讨论室汇报需先审阅内容并明确确认目标');
+      throw new Error(t('agent.externalWork.reviewRequired'));
     }
   },
   writeAdo: async (spec) => {
     const result = await directSetWorkItemStateControlled(configFor(spec), spec.workItemId, spec.targetState, { expectedRevision: spec.expectedRevision, expectedState: spec.expectedState });
     return { revision: result.item.revision, state: result.item.state };
   },
+  writeAdoComment: async (spec) => {
+    const cfg = configFor(spec);
+    await withExternalActionDeadline(directComment(cfg, spec.workItemId, spec.commentText, spec.actor.adoAccount || undefined));
+    const latest = await withExternalActionDeadline(directGetWorkItem(cfg, spec.workItemId)).catch(() => null);
+    return { revision: latest?.revision ?? spec.expectedRevision ?? 0, state: latest?.state ?? '' };
+  },
   readAdo: async (spec) => {
     const item = await directGetWorkItem(configFor(spec), spec.workItemId);
-    if (!item) throw new Error('ADO 工作项不存在或当前账号无权访问');
+    if (!item) throw new Error(t('agent.externalWork.adoItemUnavailable'));
     return { revision: item.revision, state: item.state };
   },
   sendMessage: async (spec, part) => {
@@ -128,7 +135,7 @@ function readReceipt(action: NativeDispatchActionRecord): Record<string, unknown
 
 async function markReportReviewed(action: NativeDispatchActionRecord, spec: ReportActionSpec): Promise<void> {
   const actor = currentActor();
-  if (actor.userId !== spec.actor.userId || actor.server !== spec.actor.server) throw new Error('账号或服务器已改变，拒绝批准其他账号的汇报');
+  if (actor.userId !== spec.actor.userId || actor.server !== spec.actor.server) throw new Error(t('agent.externalWork.reportAccountChanged'));
   await useWorkLedger.getState().transitionDispatchAction({
     id: action.id, state: action.state, expectedState: action.state,
     receiptRef: JSON.stringify({ ...readReceipt(action), review: { actorId: actor.userId, reportId: spec.reportId, rid: spec.rid, reviewedAt: Date.now() } }),
@@ -136,7 +143,7 @@ async function markReportReviewed(action: NativeDispatchActionRecord, spec: Repo
 }
 
 function baseSpec(card: NativeWorkCard, operationId: string) {
-  if (!operationId.trim()) throw new Error('外部动作需要稳定操作 ID');
+  if (!operationId.trim()) throw new Error(t('agent.externalWork.operationIdRequired'));
   return {
     version: 1 as const,
     operationId,
@@ -164,9 +171,9 @@ export async function publishWorkReport(input: {
 }): Promise<NativeDispatchActionRecord> {
   const card = cardFor(input.workId);
   const rid = input.rid.trim();
-  if (!rid || !input.reportId.trim() || !input.markdown.trim()) throw new Error('请选择目标讨论室并生成带稳定身份的汇报');
+  if (!rid || !input.reportId.trim() || !input.markdown.trim()) throw new Error(t('agent.externalWork.selectRoomAndReport'));
   if (input.requirementsVersion !== undefined && input.requirementsVersion !== (card.state.requirementsVersion ?? 0) ||
-      input.contentVersion !== undefined && input.contentVersion !== (card.state.contentVersion ?? 0)) throw new Error('汇报生成后工作已改变，请先重新生成并审阅汇报');
+      input.contentVersion !== undefined && input.contentVersion !== (card.state.contentVersion ?? 0)) throw new Error(t('agent.externalWork.workChangedAfterReport'));
   const actor = currentActor();
   const operationId = JSON.stringify(['rc_report', actor.server, actor.userId, card.id, input.reportId, rid]);
   const existing = useWorkLedger.getState().actions.find((item) => item.idempotencyKey === operationId);
@@ -194,10 +201,10 @@ export async function syncWorkAdoState(input: {
   targetState: string;
 }): Promise<NativeDispatchActionRecord> {
   const card = cardFor(input.workId);
-  if (!input.operationId.trim()) throw new Error('ADO 外部动作需要稳定操作 ID');
+  if (!input.operationId.trim()) throw new Error(t('agent.externalWork.adoOperationIdRequired'));
   const config = loadWorkbenchConfig();
-  if (!config?.adoBase || !card.adoWorkItemId) throw new Error('请先连接 ADO 并关联工作项');
-  if (!Number.isInteger(input.expectedRevision) || input.expectedRevision <= 0 || !input.expectedState.trim() || !input.targetState.trim()) throw new Error('ADO 状态更新需要准确的预期版本、当前状态和目标状态');
+  if (!config?.adoBase || !card.adoWorkItemId) throw new Error(t('agent.externalWork.connectAdoAndLink'));
+  if (!Number.isInteger(input.expectedRevision) || input.expectedRevision <= 0 || !input.expectedState.trim() || !input.targetState.trim()) throw new Error(t('agent.externalWork.adoStateParamsRequired'));
   const spec: AdoStateActionSpec = {
     ...baseSpec(card, JSON.stringify(['ado_state_write', currentActor(), card.id, input.operationId])),
     kind: 'ado_state_write', adoBase: config.adoBase, workItemId: card.adoWorkItemId,
@@ -206,10 +213,34 @@ export async function syncWorkAdoState(input: {
   return executor.execute(spec, card.state.autonomyMode === 'autonomous');
 }
 
+export async function postWorkAdoComment(input: {
+  workId: string;
+  operationId: string;
+  commentText: string;
+  expectedRevision?: number;
+  userConfirmed?: boolean;
+}): Promise<NativeDispatchActionRecord> {
+  const card = cardFor(input.workId);
+  if (!input.operationId.trim()) throw new Error(t('agent.externalWork.adoOperationIdRequired'));
+  const config = loadWorkbenchConfig();
+  if (!config?.adoBase || !card.adoWorkItemId) throw new Error(t('agent.externalWork.connectAdoAndLink'));
+  const commentText = input.commentText.trim();
+  if (!commentText) throw new Error(t('agent.externalWork.adoCommentRequired'));
+  const spec: AdoCommentActionSpec = {
+    ...baseSpec(card, JSON.stringify(['ado_comment', currentActor(), card.id, input.operationId])),
+    kind: 'ado_comment',
+    adoBase: config.adoBase,
+    workItemId: card.adoWorkItemId,
+    ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
+    commentText,
+  };
+  return executor.execute(spec, input.userConfirmed === true || card.state.autonomyMode === 'autonomous');
+}
+
 export async function executePreparedExternalAction(actionId: string, userConfirmed = false, retry = false): Promise<NativeDispatchActionRecord> {
   const action = useWorkLedger.getState().actions.find((item) => item.id === actionId);
   const spec = action && readExternalActionSpec(action);
-  if (!action || !spec) throw new Error('未找到有效的外部动作快照');
+  if (!action || !spec) throw new Error(t('agent.externalWork.snapshotNotFound'));
   if (spec.kind === 'rc_report' && userConfirmed) await markReportReviewed(action, spec);
   return executor.execute(spec, userConfirmed || cardFor(spec.workId).state.autonomyMode === 'autonomous', retry);
 }

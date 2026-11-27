@@ -5,7 +5,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { initializeStartupAiRuntimeProvider } from './lib/aiRuntimeBootstrap';
 import { getServerBase, installContextMenuGuard, installLinkInterceptor } from './lib/client';
 import { applyRuntimeModeDocumentState, runtimeFeatures } from './lib/runtimeMode';
-import { applyUiLocaleDocumentState } from './lib/uiLocale';
+import { initI18n, t } from './i18n';
 import { autostartAvailable } from './lib/autostart';
 import { hasExistingRocketXUserState, prepareDesktopDefaultsRecord, resetFirstRun } from './lib/firstRun';
 import { initTheme } from './lib/theme';
@@ -78,11 +78,11 @@ function createCoordinator(
   const coordinator = createStartupCoordinator({
     steps: {
       preparePlatform: async (signal) => {
-        if (signal?.aborted) throw new Error('启动任务已取消');
+        if (signal?.aborted) throw new Error(t('auth.startup.aborted'));
         if (platformPrepared) return;
         installLinkInterceptor(
           (mid) => void useChat.getState().jumpToMessage(mid),
-          (error) => toast.error(error, '无法用系统浏览器打开链接'),
+          (error) => toast.error(error, t('auth.main.openExternalFailed')),
         );
         // 桌面端：屏蔽 webview 自带的右键菜单（聊天软件里不该弹出「刷新 / 另存为 / 检查」）
         installContextMenuGuard();
@@ -91,7 +91,7 @@ function createCoordinator(
       },
       restoreAuth: async (signal) => {
         if (useAuth.getState().status !== 'authed') await useAuth.getState().resume();
-        if (signal?.aborted) throw new Error('登录恢复已取消');
+        if (signal?.aborted) throw new Error(t('auth.startup.restoreAuthAborted'));
       },
       readAuth: () => {
         const auth = useAuth.getState();
@@ -103,12 +103,12 @@ function createCoordinator(
           useChat.getState().init(),
           usePrefs.getState().load(),
         ]);
-        if (signal?.aborted) throw new Error('核心数据加载已取消');
-        if (!useChat.getState().ready) throw new Error('无法加载会话列表，请重试');
+        if (signal?.aborted) throw new Error(t('auth.startup.loadCoreDataAborted'));
+        if (!useChat.getState().ready) throw new Error(t('auth.startup.loadConversationsFailed'));
       },
       initializeRuntime: async (signal) => {
         await runtimeProviderReady;
-        if (signal?.aborted) throw new Error('本地运行时探测已取消');
+        if (signal?.aborted) throw new Error(t('auth.startup.runtimeProbeAborted'));
       },
       initializeKernel: async (signal) => {
         if (runtimeFeatures().bootKernel) await initializeKernel(undefined, signal);
@@ -119,11 +119,11 @@ function createCoordinator(
         ) {
           useUI.getState().setModule(runtimeFeatures().butler ? 'butler-view' : 'todos');
         }
-        if (signal?.aborted) throw new Error('扩展内核启动已取消');
+        if (signal?.aborted) throw new Error(t('auth.startup.kernelInitAborted'));
       },
       startBackground: async (signal) => {
         if (runtimeFeatures().runtimeProbes) await probePiRuntime().catch(() => undefined);
-        if (signal?.aborted) throw new Error('后台任务启动已取消');
+        if (signal?.aborted) throw new Error(t('auth.startup.backgroundAborted'));
       },
     },
     onState: ({ stage, error }) => useUI.setState({ startupStage: stage, startupError: error }),
@@ -133,10 +133,10 @@ function createCoordinator(
 }
 
 async function bootstrapOnce(): Promise<void> {
-  // 运行模式、语言与主题必须先落到 document，避免首屏闪烁并让后续启动门禁读到正确模式。
+  // 运行模式、主题和语言必须先落到 document，避免首屏闪烁并让后续启动门禁读到正确设置。
   applyRuntimeModeDocumentState();
-  applyUiLocaleDocumentState();
   initTheme();
+  initI18n();
   if (isTauri) {
     // 恢复无账号会创建本地 owner；设备是否首次安装必须提前判定。
     const hasExistingUserState = hasExistingRocketXUserState(localStorage);

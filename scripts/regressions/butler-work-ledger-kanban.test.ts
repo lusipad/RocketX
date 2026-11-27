@@ -31,6 +31,8 @@ import type {
   NativeWorkSessionRecord,
 } from '../../apps/web/src/platform/desktopCommands';
 import { extractAdoStructuredEvent } from '../../services/ado-bridge/src/transform';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 
 function sampleCard(overrides: Partial<NativeWorkCard> = {}): NativeWorkCard {
   const now = 1_700_000_000_000;
@@ -426,7 +428,12 @@ test('验收证据门禁：Session 空闲或证据过期时禁止直接标记已
     new URL('../../apps/web/src/pages/TodosPage.tsx', import.meta.url),
     'utf8',
   );
-  assert.match(todosPageSource, /统一看板/);
+  assert.match(todosPageSource, /t\('pages\.todos\.butlerKanbanTitle'\)/);
+  assert.match(zhCN['pages.todos.butlerKanbanTitle'], /统一看板/);
+  assert.ok(enUS['pages.todos.butlerKanbanTitle'].trim());
+  assert.match(todosPageSource, /t\('pages\.todos\.advanceInKanbanTitle'\)/);
+  assert.match(zhCN['pages.todos.advanceInKanbanTitle'], /统一看板/);
+  assert.ok(enUS['pages.todos.advanceInKanbanTitle'].trim());
   assert.match(todosPageSource, /WorkKanbanBoard/);
 });
 
@@ -614,8 +621,12 @@ test('Super Agent Worktree 隔离派工与宿主动态工具：从只读会话�
     new URL('../../apps/web/src/components/WorkCardPortal.tsx', import.meta.url),
     'utf8',
   );
-  assert.match(portalSource, /隔离 Worktree 派工/);
-  assert.match(portalSource, /工作区 Git 实时快照/);
+  assert.match(portalSource, /t\('agent\.portal\.spawnWorktreeBtn'\)/);
+  assert.match(zhCN['agent.portal.spawnWorktreeBtn'], /隔离 Worktree 派工/);
+  assert.ok(enUS['agent.portal.spawnWorktreeBtn'].trim());
+  assert.match(portalSource, /t\('agent\.portal\.gitSnapshotHeading'\)/);
+  assert.match(zhCN['agent.portal.gitSnapshotHeading'], /工作区 Git 实时快照/);
+  assert.ok(enUS['agent.portal.gitSnapshotHeading'].trim());
 
   const kernelHostSource = readFileSync(
     new URL('../../apps/web/src/lib/kernelHost.ts', import.meta.url),

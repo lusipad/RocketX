@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   canMentionInRoom,
   mentionQueryAtCursor,
@@ -35,7 +37,14 @@ test('私聊里的会话外候选只插入文本、不记待邀请，徽标与�
   // DM 不记 pendingInvites（邀请 t='d' 会另建新会话）
   assert.match(source, /candidate\.isRemote && roomType !== 'd'/);
   // DM 候选徽标与群聊不同
-  assert.match(source, /roomType === 'd' \? '不在会话中' : '非群成员'/);
+  assert.match(
+    source,
+    /roomType === 'd' \? t\('chat\.composer\.notInDmBadge'\) : t\('chat\.composer\.notInRoomBadge'\)/,
+  );
+  assert.equal(zhCN['chat.composer.notInDmBadge'], '不在会话中');
+  assert.equal(zhCN['chat.composer.notInRoomBadge'], '非群成员');
+  assert.ok(enUS['chat.composer.notInDmBadge'].length > 0);
+  assert.ok(enUS['chat.composer.notInRoomBadge'].length > 0);
   // 私聊外部人名来自本地花名册，拼音查询不依赖服务端原文搜索
   assert.match(source, /loadUserSearchRoster/);
 });

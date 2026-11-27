@@ -1,14 +1,24 @@
-import { useState } from 'react';
-import { Bot, Check, KeyRound, Loader2, Sparkles, Terminal, Globe, Server } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bot, Check, KeyRound, Loader2, Radar, Sparkles, Terminal, Globe, Server } from 'lucide-react';
+import { useT, type MessageKey } from '../i18n';
 import { isTauriRuntime } from '../lib/client';
+import {
+  PI_API_PROTOCOL_OPTIONS,
+  inferProtocolHintFromInput,
+  parseConnectionSnippet,
+} from '../lib/piProtocols';
 import {
   PI_CONFIGURED_STORAGE_KEY,
   activateAiRuntimeProvider,
   persistAiRuntimeProvider,
 } from '../lib/runtimeMode';
-import { tr, useUiLocale, type UiLocale } from '../lib/uiLocale';
 import {
+  probePiEndpoint,
+  scanLocalPiGateways,
   writePiConfig,
+  type PiApiProtocol,
+  type PiEndpointProbeResult,
+  type PiLocalGatewayCandidate,
   type PiProviderPreset,
 } from '../platform/desktopCommands';
 import { useCodexWorkspace } from '../stores/codexWorkspace';
@@ -17,139 +27,226 @@ import { useUI } from '../stores/ui';
 
 interface PresetConfig {
   id: PiProviderPreset;
-  title: string;
-  desc: string;
+  titleKey: MessageKey;
+  descKey: MessageKey;
   icon: typeof Bot;
   baseUrl: string;
   defaultModel: string;
   keyRequired: boolean;
-  placeholderKey: string;
+  placeholderKey?: string;
+  placeholderKeyTextKey?: MessageKey;
 }
 
-function getPresets(locale: UiLocale): PresetConfig[] {
-  return [
-    {
-      id: 'deepseek',
-      title: tr('DeepSeek 官方', 'DeepSeek', locale),
-      desc: tr('最新 V4 Flash / Pro 与 R1 推理', 'V4 Flash / Pro & R1 Reasoning', locale),
-      icon: Sparkles,
-      baseUrl: 'https://api.deepseek.com/v1',
-      defaultModel: 'deepseek-v4-flash',
-      keyRequired: true,
-      placeholderKey: 'sk-...',
-    },
-    {
-      id: 'anthropic',
-      title: tr('Claude 官方', 'Anthropic Claude', locale),
-      desc: tr('Claude 5.5 / 3.7 混合深度推理', 'Claude 5.5 / 3.7 Deep Reasoning', locale),
-      icon: Bot,
-      baseUrl: 'https://api.anthropic.com',
-      defaultModel: 'claude-sonnet-5.5',
-      keyRequired: true,
-      placeholderKey: 'sk-ant-...',
-    },
-    {
-      id: 'openai',
-      title: tr('OpenAI 官方', 'OpenAI', locale),
-      desc: tr('GPT-6.1 Sol / o3-mini 高速推理', 'GPT-6.1 Sol / o3-mini Reasoning', locale),
-      icon: Globe,
-      baseUrl: 'https://api.openai.com/v1',
-      defaultModel: 'gpt-6.1-sol',
-      keyRequired: true,
-      placeholderKey: 'sk-...',
-    },
-    {
-      id: 'ollama',
-      title: tr('Ollama 本地', 'Ollama Local', locale),
-      desc: tr('Qwen 3 Coder / DeepSeek R1 离线免密', 'Local offline models (no key needed)', locale),
-      icon: Terminal,
-      baseUrl: 'http://127.0.0.1:11434/v1',
-      defaultModel: 'qwen3-coder',
-      keyRequired: false,
-      placeholderKey: tr('免密，留空即可', 'Optional (no key needed)', locale),
-    },
-    {
-      id: 'google',
-      title: tr('Google 官方', 'Google Gemini', locale),
-      desc: tr('Gemini 4 Argon / 3.8 Flash 超大上下文', 'Gemini 4 Argon / 3.8 Flash', locale),
-      icon: Globe,
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      defaultModel: 'gemini-4-argon',
-      keyRequired: true,
-      placeholderKey: 'AIzaSy...',
-    },
-    {
-      id: 'custom-openai',
-      title: tr('企业 / 兼容网关', 'Custom OpenAI API', locale),
-      desc: tr('自建 vLLM / OneAPI / LiteLLM', 'vLLM / OneAPI / LiteLLM Endpoint', locale),
-      icon: Server,
-      baseUrl: 'http://127.0.0.1:8000/v1',
-      defaultModel: 'deepseek-v4-flash',
-      keyRequired: false,
-      placeholderKey: tr('如网关免密可留空', 'Optional if endpoint requires no key', locale),
-    },
-    {
-      id: 'openrouter',
-      title: 'OpenRouter',
-      desc: tr('聚合全球主流旗舰大模型', 'Unified access to flagship models', locale),
-      icon: Globe,
-      baseUrl: 'https://openrouter.ai/api/v1',
-      defaultModel: 'deepseek/deepseek-v4-flash',
-      keyRequired: true,
-      placeholderKey: 'sk-or-...',
-    },
-  ];
-}
+const PRESETS: PresetConfig[] = [
+  {
+    id: 'deepseek',
+    titleKey: 'butler.piOnboarding.preset.deepseekTitle',
+    descKey: 'butler.piOnboarding.preset.deepseekDesc',
+    icon: Sparkles,
+    baseUrl: 'https://api.deepseek.com/v1',
+    defaultModel: 'deepseek-v4-flash',
+    keyRequired: true,
+    placeholderKey: 'sk-...',
+  },
+  {
+    id: 'anthropic',
+    titleKey: 'butler.piOnboarding.preset.anthropicTitle',
+    descKey: 'butler.piOnboarding.preset.anthropicDesc',
+    icon: Bot,
+    baseUrl: 'https://api.anthropic.com',
+    defaultModel: 'claude-sonnet-5.5',
+    keyRequired: true,
+    placeholderKey: 'sk-ant-...',
+  },
+  {
+    id: 'openai',
+    titleKey: 'butler.piOnboarding.preset.openaiTitle',
+    descKey: 'butler.piOnboarding.preset.openaiDesc',
+    icon: Globe,
+    baseUrl: 'https://api.openai.com/v1',
+    defaultModel: 'gpt-6.1-sol',
+    keyRequired: true,
+    placeholderKey: 'sk-...',
+  },
+  {
+    id: 'ollama',
+    titleKey: 'butler.piOnboarding.preset.ollamaTitle',
+    descKey: 'butler.piOnboarding.preset.ollamaDesc',
+    icon: Terminal,
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    defaultModel: 'qwen3-coder',
+    keyRequired: false,
+    placeholderKeyTextKey: 'butler.piOnboarding.preset.ollamaKeyPlaceholder',
+  },
+  {
+    id: 'google',
+    titleKey: 'butler.piOnboarding.preset.googleTitle',
+    descKey: 'butler.piOnboarding.preset.googleDesc',
+    icon: Globe,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaultModel: 'gemini-4-argon',
+    keyRequired: true,
+    placeholderKey: 'AIzaSy...',
+  },
+  {
+    id: 'custom-openai',
+    titleKey: 'butler.piOnboarding.preset.customTitle',
+    descKey: 'butler.piOnboarding.preset.customDesc',
+    icon: Server,
+    baseUrl: 'http://127.0.0.1:8000/v1',
+    defaultModel: 'deepseek-v4-flash',
+    keyRequired: false,
+    placeholderKeyTextKey: 'butler.piOnboarding.preset.customKeyPlaceholder',
+  },
+  {
+    id: 'openrouter',
+    titleKey: 'butler.piOnboarding.preset.openrouterTitle',
+    descKey: 'butler.piOnboarding.preset.openrouterDesc',
+    icon: Globe,
+    baseUrl: 'https://openrouter.ai/api/v1',
+    defaultModel: 'deepseek/deepseek-v4-flash',
+    keyRequired: true,
+    placeholderKey: 'sk-or-...',
+  },
+];
 
 export default function PiQuickOnboardingCard() {
-  const locale = useUiLocale();
-  const presets = getPresets(locale);
+  const t = useT();
   const [selectedPresetId, setSelectedPresetId] = useState<PiProviderPreset>('deepseek');
+  const [apiProtocol, setApiProtocol] = useState<PiApiProtocol>('auto');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('https://api.deepseek.com/v1');
   const [model, setModel] = useState('deepseek-v4-flash');
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [probeResult, setProbeResult] = useState<PiEndpointProbeResult | null>(null);
+  const [localGateways, setLocalGateways] = useState<PiLocalGatewayCandidate[]>([]);
 
-  const currentPreset = presets.find((p) => p.id === selectedPresetId) ?? presets[0];
+  const currentPreset = PRESETS.find((p) => p.id === selectedPresetId) ?? PRESETS[0];
+  const instantHint = inferProtocolHintFromInput(baseUrl, apiKey);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let cancelled = false;
+    void scanLocalPiGateways()
+      .then((found) => {
+        if (!cancelled) setLocalGateways(Array.isArray(found) ? found : []);
+      })
+      .catch(() => {
+        // Ignore transient local gateway scan failures.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSelectPreset = (preset: PresetConfig) => {
     setSelectedPresetId(preset.id);
+    setApiProtocol('auto');
     setBaseUrl(preset.baseUrl);
     setModel(preset.defaultModel);
+    setProbeResult(null);
+    setDiscoveredModels([]);
+    if (preset.id === 'custom-openai') {
+      setShowAdvanced(true);
+    }
+  };
+
+  const handleApplyGateway = (gateway: PiLocalGatewayCandidate) => {
+    setSelectedPresetId(gateway.id === 'ollama' ? 'ollama' : 'custom-openai');
+    setBaseUrl(gateway.baseUrl);
+    setApiProtocol(gateway.protocol);
+    setDiscoveredModels(gateway.models);
+    if (gateway.models.length > 0) {
+      setModel(gateway.models[0]);
+    }
+    setProbeResult(null);
+    setShowAdvanced(true);
+  };
+
+  const handleProbeEndpoint = async () => {
+    if (!isTauriRuntime()) {
+      toast.error(t('butler.piOnboarding.desktopOnly'));
+      return;
+    }
+    setProbing(true);
+    try {
+      const result = await probePiEndpoint({
+        baseUrl: baseUrl.trim() || currentPreset.baseUrl,
+        apiKey: apiKey.trim() || undefined,
+        provider: selectedPresetId,
+        apiProtocol,
+        preferredModel: model.trim() || undefined,
+      });
+      setProbeResult(result);
+      if (result.normalizedBaseUrl) {
+        setBaseUrl(result.normalizedBaseUrl);
+      }
+      if (result.detectedProtocol) {
+        setApiProtocol(result.detectedProtocol);
+      }
+      if (result.discoveredModels.length > 0) {
+        setDiscoveredModels(result.discoveredModels);
+        if (result.suggestedModel) {
+          setModel(result.suggestedModel);
+        } else {
+          setModel(result.discoveredModels[0]);
+        }
+      }
+      if (result.ok) {
+        toast.success(
+          t('butler.piOnboarding.probeSuccess', { protocol: result.detectedProtocol }),
+        );
+      } else {
+        toast.error(result.summary || t('butler.piOnboarding.probeFailed'));
+      }
+    } catch (err) {
+      toast.error(err, t('butler.piOnboarding.probeFailed'));
+    } finally {
+      setProbing(false);
+    }
   };
 
   const handleActivate = async () => {
     if (!isTauriRuntime()) {
-      toast.error(tr('网页版不支持本地 Pi 进程，请使用 RocketX 桌面端', 'Local Pi runtime requires RocketX Desktop', locale));
+      toast.error(t('butler.piOnboarding.desktopOnly'));
       return;
     }
     const trimmedKey = apiKey.trim();
     if (currentPreset.keyRequired && !trimmedKey) {
-      toast.error(tr('请输入 API Key', 'Please enter an API Key', locale));
+      toast.error(t('butler.piOnboarding.enterApiKey'));
       return;
     }
 
     setSaving(true);
     try {
+      const fallbackExtras = selectedPresetId === 'deepseek'
+        ? ['deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner']
+        : selectedPresetId === 'anthropic'
+          ? ['claude-opus-5.5', 'claude-haiku-5.5', 'claude-3-7-sonnet-20250219']
+          : selectedPresetId === 'openai'
+            ? ['gpt-6-astra', 'gpt-6-luna', 'o3-mini', 'gpt-4.5-preview']
+            : selectedPresetId === 'google'
+              ? ['gemini-3.8-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+              : selectedPresetId === 'openrouter'
+                ? ['anthropic/claude-sonnet-5.5', 'openai/gpt-6.1-sol', 'google/gemini-4-argon']
+                : selectedPresetId === 'ollama'
+                  ? ['qwen3:8b', 'qwen3.8-27b', 'deepseek-r1:8b']
+                  : ['claude-sonnet-5.5', 'gpt-6.1-sol', 'deepseek-r1'];
+      const chosenModel = model.trim() || currentPreset.defaultModel;
+      const mergedExtras = discoveredModels.length > 0
+        ? discoveredModels.filter((m) => m !== chosenModel).slice(0, 12)
+        : fallbackExtras;
+
       await writePiConfig({
         provider: selectedPresetId,
+        apiProtocol,
         baseUrl: baseUrl.trim(),
         ...(trimmedKey ? { apiKey: trimmedKey } : { apiKey: '' }),
-        defaultModel: model.trim() || currentPreset.defaultModel,
-        extraModels: selectedPresetId === 'deepseek'
-          ? ['deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner']
-          : selectedPresetId === 'anthropic'
-            ? ['claude-opus-5.5', 'claude-haiku-5.5', 'claude-3-7-sonnet-20250219']
-            : selectedPresetId === 'openai'
-              ? ['gpt-6-astra', 'gpt-6-luna', 'o3-mini', 'gpt-4.5-preview']
-              : selectedPresetId === 'google'
-                ? ['gemini-3.8-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
-                : selectedPresetId === 'openrouter'
-                  ? ['anthropic/claude-sonnet-5.5', 'openai/gpt-6.1-sol', 'google/gemini-4-argon']
-                  : selectedPresetId === 'ollama'
-                    ? ['qwen3:8b', 'qwen3.8-27b', 'deepseek-r1:8b']
-                    : ['claude-sonnet-5.5', 'gpt-6.1-sol', 'deepseek-r1'],
+        defaultModel: chosenModel,
+        extraModels: mergedExtras,
       });
 
       try {
@@ -164,9 +261,9 @@ export default function PiQuickOnboardingCard() {
 
       await useCodexWorkspace.getState().reconnectRuntime();
 
-      toast.success(tr('AI 引擎就绪，开始对话吧！', 'AI engine ready. Start chatting!', locale));
+      toast.success(t('butler.piOnboarding.readyToast'));
     } catch (err) {
-      toast.error(err, tr('启用失败，请检查配置', 'Could not enable engine. Please check settings.', locale));
+      toast.error(err, t('butler.piOnboarding.enableFailed'));
     } finally {
       setSaving(false);
     }
@@ -179,19 +276,38 @@ export default function PiQuickOnboardingCard() {
           <Bot size={24} />
         </div>
         <div>
-          <h2 className="text-base font-semibold text-ink">{tr('快速启用 AI 管家', 'Quick-Start AI Butler', locale)}</h2>
+          <h2 className="text-base font-semibold text-ink">{t('butler.piOnboarding.heading')}</h2>
           <p className="text-xs text-ink-3">
-            {tr('RocketX 已内置本地 Pi 运行时与动态工具桥，配置好模型即可开启离线/私有任务。', 'RocketX includes a built-in Pi runtime and tool bridge. Configure a model to start local tasks.', locale)}
+            {t('butler.piOnboarding.subtitle')}
           </p>
         </div>
       </div>
 
       <div className="mt-5 space-y-4">
+        {localGateways.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-primary/25 bg-primary-light/40 px-3 py-2 text-xs">
+            <span className="inline-flex items-center gap-1 font-medium text-ink">
+              <Radar size={13} className="text-primary" />
+              {t('butler.piOnboarding.localDetected')}
+            </span>
+            {localGateways.map((gw) => (
+              <button
+                key={gw.id}
+                type="button"
+                onClick={() => handleApplyGateway(gw)}
+                className="rounded-full border border-primary/30 bg-surface px-2.5 py-0.5 text-xs font-medium text-primary transition hover:bg-primary/10"
+              >
+                {gw.label} ({gw.protocol})
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {/* Preset Selector */}
         <div>
-          <label className="mb-2 block text-xs font-medium text-ink-2">{tr('选择模型来源', 'Choose Model Provider', locale)}</label>
+          <label className="mb-2 block text-xs font-medium text-ink-2">{t('butler.piOnboarding.selectProvider')}</label>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {presets.map((preset) => {
+            {PRESETS.map((preset) => {
               const active = preset.id === selectedPresetId;
               const Icon = preset.icon;
               return (
@@ -209,8 +325,8 @@ export default function PiQuickOnboardingCard() {
                     <Icon size={16} />
                     {active ? <Check size={14} className="text-primary" /> : null}
                   </div>
-                  <span className="text-xs font-semibold">{preset.title}</span>
-                  <span className="text-xs text-ink-3 leading-snug line-clamp-2">{preset.desc}</span>
+                  <span className="text-xs font-semibold">{t(preset.titleKey)}</span>
+                  <span className="text-xs text-ink-3 leading-snug line-clamp-2">{t(preset.descKey)}</span>
                 </button>
               );
             })}
@@ -221,7 +337,7 @@ export default function PiQuickOnboardingCard() {
         <div>
           <div className="flex items-center justify-between">
             <label className="mb-1.5 block text-xs font-medium text-ink-2">
-              API Key {currentPreset.keyRequired ? <span className="text-danger">*</span> : <span className="text-ink-4">{tr('（选填）', ' (Optional)', locale)}</span>}
+              API Key {currentPreset.keyRequired ? <span className="text-danger">*</span> : <span className="text-ink-4">{t('butler.piOnboarding.optional')}</span>}
             </label>
             {selectedPresetId === 'deepseek' ? (
               <a
@@ -230,7 +346,7 @@ export default function PiQuickOnboardingCard() {
                 rel="noreferrer"
                 className="text-xs text-primary hover:underline flex items-center gap-0.5"
               >
-                {tr('获取 Key', 'Get API Key', locale)} <Globe size={11} />
+                {t('butler.piOnboarding.getKey')} <Globe size={11} />
               </a>
             ) : null}
           </div>
@@ -241,8 +357,19 @@ export default function PiQuickOnboardingCard() {
             <input
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={currentPreset.placeholderKey}
+              onChange={(e) => {
+                const snippet = parseConnectionSnippet(e.target.value);
+                if (snippet) {
+                  setSelectedPresetId('custom-openai');
+                  setBaseUrl(snippet.baseUrl);
+                  setApiKey(snippet.apiKey);
+                  if (snippet.model) setModel(snippet.model);
+                  setShowAdvanced(true);
+                  return;
+                }
+                setApiKey(e.target.value);
+              }}
+              placeholder={currentPreset.placeholderKeyTextKey ? t(currentPreset.placeholderKeyTextKey) : currentPreset.placeholderKey}
               className="h-9 w-full rounded-xl border border-line bg-surface-3 pl-9 pr-3 text-xs text-ink outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </div>
@@ -255,25 +382,80 @@ export default function PiQuickOnboardingCard() {
             onClick={() => setShowAdvanced((prev) => !prev)}
             className="text-xs text-ink-3 hover:text-ink font-medium"
           >
-            {showAdvanced
-              ? tr('收起自定义端点与模型', 'Hide custom endpoint & model', locale)
-              : tr('展开自定义端点与模型 (Base URL / Model)', 'Custom endpoint & model (Base URL / Model)', locale)}
+            {showAdvanced ? t('butler.piOnboarding.hideAdvanced') : t('butler.piOnboarding.showAdvanced')}
           </button>
 
           {showAdvanced ? (
             <div className="mt-3 space-y-3 rounded-xl border border-line bg-fill-1/50 p-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-ink-2">API Base URL</label>
-                <input
-                  type="text"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://..."
-                  className="h-8 w-full rounded-xl border border-line bg-surface-3 px-2.5 text-xs text-ink outline-none focus:border-primary"
-                />
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="text-xs font-medium text-ink-2">API Base URL</label>
+                  {instantHint.protocol !== 'auto' && apiProtocol === 'auto' ? (
+                    <span className="text-xs text-primary">
+                      {t('butler.piOnboarding.instantProtocolHint', { protocol: instantHint.protocol })}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={baseUrl}
+                    onChange={(e) => {
+                      const snippet = parseConnectionSnippet(e.target.value);
+                      if (snippet) {
+                        setSelectedPresetId('custom-openai');
+                        setBaseUrl(snippet.baseUrl);
+                        setApiKey(snippet.apiKey);
+                        if (snippet.model) setModel(snippet.model);
+                        return;
+                      }
+                      setBaseUrl(e.target.value);
+                    }}
+                    placeholder="https://..."
+                    className="h-8 flex-1 rounded-xl border border-line bg-surface-3 px-2.5 text-xs text-ink outline-none focus:border-primary"
+                  />
+                  <button
+                    type="button"
+                    disabled={probing}
+                    onClick={() => void handleProbeEndpoint()}
+                    className="h-8 shrink-0 rounded-xl border border-line bg-surface-3 px-2.5 text-xs font-medium text-ink transition hover:border-primary hover:text-primary disabled:opacity-50"
+                  >
+                    {probing
+                      ? t('butler.piOnboarding.probingEndpoint')
+                      : t('butler.piOnboarding.probeEndpoint')}
+                  </button>
+                </div>
+                {probeResult ? (
+                  <p className="mt-1.5 text-xs text-ink-3">
+                    {probeResult.summary} ({probeResult.latencyMs}ms)
+                  </p>
+                ) : null}
               </div>
+
               <div>
-                <label className="mb-1 block text-xs font-medium text-ink-2">{tr('模型名称', 'Model Name', locale)}</label>
+                <label className="mb-1.5 block text-xs font-medium text-ink-2">
+                  {t('butler.piOnboarding.protocolLabel')}
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {PI_API_PROTOCOL_OPTIONS.filter((opt) => opt.primary || opt.id === apiProtocol).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setApiProtocol(opt.id)}
+                      className={`rounded-lg border px-2 py-1 text-xs font-medium transition ${
+                        apiProtocol === opt.id
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-line bg-surface-3 text-ink-2 hover:text-ink'
+                      }`}
+                    >
+                      {opt.shortLabel}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-2">{t('butler.piOnboarding.modelName')}</label>
                 <input
                   type="text"
                   value={model}
@@ -281,6 +463,24 @@ export default function PiQuickOnboardingCard() {
                   placeholder="deepseek-chat"
                   className="h-8 w-full rounded-xl border border-line bg-surface-3 px-2.5 text-xs text-ink outline-none focus:border-primary"
                 />
+                {discoveredModels.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {discoveredModels.slice(0, 6).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setModel(m)}
+                        className={`rounded-full border px-2 py-0.5 font-mono text-xs transition ${
+                          model === m
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-line bg-surface-3 text-ink-2 hover:text-ink'
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : null}
@@ -297,12 +497,12 @@ export default function PiQuickOnboardingCard() {
             {saving ? (
               <>
                 <Loader2 size={15} className="animate-spin motion-reduce:animate-none" />
-                {tr('正在初始化引擎…', 'Initializing engine…', locale)}
+                {t('butler.piOnboarding.initializing')}
               </>
             ) : (
               <>
                 <Sparkles size={15} />
-                {tr('立即启用并开始对话', 'Enable & Start Chatting', locale)}
+                {t('butler.piOnboarding.activateButton')}
               </>
             )}
           </button>

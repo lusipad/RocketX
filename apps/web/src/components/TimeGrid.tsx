@@ -1,14 +1,24 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Check } from 'lucide-react';
+import { useT, type MessageKey } from '../i18n';
 import {
   dateKey,
   eventsForDate,
   isEventDone,
   useCalendar,
-  DAY_NAMES,
   type CalendarEvent,
 } from '../stores/calendar';
 import { isOverdue, type Todo } from '../stores/todos';
+
+const WEEKDAY_KEYS: readonly MessageKey[] = [
+  'nav.date.weekday.0',
+  'nav.date.weekday.1',
+  'nav.date.weekday.2',
+  'nav.date.weekday.3',
+  'nav.date.weekday.4',
+  'nav.date.weekday.5',
+  'nav.date.weekday.6',
+];
 
 /**
  * 周/日视图的时间轴。
@@ -102,11 +112,12 @@ function AllDayCell({
   todos: Todo[];
   onPick: (e: CalendarEvent) => void;
 }) {
+  const t = useT();
   const key = dateKey(date);
   const toggleDone = useCalendar((s) => s.toggleDone);
   const dayEvents = useMemo(() => eventsForDate(events, key), [events, key]);
   const { allDay } = useMemo(() => layout(dayEvents), [dayEvents]);
-  const dayTodos = useMemo(() => todos.filter((t) => t.due === key && !t.done), [todos, key]);
+  const dayTodos = useMemo(() => todos.filter((todo) => todo.due === key && !todo.done), [todos, key]);
 
   return (
     <div className="min-w-0 flex-1 space-y-0.5 border-r border-line p-1 last:border-r-0">
@@ -129,7 +140,7 @@ function AllDayCell({
                 toggleDone(e.id, key);
               }}
               className="flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
-              title={done ? '标记为未完成' : '标记完成'}
+              title={t(done ? 'pages.calendar.markUndone' : 'pages.calendar.markDone')}
             >
               {done && <Check size={12} strokeWidth={3} />}
             </span>
@@ -139,15 +150,15 @@ function AllDayCell({
           </button>
         );
       })}
-      {dayTodos.map((t) => (
+      {dayTodos.map((todo) => (
         <div
-          key={t.id}
+          key={todo.id}
           className={`truncate rounded px-1.5 py-0.5 text-xs ${
-            isOverdue(t) ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-ink-2'
+            isOverdue(todo) ? 'bg-danger/15 text-danger' : 'bg-fill-2 text-ink-2'
           }`}
-          title="来自待办"
+          title={t('pages.calendar.fromTodo')}
         >
-          ☑ {t.note || t.excerpt}
+          ☑ {todo.note || todo.excerpt}
         </div>
       ))}
     </div>
@@ -165,6 +176,7 @@ function DayColumn({
   onPick: (e: CalendarEvent) => void;
   onCreate: (date: string, hour: number) => void;
 }) {
+  const t = useT();
   const key = dateKey(date);
   const toggleDone = useCalendar((s) => s.toggleDone);
   const dayEvents = useMemo(() => eventsForDate(events, key), [events, key]);
@@ -183,7 +195,7 @@ function DayColumn({
             onClick={() => onCreate(key, START_HOUR + i)}
             className="block w-full border-b border-line/60 transition hover:bg-fill-hover"
             style={{ height: HOUR_HEIGHT }}
-            title={`新建 ${String(START_HOUR + i).padStart(2, '0')}:00 的日程`}
+            title={t('pages.calendar.createAtHour', { hour: `${String(START_HOUR + i).padStart(2, '0')}:00` })}
           />
         ))}
 
@@ -217,7 +229,7 @@ function DayColumn({
                     toggleDone(p.event.id, key);
                   }}
                   className="mt-px flex h-3 w-3 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-white/70 bg-white/10"
-                  title={done ? '标记为未完成' : '标记完成'}
+                  title={t(done ? 'pages.calendar.markUndone' : 'pages.calendar.markDone')}
                 >
                   {done && <Check size={12} strokeWidth={3} />}
                 </span>
@@ -269,6 +281,7 @@ export default function TimeGrid({
   onPick: (e: CalendarEvent) => void;
   onCreate: (date: string, hour: number) => void;
 }) {
+  const t = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = dateKey(new Date());
 
@@ -299,7 +312,7 @@ export default function TimeGrid({
           const isToday = dateKey(d) === today;
           return (
             <div key={dateKey(d)} className="flex-1 py-2 text-center">
-              <div className="text-xs text-ink-3">周{DAY_NAMES[d.getDay()]}</div>
+              <div className="text-xs text-ink-3">{t(WEEKDAY_KEYS[d.getDay()])}</div>
               <div
                 className={`mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-sm ${
                   isToday ? 'bg-primary font-medium text-white' : 'text-ink'
@@ -317,7 +330,7 @@ export default function TimeGrid({
       {hasAllDay && (
         <div className="flex shrink-0 border-b border-line bg-fill-1">
           <div className="flex w-12 shrink-0 items-center justify-end pr-1 text-xs text-ink-3">
-            全天
+            {t('pages.calendar.allDay')}
           </div>
           <div className="flex flex-1">
             {days.map((d) => (

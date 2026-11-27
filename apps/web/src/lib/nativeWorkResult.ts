@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { NativeDispatchActionRecord, NativeWorkCard } from '../platform/desktopCommands';
 import type { NativeWorkSnapshot } from '../platform/nativeWorkRuntime';
 
@@ -8,8 +9,8 @@ export function pendingInvestigation(snapshot: NativeWorkSnapshot | null | undef
   if (!snapshot || snapshot.runtimeStatus !== 'idle' || snapshot.activeTurnId) return;
   const first = snapshot.commands.find(command => command.todoId === snapshot.todoId && command.sessionId === snapshot.sessionId
     && command.actionKind === 'session_prompt' && command.idempotencyKey === `native-codex:v1:native-start:${snapshot.todoId}`);
-  if (first?.state === 'prepared') return snapshot.admissionWait?.message ?? '调查要求已保存，等待执行';
-  if (first?.state === 'dispatched') return '已提交调查要求，等待 Codex 回执';
+  if (first?.state === 'prepared') return snapshot.admissionWait?.message ?? t('agent.nativeWork.investigationPrepared');
+  if (first?.state === 'dispatched') return t('agent.nativeWork.investigationDispatched');
 }
 
 export function unresolvedWorkDelivery(commands: NativeDispatchActionRecord[], todoId: string, sessionId: string, kind?: NativeDispatchActionRecord['actionKind']) {

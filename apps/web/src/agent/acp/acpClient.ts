@@ -1,3 +1,4 @@
+import { t } from '../../i18n';
 import type {
   AcpClientCapabilities,
   AcpHostCapabilityHandlers,
@@ -14,6 +15,8 @@ import type {
   AcpSessionPromptResult,
   AcpSessionSetModeParams,
   AcpSessionSetModeResult,
+  AcpSessionSetModelParams,
+  AcpSessionSetModelResult,
   AcpSessionUpdateNotificationParams,
   AcpTransport,
   JsonRpcError,
@@ -152,6 +155,10 @@ export class JsonRpcAcpClient {
     return this.request<AcpSessionSetModeResult>('session/set_mode', params);
   }
 
+  async sessionSetModel(params: AcpSessionSetModelParams): Promise<AcpSessionSetModelResult> {
+    return this.request<AcpSessionSetModelResult>('session/set_model', params);
+  }
+
   async sessionCancel(params: AcpSessionCancelParams): Promise<void> {
     await this.notify('session/cancel', params);
   }
@@ -162,10 +169,10 @@ export class JsonRpcAcpClient {
     timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
   ): Promise<TResult> {
     if (this.closed) {
-      throw new Error(`ACP 客户端已关闭，无法发送请求 ${method}`);
+      throw new Error(t('agent.acpClient.closed', { method }));
     }
     if (!this.started) {
-      throw new Error(`ACP 客户端尚未启动，无法发送请求 ${method}`);
+      throw new Error(t('agent.acpClient.notStarted', { method }));
     }
     const id = this.nextId++;
     const key = String(id);
@@ -181,7 +188,7 @@ export class JsonRpcAcpClient {
         timeoutMs > 0
           ? globalThis.setTimeout(() => {
               this.pending.delete(key);
-              reject(new Error(`ACP 请求超时 (${timeoutMs}ms): ${method}`));
+              reject(new Error(t('agent.acpClient.timeout', { timeoutMs, method })));
             }, timeoutMs)
           : undefined;
 
@@ -218,7 +225,7 @@ export class JsonRpcAcpClient {
     if (this.closed) return;
     this.closed = true;
     this.started = false;
-    this.rejectAllPending(new Error('ACP 会话已停止'));
+    this.rejectAllPending(new Error(t('agent.acpClient.stopped')));
     this.clearListeners();
     await this.transport.stop().catch(() => undefined);
   }
@@ -403,7 +410,7 @@ export class JsonRpcAcpClient {
     this.closed = true;
     this.started = false;
     this.clearListeners();
-    const detail = reason || `ACP 进程已退出（退出码 ${code ?? '未知'}）`;
+    const detail = reason || t('agent.acpClient.exited', { code: code ?? t('agent.acpClient.unknownCode') });
     this.rejectAllPending(new Error(detail));
     this.options.onExit?.(code, reason);
   }

@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { NativeDispatchActionRecord, NativeWorkSessionRecord } from '../platform/desktopCommands';
 import { NATIVE_CODEX_COMMAND_SCHEMA, NATIVE_COMMAND_EXECUTOR } from '../platform/workRuntimeContract';
 
@@ -28,4 +29,6 @@ export function isNativeHostAction(action: Pick<NativeDispatchActionRecord, 'ide
     || (typeof spec?.schema === 'string' && spec.schema.startsWith('rocketx.native-codex-command.'));
 }
 
-export const NATIVE_HOST_CONTROL_REASON = '该工作由本机后台运行服务控制，请使用原生工作入口';
+export function nativeHostControlReason(): string {
+  return t('agent.nativeWork.hostControlReason');
+}

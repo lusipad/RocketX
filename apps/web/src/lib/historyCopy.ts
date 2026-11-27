@@ -1,4 +1,5 @@
 import type { RcMessage } from '@rcx/rc-client';
+import { t } from '../i18n';
 
 /**
  * 「把聊天记录复制到另一个会话」的档位。
@@ -7,9 +8,9 @@ import type { RcMessage } from '@rcx/rc-client';
  * 会话里看到的是**转发出来的副本**（带指向原消息的引用），原会话一条不少。
  */
 export const COPY_LIMITS = [
-  { key: 'recent', value: 30, label: '最近 30 条' },
-  { key: 'medium', value: 100, label: '最近 100 条' },
-  { key: 'all', value: 0, label: '全部（最多 2000 条）' },
+  { key: 'recent', value: 30, get label() { return t('chat.historyCopy.limitRecent'); } },
+  { key: 'medium', value: 100, get label() { return t('chat.historyCopy.limitMedium'); } },
+  { key: 'all', value: 0, get label() { return t('chat.historyCopy.limitAll'); } },
 ] as const;
 
 export type CopyLimitKey = (typeof COPY_LIMITS)[number]['key'];

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { enUS } from '../../apps/web/src/i18n/locales/en-US';
+import { zhCN } from '../../apps/web/src/i18n/locales/zh-CN';
 import {
   readAutostartEnabled,
   updateAutostartEnabled,
@@ -46,7 +48,9 @@ test('系统登录自启动带来源标记且主窗口默认保持隐藏', () =>
   assert.match(source, /is_autostart_launch/);
   assert.match(source, /let show_main_on_launch = launch_opens_main_window\(&launch_args\)/);
   assert.match(source, /if show_main_on_launch \{\s*show_main\(app\.handle\(\)\);\s*\}/);
-  assert.match(settings, /登录系统后会静默启动到托盘/);
+  assert.match(settings, /t\('settings\.desktop\.autostartActive'\)/);
+  assert.match(zhCN['settings.desktop.autostartActive'], /登录系统后会静默启动到托盘/);
+  assert.ok(enUS['settings.desktop.autostartActive'].trim());
   assert.equal(config.app.windows[0]?.visible, false);
 });
 
