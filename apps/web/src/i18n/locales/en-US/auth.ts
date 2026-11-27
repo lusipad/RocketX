@@ -26,10 +26,10 @@ export const enAuth = {
 
   'auth.http.credentialsNotAllowed': 'Only credential-free http/https URLs are allowed',
 
-  'auth.session.resumeExpiredSummary': 'Your previous Rocket.Chat session has expired; using Local Mode',
-  'auth.session.resumeExpiredDetail': 'AI Butler, Kanban, and To-Dos remain available; sign in again for team messaging',
-  'auth.session.lostSummary': 'Rocket.Chat session expired; switched to Local Mode',
-  'auth.session.lostDetail': 'Local AI Butler and Workbench are unaffected; sign in again from Messages',
+  'auth.session.resumeExpiredSummary': 'Your previous Rocket.Chat session expired; please sign in again',
+  'auth.session.resumeExpiredDetail': 'Your server URL, Calendar, and Workbench settings have been preserved. You can also continue in Local Mode.',
+  'auth.session.lostSummary': 'Rocket.Chat session expired; sign in again to reconnect',
+  'auth.session.lostDetail': 'Local Calendar, AI Butler, and Workbench are unaffected; sign in again from Messages',
 
   'auth.diagnostic.summary.invalidAddress': 'Invalid server URL. Enter a complete URL starting with http:// or https://.',
   'auth.diagnostic.summary.credentials': 'Incorrect username or password',

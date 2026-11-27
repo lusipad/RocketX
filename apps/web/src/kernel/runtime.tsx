@@ -33,6 +33,8 @@ export const installedApps = new AppManager(kernelStore);
 let initialized = false;
 let initializing: Promise<void> | null = null;
 let setupComplete = false;
+let coreBuiltinsRegistered = false;
+let aiBuiltinsRegistered = false;
 let bridgeEventsStarted = false;
 let bridgeEventCleanups: Array<() => void | Promise<void>> = [];
 const nativeServiceStarts = new Map<string, Promise<void>>();
@@ -448,9 +450,7 @@ function WorkbenchModule() {
   return connected ? <WorkbenchPage /> : <SettingsPage initialSection="workbench" />;
 }
 
-function registerBuiltins(): void {
-  const features = runtimeFeatures();
-  const aiRuntimeProvider = getAiRuntimeProvider();
+function registerCoreNavModules(features: ReturnType<typeof runtimeFeatures>): void {
   const modules = [
     ['workbench', t('settings.kernel.module.workbench'), WorkbenchModule, undefined],
     ['butler-view', t('settings.kernel.module.butler'), ButlerPage, Bell],
@@ -460,8 +460,9 @@ function registerBuiltins(): void {
   ] as const;
   for (const [id, label, render, icon] of modules) {
     if (id === 'butler-view' && !features.butler) continue;
+    if (kernelRegistry.get('nav.module').some((candidate) => candidate.id === id)) continue;
     kernelRegistry.register('core', 'nav.module', { id, label, render, ...(icon ? { icon } : {}) });
-    if (id === 'calendar' && isTauri) {
+    if (id === 'calendar' && isTauri && !kernelRegistry.get('nav.module').some((candidate) => candidate.id === 'downloads')) {
       kernelRegistry.register('core', 'nav.module', {
         id: 'downloads',
         label: t('settings.kernel.module.downloads'),
@@ -470,7 +471,15 @@ function registerBuiltins(): void {
       });
     }
   }
-  const panels = [
+}
+
+export function ensureCoreModulesRegistered(host: KernelHost = defaultKernelHost): void {
+  const features = runtimeFeatures();
+  if (!features.bootKernel) return;
+  if (coreBuiltinsRegistered && kernelRegistry.get('nav.module').length > 0) return;
+  coreBuiltinsRegistered = true;
+  registerCoreNavModules(features);
+  const basePanels = [
     ['thread', ThreadPanel],
     ['pins', PinPanel],
     ['starred', StarredPanel],
@@ -481,51 +490,32 @@ function registerBuiltins(): void {
     ['mentions', MentionsPanel],
     ['kanban', KanbanPanel],
     ['oncall', OncallPanel],
-    ['ai', SummaryPanel],
     ['butler', ButlerPanel],
     ['agent', AgentPanel],
   ] as const;
-  for (const [id, render] of panels) {
+  for (const [id, render] of basePanels) {
     if (
-      (id === 'ai' && (!features.ai || aiRuntimeProvider !== 'pi'))
-      || (id === 'butler' && !features.butler)
+      (id === 'butler' && !features.butler)
       || (id === 'agent' && !features.sharedAgent)
+      || kernelRegistry.get('panel.right').some((candidate) => candidate.id === id)
     ) continue;
     kernelRegistry.register('core', 'panel.right', { id, render });
   }
-  if (features.ai) {
-    kernelRegistry.register('core', 'composer.command', {
-      id: 'summary',
-      name: 'summary',
-      description: t('settings.kernel.command.summaryDesc'),
-      run: ({ rid }) => {
-        void summarizeRoom(rid);
-      },
-    });
-    kernelRegistry.register('core', 'composer.command', {
-      id: 'butler',
-      name: 'ai',
-      description: t('settings.kernel.command.butlerDesc'),
-      params: t('settings.kernel.command.butlerParams'),
-      run: runButlerCommand,
-    });
-    if (aiRuntimeProvider === 'pi') kernelRegistry.register('core', 'composer.trigger', {
-      id: 'codex',
-      prefix: '$codex',
-      run: async (context) => {
-        // M8 话题即会话：指令必须先成为普通 Rocket.Chat 消息，宿主再从消息流触发 Agent。
-        if (context.tmid) return false;
-        try {
-          const prompt = context.text.replace(/^\$codex(?:\s+|$)/i, '').trim();
-          if (!prompt) throw new Error(t('settings.kernel.trigger.codexMissingPrompt'));
-          await handoffToCodexTask(prompt, t('settings.kernel.trigger.codexTitle'));
-        } catch (error) {
-          activeKernelHost.notifications.error(error, t('settings.kernel.trigger.codexCreateFailed'));
-        }
-      },
-    });
-  }
-  if (features.sharedAgent) {
+  host.navigation.installModuleValidator(
+    (module) =>
+      module === 'messages' ||
+      module === 'settings' ||
+      kernelRegistry.get('nav.module').some((candidate) => candidate.id === module),
+  );
+}
+
+export function syncAiKernelBuiltins(): void {
+  const features = runtimeFeatures();
+  const aiRuntimeProvider = getAiRuntimeProvider();
+  if (
+    features.sharedAgent &&
+    !kernelRegistry.get('composer.command').some((candidate) => candidate.id === 'agent-exit')
+  ) {
     kernelRegistry.register('core', 'composer.command', {
       id: 'agent-exit',
       name: 'exit',
@@ -536,6 +526,60 @@ function registerBuiltins(): void {
       },
     });
   }
+  if (features.ai) {
+    if (aiBuiltinsRegistered) return;
+    aiBuiltinsRegistered = true;
+    if (
+      aiRuntimeProvider === 'pi' &&
+      !kernelRegistry.get('panel.right').some((candidate) => candidate.id === 'ai')
+    ) {
+      kernelRegistry.register('core', 'panel.right', { id: 'ai', render: SummaryPanel });
+    }
+    if (!kernelRegistry.get('composer.command').some((candidate) => candidate.id === 'summary')) {
+      kernelRegistry.register('core', 'composer.command', {
+        id: 'summary',
+        name: 'summary',
+        description: t('settings.kernel.command.summaryDesc'),
+        run: ({ rid }) => {
+          void summarizeRoom(rid);
+        },
+      });
+    }
+    if (!kernelRegistry.get('composer.command').some((candidate) => candidate.id === 'butler')) {
+      kernelRegistry.register('core', 'composer.command', {
+        id: 'butler',
+        name: 'ai',
+        description: t('settings.kernel.command.butlerDesc'),
+        params: t('settings.kernel.command.butlerParams'),
+        run: runButlerCommand,
+      });
+    }
+    if (
+      aiRuntimeProvider === 'pi' &&
+      !kernelRegistry.get('composer.trigger').some((candidate) => candidate.id === 'codex')
+    ) {
+      kernelRegistry.register('core', 'composer.trigger', {
+        id: 'codex',
+        prefix: '$codex',
+        run: async (context) => {
+          // M8 话题即会话：指令必须先成为普通 Rocket.Chat 消息，宿主再从消息流触发 Agent。
+          if (context.tmid) return false;
+          try {
+            const prompt = context.text.replace(/^\$codex(?:\s+|$)/i, '').trim();
+            if (!prompt) throw new Error(t('settings.kernel.trigger.codexMissingPrompt'));
+            await handoffToCodexTask(prompt, t('settings.kernel.trigger.codexTitle'));
+          } catch (error) {
+            activeKernelHost.notifications.error(error, t('settings.kernel.trigger.codexCreateFailed'));
+          }
+        },
+      });
+    }
+  }
+}
+
+function registerBuiltins(): void {
+  ensureCoreModulesRegistered(activeKernelHost);
+  syncAiKernelBuiltins();
 }
 
 async function registerBridgeEvents(host: KernelHost): Promise<void> {
@@ -629,6 +673,8 @@ async function teardownKernel(): Promise<void> {
   capabilityBus.clear();
   kernelRegistry.clear();
   bridgeEventsStarted = false;
+  coreBuiltinsRegistered = false;
+  aiBuiltinsRegistered = false;
   setupComplete = false;
   initialized = false;
   activeKernelHost = defaultKernelHost;

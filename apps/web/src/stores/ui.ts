@@ -199,6 +199,8 @@ interface UIState {
   selectedAcpAgentId: string | null;
   /** 本次启动独占使用的 AI 运行时。 */
   aiRuntimeProvider: AiRuntimeProvider;
+  /** 本地 AI 运行时是否仍在后台解压/探测中。 */
+  aiRuntimeProbing: boolean;
   /** 工作台当前子标签（切模块后保持，不重置回概览） */
   workbenchTab: WorkbenchTab;
   /** 「我的工作项」的状态筛选（切页/切模块后保持，issue #17.1） */
@@ -251,6 +253,7 @@ export const useUI = create<UIState>((set) => ({
   selectedHostedSessionKey: null,
   selectedAcpAgentId: null,
   aiRuntimeProvider: getAiRuntimeProvider(),
+  aiRuntimeProbing: false,
   workbenchTab: readPersistedWorkbenchTab(),
   workItemStateFilter: readPersistedWorkItemStateFilter(),
   prTab: 'review',

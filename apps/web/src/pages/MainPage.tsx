@@ -77,6 +77,7 @@ export default function MainPage() {
   const setSwitcher = useUI((s) => s.setSwitcherOpen);
   const userId = useAuth((s) => s.user?._id);
   const localMode = useAuth((s) => s.localMode);
+  const needsReauth = useAuth((s) => s.needsReauth);
 
   const unreadAlert = usePrefs((s) => s.prefs.unreadAlert);
   const switcherTab = useRef<'messages' | undefined>(undefined);
@@ -401,11 +402,11 @@ export default function MainPage() {
   return (
     <div className={`flex h-full min-h-[640px] overflow-hidden bg-surface-1 ${
       module === 'butler-view' ? 'main-page-butler min-w-0' :
-        localMode && module === 'messages' ? 'min-w-0' : 'min-w-[940px]'
+        (localMode || needsReauth) && module === 'messages' ? 'min-w-0' : 'min-w-[940px]'
     }`}>
       <NavRail onOpenShortcuts={() => setShortcutsOpen(true)} />
       <div className="rcx-app-stage flex min-h-0 min-w-0 flex-1 overflow-hidden bg-surface-3">
-        {module === 'messages' ? (localMode ? <LoginPage embedded /> : (
+        {module === 'messages' ? (localMode ? <LoginPage embedded /> : needsReauth ? <LoginPage embedded /> : (
           <>
             <GroupFilter collapsed={groupCollapsed} onCollapse={toggleGroupFilter} />
             <ConversationList width={conversationWidth} />

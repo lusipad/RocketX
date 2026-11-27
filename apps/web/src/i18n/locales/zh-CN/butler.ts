@@ -43,6 +43,8 @@ export const zhButler = {
   'butler.page.generalChatAria': '普通对话',
   'butler.page.engineUnavailableTitle': '所选 AI 执行引擎当前不可用',
   'butler.page.engineDisabledTitle': '当前未启用 AI 执行引擎',
+  'butler.page.probingTitle': '正在准备本地 AI 运行时…',
+  'butler.page.probingDetail': '首次安装或更新后正在校验内建运行环境；日历、待办、工作台与看板现在即可正常使用。',
   'butler.page.engineUnavailableDetail': '已保留 Pi 选择，本次没有切换到其他引擎。',
   'butler.page.engineDisabledDetail': '普通对话暂不可发送；已有托管记录仍可在托管状态里查看和结束。',
   'butler.page.configureInSettings': '前往设置配置引擎',

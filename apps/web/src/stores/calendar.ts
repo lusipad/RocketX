@@ -324,6 +324,7 @@ interface CalendarState {
   toggleDone: (id: string, date: string) => void;
   update: (id: string, patch: Partial<Omit<CalendarEvent, 'id' | 'createdAt'>>) => void;
   remove: (id: string) => void;
+  reload: () => void;
 }
 
 function todayStr(): string {
@@ -402,5 +403,9 @@ export const useCalendar = create<CalendarState>((set, get) => ({
     const events = get().events.filter((e) => e.id !== id);
     set({ events });
     persist(events);
+  },
+
+  reload: () => {
+    set({ events: load() });
   },
 }));

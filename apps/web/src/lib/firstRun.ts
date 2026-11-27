@@ -32,6 +32,11 @@ const EXISTING_USER_STATE_KEYS = [
   'rcx-server',
   'rcx-workspace-source',
   'rcx-local-mode',
+  'rcx-calendar',
+  'rcx-workbench',
+  'rcx-todos',
+  'rcx-agent-environments',
+  'rocketx.butler.task-provider',
 ] as const;
 
 const DESKTOP_DEFAULTS_STATUSES = new Set<DesktopDefaultsStatus>(['fresh', 'applied', 'legacy-migrated']);

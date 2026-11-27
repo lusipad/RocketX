@@ -45,6 +45,8 @@ export const enButler = {
   'butler.page.generalChatAria': 'General chat',
   'butler.page.engineUnavailableTitle': 'Selected AI execution engine is unavailable',
   'butler.page.engineDisabledTitle': 'AI execution engine is not enabled',
+  'butler.page.probingTitle': 'Preparing local AI runtime…',
+  'butler.page.probingDetail': 'Verifying bundled runtime after install or update. Calendar, To-Dos, Workbench, and Board are ready to use right away.',
   'butler.page.engineUnavailableDetail': 'Your Pi selection is preserved; no fallback engine was activated.',
   'butler.page.engineDisabledDetail': 'General chat cannot send messages right now; existing hosted records can still be viewed and ended in hosting status.',
   'butler.page.configureInSettings': 'Configure in Settings',

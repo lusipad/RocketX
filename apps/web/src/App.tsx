@@ -21,6 +21,7 @@ export default function App() {
   const t = useT();
   const status = useAuth((s) => s.status);
   const localMode = useAuth((s) => s.localMode);
+  const needsReauth = useAuth((s) => s.needsReauth);
   const userId = useAuth((s) => s.user?._id);
   const onboardingOwnerId = useOnboarding((s) => s.ownerId);
   const onboarding = useOnboarding((s) => s.state);
@@ -30,6 +31,17 @@ export default function App() {
   const startupError = useUI((s) => s.startupError);
   const retryStartup = useUI((s) => s.retryStartup);
 
+  const isBlockingStartupError =
+    startupStage === 'error' && (
+      !startupError ||
+      ['platform', 'auth', 'account'].includes(startupError.operation) ||
+      !userId ||
+      onboardingOwnerId !== userId ||
+      fileIndexOwnerId !== userId ||
+      downloadHistoryOwnerId !== userId ||
+      !onboarding
+    );
+
   let content;
   if (status === 'boot') {
     content = (
@@ -37,9 +49,9 @@ export default function App() {
         {t('common.loading')}
       </div>
     );
-  } else if (status !== 'authed' && !localMode) {
+  } else if (status !== 'authed' && !localMode && !needsReauth) {
     content = <LoginPage />;
-  } else if (startupStage === 'error') {
+  } else if (isBlockingStartupError) {
     content = (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-fill-2 px-6 text-center">
         <div className="text-lg font-medium text-ink">{t('auth.app.startupIncomplete')}</div>

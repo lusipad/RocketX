@@ -112,6 +112,27 @@ function ManagedSurface({ children }: { children: ReactNode }) {
   );
 }
 
+function AiProbingSurface() {
+  const t = useT();
+  return (
+    <section className="flex h-full items-center justify-center bg-surface" aria-label={t('butler.page.generalChatAria')}>
+      <div className="max-w-sm rounded-xl border border-line bg-surface-3 p-6 text-center">
+        <div className="text-sm font-medium text-ink">{t('butler.page.probingTitle')}</div>
+        <p className="mt-2 text-xs leading-5 text-ink-3">{t('butler.page.probingDetail')}</p>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => useUI.getState().setButlerView('kanban')}
+            className="h-8 rounded-md border border-line bg-surface-2 px-3 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
+          >
+            {t('butler.page.openBoard')}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function AiDisabledSurface() {
   const t = useT();
   const startupResolution = getAiRuntimeStartupResolution();
@@ -148,6 +169,7 @@ export default function ButlerPage() {
     useUI.getState().setButlerView('kanban');
   }} />;
   const aiRuntimeProvider = useUI((state) => state.aiRuntimeProvider);
+  const aiRuntimeProbing = useUI((state) => state.aiRuntimeProbing);
   const selectedHostedSessionKey = useUI((state) => state.selectedHostedSessionKey);
   const hostedSessionsByKey = useSharedAgent((state) => state.sessions);
   const setWorkspaceRoot = useCodexWorkspace((state) => state.setWorkspaceRoot);
@@ -198,6 +220,8 @@ export default function ButlerPage() {
           <ManagedSurface><ButlerRoutines /></ManagedSurface>
         ) : piRuntime && activeView === 'plugins' ? (
           <ManagedSurface><ButlerPluginsPage /></ManagedSurface>
+        ) : aiRuntimeProbing ? (
+          <ManagedSurface>{workBrief}<AiProbingSurface /></ManagedSurface>
         ) : aiRuntimeProvider === 'none' ? (
           <ManagedSurface>{workBrief}<AiDisabledSurface /></ManagedSurface>
         ) : (

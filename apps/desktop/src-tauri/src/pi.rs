@@ -455,6 +455,256 @@ fn save_pi_config_effective(path: &Path, record: &PiConfigRecord) -> Result<(), 
     write_pi_config_to_file(path, &scrubbed)
 }
 
+fn is_usable_legacy_secret(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.len() >= 8
+        && trimmed != "UNCONFIGURED_API_KEY"
+        && trimmed != "rocketx-local-keyless"
+        && !trimmed.starts_with("sk-...")
+}
+
+fn infer_provider_from_base_url(base_url: &str, default_provider: &str) -> &'static str {
+    let lower = base_url.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return normalize_pi_provider(default_provider);
+    }
+    if lower.contains("deepseek") {
+        "deepseek"
+    } else if lower.contains("openrouter.ai") {
+        "openrouter"
+    } else if lower.contains("anthropic.com") {
+        "anthropic"
+    } else if lower.contains("api.openai.com") {
+        "openai"
+    } else if lower.contains("generativelanguage.googleapis.com") {
+        "google"
+    } else {
+        "custom-openai"
+    }
+}
+
+fn find_json_string<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<String> {
+    if let Some(obj) = value.as_object() {
+        for key in keys {
+            if let Some(found) = obj.get(*key).and_then(|v| v.as_str()) {
+                let trimmed = found.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        for child in obj.values() {
+            if let Some(found) = find_json_string(child, keys) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn strip_toml_or_yaml_scalar(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let unquoted = if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed.split('#').next().unwrap_or(trimmed).trim()
+    };
+    unquoted.trim().to_string()
+}
+
+fn extract_key_value_from_lines(content: &str, sep: char, keys: &[&str]) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim().trim_start_matches('-').trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((lhs, rhs)) = trimmed.split_once(sep) else {
+            continue;
+        };
+        let lhs_key = strip_toml_or_yaml_scalar(lhs);
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(&lhs_key)) {
+            let val = strip_toml_or_yaml_scalar(rhs);
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    None
+}
+
+fn parse_legacy_dsh_dir(dir: &Path) -> Option<PiConfigRecord> {
+    let mut api_key: Option<String> = None;
+    let mut base_url: Option<String> = None;
+    let mut model: Option<String> = None;
+    let mut provider_hint: Option<String> = None;
+
+    for filename in ["config.json", "settings.json", "auth.json"] {
+        let path = dir.join(filename);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if api_key.is_none() {
+            api_key = find_json_string(
+                &json,
+                &["apiKey", "api_key", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"],
+            )
+            .filter(|v| is_usable_legacy_secret(v));
+        }
+        if base_url.is_none() {
+            base_url = find_json_string(&json, &["baseUrl", "base_url", "apiBase"]);
+        }
+        if model.is_none() {
+            model = find_json_string(&json, &["defaultModel", "model"]);
+        }
+        if provider_hint.is_none() {
+            provider_hint = find_json_string(&json, &["provider"]);
+        }
+    }
+
+    for filename in ["config.yaml", "config.yml"] {
+        let path = dir.join(filename);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if api_key.is_none() {
+            api_key = extract_key_value_from_lines(
+                &raw,
+                ':',
+                &["apiKey", "api_key", "DEEPSEEK_API_KEY", "OPENAI_API_KEY"],
+            )
+            .filter(|v| is_usable_legacy_secret(v));
+        }
+        if base_url.is_none() {
+            base_url = extract_key_value_from_lines(&raw, ':', &["baseUrl", "base_url", "apiBase"]);
+        }
+        if model.is_none() {
+            model = extract_key_value_from_lines(&raw, ':', &["defaultModel", "model"]);
+        }
+        if provider_hint.is_none() {
+            provider_hint = extract_key_value_from_lines(&raw, ':', &["provider"]);
+        }
+    }
+
+    let key = api_key?;
+    let base = base_url.unwrap_or_default();
+    let provider =
+        infer_provider_from_base_url(&base, provider_hint.as_deref().unwrap_or("deepseek"));
+    let resolved_base = if base.trim().is_empty() {
+        default_base_url_for_provider(provider).to_string()
+    } else {
+        base.trim().trim_end_matches('/').to_string()
+    };
+    let resolved_model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| default_model_for_provider(provider).to_string());
+
+    Some(PiConfigRecord {
+        provider: provider.to_string(),
+        api_protocol: "auto".to_string(),
+        base_url: resolved_base,
+        api_key: key,
+        default_model: resolved_model,
+        extra_models: Vec::new(),
+        manual_path: None,
+    })
+}
+
+fn parse_legacy_codex_dir(dir: &Path) -> Option<PiConfigRecord> {
+    let auth_raw = std::fs::read_to_string(dir.join("auth.json")).ok()?;
+    let auth_json = serde_json::from_str::<serde_json::Value>(&auth_raw).ok()?;
+    let key = find_json_string(&auth_json, &["OPENAI_API_KEY", "apiKey", "api_key"])
+        .filter(|v| is_usable_legacy_secret(v))?;
+
+    let config_toml = std::fs::read_to_string(dir.join("config.toml")).unwrap_or_default();
+    let base_url = extract_key_value_from_lines(&config_toml, '=', &["base_url", "baseUrl"])
+        .unwrap_or_default();
+    let model = extract_key_value_from_lines(&config_toml, '=', &["model"]);
+
+    let provider = infer_provider_from_base_url(&base_url, "openai");
+    let resolved_base = if base_url.trim().is_empty() {
+        default_base_url_for_provider(provider).to_string()
+    } else {
+        base_url.trim().trim_end_matches('/').to_string()
+    };
+    let resolved_model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| default_model_for_provider(provider).to_string());
+
+    Some(PiConfigRecord {
+        provider: provider.to_string(),
+        api_protocol: "auto".to_string(),
+        base_url: resolved_base,
+        api_key: key,
+        default_model: resolved_model,
+        extra_models: Vec::new(),
+        manual_path: None,
+    })
+}
+
+pub(crate) fn discover_legacy_pi_config_from_dirs(
+    dsh_dirs: &[PathBuf],
+    codex_dirs: &[PathBuf],
+) -> Option<PiConfigRecord> {
+    for dir in dsh_dirs {
+        if let Some(found) = parse_legacy_dsh_dir(dir) {
+            return Some(found);
+        }
+    }
+    for dir in codex_dirs {
+        if let Some(found) = parse_legacy_codex_dir(dir) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+fn ensure_legacy_pi_config_migrated(app: &tauri::AppHandle, pi_config_file: &Path) {
+    if pi_config_file.is_file() {
+        return;
+    }
+    if read_pi_provider_key("deepseek").ok().flatten().is_some()
+        || read_pi_provider_key("openai").ok().flatten().is_some()
+    {
+        return;
+    }
+
+    let mut dsh_dirs = Vec::new();
+    if let Ok(app_data) = app.path().app_data_dir() {
+        dsh_dirs.push(app_data.join("dsh").join("home"));
+    }
+    if let Ok(local_data) = app.path().app_local_data_dir() {
+        dsh_dirs.push(local_data.join("dsh").join("home"));
+    }
+    if let Some(home) = user_home_dir() {
+        dsh_dirs.push(home.join(".dsh"));
+    }
+
+    let mut codex_dirs = Vec::new();
+    if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
+        if !codex_home.is_empty() {
+            codex_dirs.push(PathBuf::from(codex_home));
+        }
+    }
+    if let Some(home) = user_home_dir() {
+        codex_dirs.push(home.join(".codex"));
+    }
+
+    if let Some(imported) = discover_legacy_pi_config_from_dirs(&dsh_dirs, &codex_dirs) {
+        let _ = save_pi_config_effective(pi_config_file, &imported);
+    }
+}
+
 fn config_to_view(record: &PiConfigRecord) -> PiConfigView {
     let hint = mask_api_key(&record.api_key);
     PiConfigView {
@@ -472,6 +722,7 @@ fn config_to_view(record: &PiConfigRecord) -> PiConfigView {
 #[tauri::command]
 pub fn pi_config_read(app: tauri::AppHandle) -> Result<PiConfigView, String> {
     let path = pi_config_path(&app)?;
+    ensure_legacy_pi_config_migrated(&app, &path);
     Ok(config_to_view(&load_pi_config_effective(&path)))
 }
 
@@ -969,7 +1220,10 @@ fn probe_pi_runtime_blocking(
     manual_override: Option<String>,
 ) -> PiRuntimeProbe {
     let config = pi_config_path(app)
-        .map(|p| load_pi_config_effective(&p))
+        .map(|p| {
+            ensure_legacy_pi_config_migrated(app, &p);
+            load_pi_config_effective(&p)
+        })
         .unwrap_or_default();
     let effective_manual = manual_override
         .as_deref()
@@ -2656,5 +2910,47 @@ mod tests {
         );
         let err = resolve_pi_attachments_dir(entries, "missing-session").unwrap_err();
         assert!(err.contains("找不到对应的运行中 Pi 会话"));
+    }
+
+    #[test]
+    fn legacy_dsh_and_codex_configs_import_cleanly() {
+        let temp =
+            std::env::temp_dir().join(format!("rcx-pi-legacy-migrate-{}", uuid::Uuid::new_v4()));
+        let dsh_dir = temp.join("dsh");
+        let codex_dir = temp.join("codex");
+        std::fs::create_dir_all(&dsh_dir).unwrap();
+        std::fs::create_dir_all(&codex_dir).unwrap();
+
+        std::fs::write(
+            dsh_dir.join("config.yaml"),
+            "provider: deepseek\napiKey: \"sk-legacy-dsh-1234567890\"\nbaseUrl: \"https://proxy.example.com/v1\"\nmodel: \"deepseek-v4-flash\"\n",
+        )
+        .unwrap();
+        let imported_dsh =
+            discover_legacy_pi_config_from_dirs(&[dsh_dir.clone()], &[codex_dir.clone()])
+                .expect("expected legacy dsh config to be discovered");
+        assert_eq!(imported_dsh.provider, "custom-openai");
+        assert_eq!(imported_dsh.api_key, "sk-legacy-dsh-1234567890");
+        assert_eq!(imported_dsh.base_url, "https://proxy.example.com/v1");
+        assert_eq!(imported_dsh.default_model, "deepseek-v4-flash");
+
+        std::fs::remove_dir_all(&dsh_dir).unwrap();
+        std::fs::write(
+            codex_dir.join("auth.json"),
+            r#"{"OPENAI_API_KEY":"sk-codex-legacy-98765432"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            codex_dir.join("config.toml"),
+            "model = \"gpt-6.1-sol\"\nbase_url = \"https://api.openai.com/v1\"\n",
+        )
+        .unwrap();
+        let imported_codex =
+            discover_legacy_pi_config_from_dirs(&[dsh_dir], &[codex_dir]).expect("expected codex");
+        assert_eq!(imported_codex.provider, "openai");
+        assert_eq!(imported_codex.api_key, "sk-codex-legacy-98765432");
+        assert_eq!(imported_codex.default_model, "gpt-6.1-sol");
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

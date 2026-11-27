@@ -117,6 +117,15 @@ export const usePrefs = create<PrefsState>((set, get) => ({
         }
         return;
       }
+      if (useAuth.getState().needsReauth) {
+        try {
+          const nativeCache = await loadNativePrefsCache();
+          set({ prefs: { ...DEFAULTS, ...loadPrefsCache(), ...nativeCache }, loaded: true, error: null });
+        } finally {
+          inflight = null;
+        }
+        return;
+      }
       try {
         // 服务器不响应时不能无限转圈——超时后给出可见的错误和重试入口
         const explicit = await withTimeout(rest.domains.preferences.getExplicitPreferences(), 8000);
@@ -140,6 +149,11 @@ export const usePrefs = create<PrefsState>((set, get) => ({
     const prev = get().prefs;
     set({ prefs: { ...prev, ...patch } });
     if (useAuth.getState().localMode) {
+      mergePrefsCache(patch);
+      await mergeNativePrefsCache(patch);
+      return;
+    }
+    if (useAuth.getState().needsReauth) {
       mergePrefsCache(patch);
       await mergeNativePrefsCache(patch);
       return;

@@ -73,7 +73,9 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const { t, tp } = useI18n();
   const user = useAuth((s) => s.user);
   const localMode = useAuth((s) => s.localMode);
+  const needsReauth = useAuth((s) => s.needsReauth);
   const exitLocalMode = useAuth((s) => s.exitLocalMode);
+  const offlineAuthPrompt = localMode || needsReauth;
   const logout = useAuth((s) => s.logout);
   const subscriptions = useChat((s) => s.subscriptions);
   const active = useUI((s) => s.module);
@@ -110,6 +112,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
   const visibleModules = modules.filter((module) => {
     if (HIDDEN_MODULE_IDS.has(module.key)) return false;
     if (localMode && (module.key === 'messages' || module.key === 'contacts')) return false;
+    if (needsReauth && module.key === 'contacts') return false;
     return true;
   });
   const moduleSections = [
@@ -543,18 +546,18 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           {!isCollapsed ? t('nav.rail.settings') : null}
         </button>
         <button
-          onClick={() => (localMode ? void exitLocalMode() : setConfirmLogout(true))}
-          title={localMode ? t('nav.rail.connectRocketChat') : t('nav.rail.logout')}
+          onClick={() => (offlineAuthPrompt ? void exitLocalMode() : setConfirmLogout(true))}
+          title={offlineAuthPrompt ? t('nav.rail.connectRocketChat') : t('nav.rail.logout')}
           className={isCollapsed
             ? `mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
-                localMode ? 'text-primary hover:bg-primary-light' : 'text-ink-3 hover:bg-fill-hover hover:text-danger'
+                offlineAuthPrompt ? 'text-primary hover:bg-primary-light' : 'text-ink-3 hover:bg-fill-hover hover:text-danger'
               }`
             : `flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs transition-colors ${
-                localMode ? 'font-medium text-primary hover:bg-primary-light' : 'text-ink-2 hover:bg-fill-hover hover:text-danger'
+                offlineAuthPrompt ? 'font-medium text-primary hover:bg-primary-light' : 'text-ink-2 hover:bg-fill-hover hover:text-danger'
               }`}
         >
-          {localMode ? <LogIn size={isCollapsed ? 17 : 15} /> : <LogOut size={isCollapsed ? 17 : 15} />}
-          {!isCollapsed ? (localMode ? t('nav.rail.connectRocketChat') : t('nav.rail.logout')) : null}
+          {offlineAuthPrompt ? <LogIn size={isCollapsed ? 17 : 15} /> : <LogOut size={isCollapsed ? 17 : 15} />}
+          {!isCollapsed ? (offlineAuthPrompt ? t('nav.rail.connectRocketChat') : t('nav.rail.logout')) : null}
         </button>
 
         {/* 展开/折叠切换按钮 */}

@@ -24,10 +24,10 @@ export const zhAuth = {
 
   'auth.http.credentialsNotAllowed': '只允许无凭据的 http/https 地址',
 
-  'auth.session.resumeExpiredSummary': '上次 Rocket.Chat 登录已失效，当前处于本地模式',
-  'auth.session.resumeExpiredDetail': 'AI 管家、统一看板与待办可正常使用；如需收发团队消息请重新登录',
-  'auth.session.lostSummary': 'Rocket.Chat 登录已失效，已自动切换为本地模式',
-  'auth.session.lostDetail': '本地 AI 管家与工作台不受影响；可在消息页重新登录服务器',
+  'auth.session.resumeExpiredSummary': '上次 Rocket.Chat 登录已过期，请重新登录',
+  'auth.session.resumeExpiredDetail': '原有服务器地址、日历与工作台配置已完整保留；你也可以先进入本地模式使用',
+  'auth.session.lostSummary': 'Rocket.Chat 登录已失效，需重新连接服务器',
+  'auth.session.lostDetail': '本地日历、AI 管家与工作台不受影响；可在消息页重新登录服务器',
 
   'auth.diagnostic.summary.invalidAddress': '服务器地址无效，请填写以 http:// 或 https:// 开头的完整地址',
   'auth.diagnostic.summary.credentials': '用户名或密码错误',

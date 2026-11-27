@@ -1226,7 +1226,15 @@ export const useChat = create<ChatState>((set, get) => ({
       return;
     }
     const auth = loadStoredAuth();
-    if (!auth) return;
+    if (!auth || useAuth.getState().needsReauth) {
+      realtime.clearStreamHandlers();
+      realtime.close();
+      set({
+        ready: true,
+        connection: 'idle',
+      });
+      return;
+    }
     scheduleAttachmentArchiveCleanup();
     // 重新登录/切换服务器后不能复用上一个会话尚未完成的成员请求。
     resetMemberRequestState();
@@ -1245,23 +1253,27 @@ export const useChat = create<ChatState>((set, get) => ({
       .then((slashCommands) => set({ slashCommands }))
       .catch(() => {});
 
-    let subs: RcSubscription[];
-    let rooms: RcRoom[];
+    let subs: RcSubscription[] = [];
+    let rooms: RcRoom[] = [];
+    let initialFetchFailed = false;
     try {
       [subs, rooms] = await Promise.all([rest.getSubscriptions(), rest.getRooms()]);
     } catch (err) {
-      // 这里挂掉的话界面会永远停在「加载会话中…」，连个错都看不到。
-      // 必须说出来，否则用户只能干瞪眼。
+      // 离线/网络异常时不卡死在「加载会话中…」或拖垮启动协调器，先就绪日历/待办等本地模块，连上后自动补拉。
+      initialFetchFailed = true;
       toast.error(err, t('chat.store.loadConversationsFailed'));
       console.error('[rcx] 初始化失败', err);
-      return;
     }
 
-    const subMap: Record<string, RcSubscription> = {};
-    for (const s of subs) subMap[s.rid] = s;
-    const roomMap: Record<string, RcRoom> = {};
-    for (const r of rooms) roomMap[r._id] = r;
-    set({ subscriptions: subMap, rooms: roomMap, ready: true });
+    if (initialFetchFailed) {
+      set({ ready: true, connection: 'reconnecting' });
+    } else {
+      const subMap: Record<string, RcSubscription> = {};
+      for (const s of subs) subMap[s.rid] = s;
+      const roomMap: Record<string, RcRoom> = {};
+      for (const r of rooms) roomMap[r._id] = r;
+      set({ subscriptions: subMap, rooms: roomMap, ready: true });
+    }
 
     // 防止重复注册（StrictMode 双执行 / 开发时 HMR 重建 store）
     realtime.clearStreamHandlers();
@@ -1316,8 +1328,12 @@ export const useChat = create<ChatState>((set, get) => ({
         void backfillAfterReconnect();
       }
     };
-    await realtime.connect();
-    await realtime.login(auth.authToken);
+    try {
+      await realtime.connect();
+      await realtime.login(auth.authToken);
+    } catch {
+      set({ connection: 'reconnecting' });
+    }
 
     // 事件名可能是房间 id（房间订阅）或 '__my_messages__'（全局订阅），
     // 一律以消息自带的 rid 为准

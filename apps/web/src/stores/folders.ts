@@ -119,6 +119,7 @@ interface FoldersState {
   foldersOf: (rid: string) => string[];
   toggleCollapse: (key: string) => void;
   isCollapsed: (key: string) => boolean;
+  reload: () => void;
 }
 
 export const useFolders = create<FoldersState>((set, get) => ({
@@ -223,4 +224,8 @@ export const useFolders = create<FoldersState>((set, get) => ({
   },
 
   isCollapsed: (key) => get().collapsed.includes(key),
+
+  reload: () => {
+    set({ folders: load(), collapsed: loadCollapsed() });
+  },
 }));

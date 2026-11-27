@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { t } from '../i18n';
+import { isTauri } from '../lib/http';
 import {
   beginButlerAccountSelection,
   captureButlerRuntimeAccountContext,
@@ -1708,4 +1709,25 @@ export async function butlerBrowserInspect(input: {
     maxChars: input.maxChars ?? null,
     allowInsecureLan: input.allowInsecureLan ?? false,
   });
+}
+
+export async function readDesktopPreferencesScope(scope: string): Promise<unknown | null> {
+  if (!isTauri) return null;
+  try {
+    return await invoke<unknown | null>('read_desktop_preferences', { scope });
+  } catch {
+    return null;
+  }
+}
+
+export async function writeDesktopPreferencesScope(
+  scope: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke('write_desktop_preferences', { scope, patch });
+  } catch {
+    // 原生镜像只是升级后的兜底，不应阻断常规交互。
+  }
 }
