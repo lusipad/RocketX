@@ -28,7 +28,7 @@ export function resolveSystemLocale(languages?: readonly string[]): ResolvedLoca
     return 'en-US';
   }
 
-  if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof navigator !== 'undefined') {
     const browserLanguages = Array.isArray(navigator.languages) && navigator.languages.length > 0
       ? navigator.languages
       : navigator.language

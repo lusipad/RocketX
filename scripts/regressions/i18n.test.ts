@@ -164,3 +164,40 @@ test('local voice engine selection and error localization match active locale wi
     setLocalePreference(previous === 'en-US' ? 'en-US' : 'system');
   }
 });
+
+test('resolveSystemLocale ignores Node 22 navigator when window is shimmed without document', () => {
+  const prevWindowDesc = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const prevNavDesc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const prevDocumentDesc = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const prevEnv = process.env.RCX_LOCALE;
+  try {
+    Object.defineProperty(globalThis, 'window', {
+      value: globalThis,
+      configurable: true,
+      writable: true,
+    });
+    if (prevDocumentDesc) {
+      Reflect.deleteProperty(globalThis, 'document');
+    }
+    Object.defineProperty(globalThis, 'navigator', {
+      value: { language: 'en-US', languages: ['en-US'] },
+      configurable: true,
+      writable: true,
+    });
+    delete process.env.RCX_LOCALE;
+
+    assert.equal(resolveSystemLocale(), 'zh-CN');
+    assert.equal(resolveSystemLocale(['en-US']), 'en-US');
+
+    process.env.RCX_LOCALE = 'en-US';
+    assert.equal(resolveSystemLocale(), 'en-US');
+  } finally {
+    if (prevEnv === undefined) delete process.env.RCX_LOCALE;
+    else process.env.RCX_LOCALE = prevEnv;
+    if (prevWindowDesc) Object.defineProperty(globalThis, 'window', prevWindowDesc);
+    else Reflect.deleteProperty(globalThis, 'window');
+    if (prevNavDesc) Object.defineProperty(globalThis, 'navigator', prevNavDesc);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+    if (prevDocumentDesc) Object.defineProperty(globalThis, 'document', prevDocumentDesc);
+  }
+});
