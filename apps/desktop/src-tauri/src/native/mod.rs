@@ -14,6 +14,7 @@ pub(crate) mod dsh;
 pub(crate) mod dsh_discovery;
 pub(crate) mod dsh_process;
 pub(crate) mod dsh_runtime;
+pub(crate) mod git_remote;
 pub(crate) mod host;
 pub(crate) mod lan;
 pub(crate) mod lan_discovery;

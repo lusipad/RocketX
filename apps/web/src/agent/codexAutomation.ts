@@ -4,6 +4,7 @@ import {
   type CodexPermissionPreset,
   type CodexRuntimeSelection,
 } from './AppServerController';
+import './codexHostTools';
 import { t } from '../i18n';
 import type { Turn } from './protocol/generated/v2/Turn';
 import { runExistingThreadAutomation, useCodexWorkspace } from '../stores/codexWorkspace';

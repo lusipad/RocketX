@@ -1,6 +1,6 @@
 import type { RcMessage, RcUser } from '@rcx/rc-client';
-import { getServerBase, rest } from '../lib/client';
-import { useAuth } from '../stores/auth';
+import { getServerBase } from '../lib/serverEndpoint';
+import { getLanHost } from './host';
 
 export interface LanOutboxEntry {
   version: 1;
@@ -25,12 +25,8 @@ export function lanOutboxCapability(): 'unknown' | 'server-metadata' | 'local-on
   return 'unknown';
 }
 
-async function store() {
-  return (await import('../kernel/store')).kernelStore;
-}
-
 function currentScope(): string {
-  const userId = useAuth.getState().user?._id ?? 'guest';
+  const userId = getLanHost().currentUserId() ?? 'guest';
   return `${getServerBase() || 'same-origin'}\0${userId}`;
 }
 
@@ -61,7 +57,7 @@ export function isLanOutboxEntry(value: unknown): value is LanOutboxEntry {
 
 async function persist(entry: LanOutboxEntry): Promise<void> {
   entries.set(entry.messageId, entry);
-  await (await store()).outbox.set(storeId(entry.scope, entry.messageId), entry);
+  await getLanHost().setOutbox(storeId(entry.scope, entry.messageId), entry);
 }
 
 export async function hydrateLanOutbox(): Promise<RcMessage[]> {
@@ -69,12 +65,11 @@ export async function hydrateLanOutbox(): Promise<RcMessage[]> {
   customFieldsSupported = undefined;
   const scope = currentScope();
   const cutoff = Date.now() - RETAIN_SYNCED_MS;
-  const outbox = (await store()).outbox;
-  for (const { id, value } of await outbox.list<unknown>()) {
+  for (const { id, value } of await getLanHost().listOutbox<unknown>()) {
     if (!isLanOutboxEntry(value)) continue;
     if (value.scope !== scope) continue;
     if (value.status === 'synced' && value.updatedAt < cutoff) {
-      await outbox.delete(id);
+      await getLanHost().deleteOutbox(id);
       continue;
     }
     entries.set(value.messageId, value);
@@ -172,7 +167,7 @@ async function sendAndReconcile(entry: LanOutboxEntry): Promise<RcMessage> {
   try {
     if (customFieldsSupported !== false) {
       try {
-        const sent = await rest.sendMessageRaw({
+        const sent = await getLanHost().sendRawMessage({
           ...message,
           customFields: {
             rocketxOriginalTs: new Date(entry.originalTs).toISOString(),
@@ -187,10 +182,10 @@ async function sendAndReconcile(entry: LanOutboxEntry): Promise<RcMessage> {
         customFieldsSupported = false;
       }
     }
-    return await rest.sendMessageRaw(message);
+    return await getLanHost().sendRawMessage(message);
   } catch (error) {
     try {
-      const existing = await rest.getMessage(entry.messageId);
+      const existing = await getLanHost().getRawMessage(entry.messageId);
       if (existing.rid === entry.roomId) return existing;
     } catch {
       /* 服务端确实没有这条，保留原始发送错误供下次恢复重试 */

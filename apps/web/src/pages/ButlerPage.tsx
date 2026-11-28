@@ -1,5 +1,7 @@
 import { ArrowLeft, PanelLeft, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import '../agent/acpButlerWiring';
+import '../agent/codexHostTools';
 import { agentBackend } from '../agent/session';
 import AcpWorkspaceSurface from '../components/AcpWorkspaceSurface';
 import ButlerAssistantCenter from '../components/ButlerAssistantCenter';

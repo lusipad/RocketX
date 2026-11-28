@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { t } from '../i18n';
+import '../agent/codexHostTools';
+import { registerUserRuntimeShutdownHook } from '../lib/runtimeLifecycle';
 import { tsMs, type RcMessage } from '@rcx/rc-client';
 import { getServerBase, isTauriRuntime, rest } from '../lib/client';
 import { toSendableMessageChunks } from '../lib/messageChunks';
@@ -1560,3 +1562,5 @@ export async function startSharedAgentBridge(): Promise<() => void> {
 export function stopSharedAgentBridge(): void {
   sharedAgentBridgeCleanup?.();
 }
+
+registerUserRuntimeShutdownHook('sharedAgent', () => shutdownSharedAgentRuntime());

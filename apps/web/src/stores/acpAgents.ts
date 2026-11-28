@@ -16,10 +16,11 @@ import type {
   AcpToolCallUpdate,
 } from '../agent/acp/acpTypes';
 import { agentDeviceId } from '../agent/device';
+import { getAcpHostBridge } from '../agent/acp/acpHostBridge';
 import { matchesAcpWorkSession } from '../agent/sessionAdapter';
 import { workContextPathKey } from '../lib/workContext';
 import { LOCAL_ACCOUNT_OWNER } from '../lib/accountScope';
-import { isTauriRuntime } from '../lib/client';
+import { isTauriRuntime } from '../lib/http';
 import {
   acpAgentDelete,
   acpAgentDiscover,
@@ -36,16 +37,11 @@ import {
   type AcpAgentUpsertInput,
   type AcpDiscoveredCandidate,
   type DiscoveredLocalSession,
-  type NativeWorkSessionRecord,
   type NativeResumeAuthorization,
   type WorkCardAutonomyMode,
 } from '../platform/desktopCommands';
-import {
-  formatMemoryRecallPromptBlock,
-  resolveButlerAccountScope,
-  useButlerMemory,
-} from './butlerMemory';
-import { useWorkLedger } from './workLedger';
+
+const resolveButlerAccountScope = (): string => getAcpHostBridge().resolveAccountScope();
 
 const FALLBACK_AGENTS_PREFIX = 'rcx-acp-agents-v1';
 
@@ -362,90 +358,25 @@ function extractTextFromContent(block: AcpContentBlock | undefined): string {
   return '';
 }
 
-function mapAcpStatusToLedgerStatus(
-  status: AcpSessionLifecycleStatus,
-): NativeWorkSessionRecord['runtimeStatus'] {
-  switch (status) {
-    case 'running':
-    case 'connecting':
-      return 'running';
-    case 'waiting_approval':
-      return 'waiting_approval';
-    case 'stopped':
-      return 'stopped';
-    case 'error':
-      return 'error';
-    case 'ready':
-    default:
-      return 'idle';
-  }
-}
-
 async function syncAcpSessionToLedger(session: AcpManagedSessionState): Promise<void> {
-  if (session.nativeIdentityPending) return;
-  const nativeSessionId = session.nativeSessionId ?? session.acpSessionId;
-  if (!nativeSessionId) return;
-  const accountScope = session.accountScope ?? resolveButlerAccountScope();
-  if (accountScope !== resolveButlerAccountScope()) return;
-  const ledger = useWorkLedger.getState();
-  const existingLedgerSession = ledger.sessions.find(
-    (s) => s.runtime === 'acp' && s.nativeSessionId === nativeSessionId && (s.sourceScope ?? 'default') === (session.sourceScope ?? 'default') && (!s.accountScope || s.accountScope === accountScope) && (!s.hostDeviceId || s.hostDeviceId === agentDeviceId()),
-  );
-  const resolvedTodoId = session.linkedTodoId ?? existingLedgerSession?.todoId ?? null;
-  const card = resolvedTodoId
-    ? ledger.cards.find((c) => c.id === resolvedTodoId)
-    : undefined;
-  const visibility = card?.state.visibility ?? existingLedgerSession?.visibility ?? 'private';
-  const stopped = session.status === 'stopped' || session.status === 'error';
-  const disconnected = stopped || session.connectionReady === false;
-
-  let preservedMeta: Record<string, unknown> = {};
-  if (existingLedgerSession?.configSnapshotJson) {
-    try {
-      const parsed = JSON.parse(existingLedgerSession.configSnapshotJson) as Record<
-        string,
-        unknown
-      >;
-      if (parsed && typeof parsed === 'object') {
-        for (const key of ['provider', 'sourcePath', 'preview', 'stepCount']) {
-          if (parsed[key] !== undefined && parsed[key] !== null) {
-            preservedMeta[key] = parsed[key];
-          }
-        }
-      }
-    } catch {
-      // ignore malformed snapshot JSON
-    }
-  }
-
-  await ledger.upsertSession({
-    todoId: resolvedTodoId,
-    visibility,
-    runtime: 'acp',
-    origin: 'rocketx_managed',
-    nativeSessionId,
-    sourceScope: session.sourceScope,
-    title: `${session.agentName}: ${session.title}`,
+  await getAcpHostBridge().syncSessionToLedger({
+    agentId: session.agentId,
+    agentName: session.agentName,
+    preset: session.preset,
+    autonomyMode: session.autonomyMode,
+    title: session.title,
     workspaceRoot: session.workspaceRoot,
-    environmentId: null,
-    accountScope,
-    controlEndpoint: disconnected ? null : `acp://${session.agentId}/${session.acpSessionId}`,
-    controlMode: disconnected ? 'resumable' : 'controllable',
-    controlReason: session.connectionReady === false ? 'connection_unavailable' : stopped ? 'stopped_local_matching_cwd' : 'owned_live_controller',
-    hostDeviceId: agentDeviceId(),
-    writerLeaseOwner: 'rocketx:local',
-    writerLeaseExpiresAt: null,
-    runtimeStatus: mapAcpStatusToLedgerStatus(session.status),
-    configSnapshotJson: JSON.stringify({
-      ...preservedMeta,
-      agentId: session.agentId,
-      preset: session.preset,
-      autonomyMode: session.autonomyMode,
-      modeId: session.modes?.currentModeId ?? null,
-      transportSessionId: session.acpSessionId,
-    }),
-    lastEventSeq: session.turnCount,
+    acpSessionId: session.acpSessionId,
+    nativeSessionId: session.nativeSessionId,
+    sourceScope: session.sourceScope,
+    accountScope: session.accountScope,
+    linkedTodoId: session.linkedTodoId,
+    status: session.status,
+    connectionReady: session.connectionReady,
+    turnCount: session.turnCount,
+    modesCurrentModeId: session.modes?.currentModeId ?? null,
     lastTurnId: session.messages.at(-1)?.id ?? null,
+    nativeIdentityPending: session.nativeIdentityPending,
   });
 }
 
@@ -1318,12 +1249,13 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
         ? await acpLocalSessionHandoff({ sessionId: input.nativeSessionId, sourceScope: input.sourceScope!, accountScope, hostDeviceId: agentDeviceId(), workspaceRoot, profileId: agent.id })
         : undefined;
       assertAccount();
-      const originalWork = useWorkLedger.getState().sessions.find((record) => record.runtime === 'acp'
-        && record.nativeSessionId === input.nativeSessionId
-        && (record.sourceScope ?? 'default') === (input.sourceScope ?? 'default')
-        && (!record.accountScope || record.accountScope === resolveButlerAccountScope())
-        && (!record.hostDeviceId || record.hostDeviceId === agentDeviceId())
-        && workContextPathKey(record.workspaceRoot) === workContextPathKey(workspaceRoot));
+      const originalTodoId = getAcpHostBridge().findOriginalWorkTodoId({
+        nativeSessionId: input.nativeSessionId,
+        sourceScope: input.sourceScope,
+        accountScope: resolveButlerAccountScope(),
+        hostDeviceId: agentDeviceId(),
+        workspaceRoot,
+      });
 
       let preloadedMessages: AcpChatMessage[] = [];
       if (isTauriRuntime()) {
@@ -1351,7 +1283,7 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
         agentId: agent.id,
         sessionId: input.nativeSessionId,
         workspaceRoot,
-        linkedTodoId: input.linkedTodoId === undefined ? originalWork?.todoId ?? undefined : input.linkedTodoId,
+        linkedTodoId: input.linkedTodoId === undefined ? originalTodoId : input.linkedTodoId,
         title: input.title,
         initialMessages: preloadedMessages,
         nativeResume,
@@ -1390,15 +1322,14 @@ export const useAcpAgents = create<AcpAgentsState>((set, get) => {
       let promptText = trimmed;
       const canUsePersonalMemory = () => {
         const current = get().sessions[sessionKey];
-        return current && (!current.linkedTodoId || useWorkLedger.getState().cards.find((card) => card.id === current.linkedTodoId)?.state.visibility === 'private');
+        return current && getAcpHostBridge().canUsePersonalMemory(current.linkedTodoId);
       };
       if (options.injectMemory && canUsePersonalMemory()) {
-        const memories = await useButlerMemory.getState().recallRelevantMemories({
+        const memoryBlock = await getAcpHostBridge().recallMemoryBlock({
           query: trimmed,
           workspaceRoot: session.workspaceRoot,
           limit: 5,
         });
-        const memoryBlock = formatMemoryRecallPromptBlock(memories);
         if (memoryBlock && canUsePersonalMemory() && get().sessions[sessionKey]?.linkedTodoId === session.linkedTodoId && accountScope === resolveButlerAccountScope()) {
           promptText = `${memoryBlock}\n\n${trimmed}`;
         }

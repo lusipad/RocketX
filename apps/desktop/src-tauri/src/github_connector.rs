@@ -103,6 +103,8 @@ pub struct GitHubPrDiffResult {
     pub truncated: bool,
 }
 
+pub(crate) use crate::native::git_remote::{parse_github_remote_url, validate_repo_segment};
+
 fn config_path(data_dir: &Path) -> PathBuf {
     data_dir.join(GITHUB_CONFIG_FILE)
 }
@@ -133,21 +135,6 @@ pub(crate) fn normalize_github_api_base(raw: Option<&str>) -> Result<String, Str
         }
     }
     Ok(trimmed.trim_end_matches('/').to_string())
-}
-
-pub(crate) fn validate_repo_segment(raw: &str, label: &str) -> Result<String, String> {
-    let clean = raw.trim();
-    if clean.is_empty()
-        || clean == "."
-        || clean == ".."
-        || clean.len() > 100
-        || !clean
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        return Err(format!("无效的 GitHub {label}：{clean}"));
-    }
-    Ok(clean.to_string())
 }
 
 fn keyring_entry() -> Result<keyring::Entry, String> {
@@ -228,46 +215,6 @@ fn resolve_effective_token() -> Result<Option<String>, String> {
         return Ok(Some(tok));
     }
     Ok(read_gh_cli_token())
-}
-
-pub(crate) fn parse_github_remote_url(remote_url: &str) -> Option<(String, String)> {
-    let trimmed = remote_url.trim();
-    if trimmed.is_empty() || trimmed.contains("/_git/") {
-        return None;
-    }
-    let cleaned = trimmed.trim_end_matches('/').trim_end_matches(".git");
-    if let Some((left, right)) = cleaned.split_once(':') {
-        if !left.contains("://") && left.contains('@') {
-            let host = left.split('@').nth(1).unwrap_or("");
-            if host.contains("github") {
-                let mut parts = right.trim_start_matches('/').split('/');
-                let owner = parts.next()?;
-                let repo = parts.next()?;
-                if parts.next().is_some() {
-                    return None;
-                }
-                let ok_owner = validate_repo_segment(owner, "owner").ok()?;
-                let ok_repo = validate_repo_segment(repo, "repo").ok()?;
-                return Some((ok_owner, ok_repo));
-            }
-        }
-    }
-    let parsed = reqwest::Url::parse(cleaned).ok()?;
-    let host = parsed.host_str()?.to_ascii_lowercase();
-    let is_supported_host =
-        host.contains("github") || matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1");
-    if !is_supported_host {
-        return None;
-    }
-    let mut segments = parsed.path_segments()?.filter(|s| !s.is_empty());
-    let owner = segments.next()?;
-    let repo = segments.next()?;
-    if segments.next().is_some() {
-        return None;
-    }
-    let ok_owner = validate_repo_segment(owner, "owner").ok()?;
-    let ok_repo = validate_repo_segment(repo, "repo").ok()?;
-    Some((ok_owner, ok_repo))
 }
 
 fn build_client(token: Option<&str>) -> Result<reqwest::Client, String> {
@@ -634,7 +581,7 @@ pub async fn butler_github_detect_workspace_repo(
         return Ok(None);
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let Ok(Some(remote_url)) = crate::butler_worktree::read_workspace_origin_url(&trimmed)
+        let Ok(Some(remote_url)) = crate::native::git_remote::read_workspace_origin_url(&trimmed)
         else {
             return Ok(None);
         };

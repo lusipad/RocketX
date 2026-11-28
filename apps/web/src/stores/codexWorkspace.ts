@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { t } from '../i18n';
+import { registerUserRuntimeShutdownHook } from '../lib/runtimeLifecycle';
 import {
   AppServerController,
   permissionSettings,
@@ -1905,3 +1906,5 @@ export async function resetCodexWorkspaceForTests(): Promise<void> {
     followUpMode: 'steer',
   });
 }
+
+registerUserRuntimeShutdownHook('codexWorkspace', () => useCodexWorkspace.getState().shutdown());

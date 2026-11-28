@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
 const WEB_SOURCE_ROOT = join(REPO_ROOT, 'apps', 'web', 'src');
+const RUST_SOURCE_ROOT = join(REPO_ROOT, 'apps', 'desktop', 'src-tauri', 'src');
 
 const DIRECT_PLATFORM_PATTERN = /@tauri-apps\//;
 const DIRECT_INVOKE_PATTERN = /\binvoke\s*\(/;
@@ -61,14 +63,14 @@ const ADAPTER_FILES = new Set([
 const LEGACY_BASELINE = new Map([
 ]);
 
-async function listSourceFiles(directory) {
+async function listSourceFiles(directory, extensionPattern = /\.(?:ts|tsx)$/) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const absolute = join(directory, entry.name);
     if (entry.isDirectory()) {
-      files.push(...await listSourceFiles(absolute));
-    } else if (/\.(?:ts|tsx)$/.test(entry.name)) {
+      files.push(...await listSourceFiles(absolute, extensionPattern));
+    } else if (extensionPattern.test(entry.name)) {
       files.push(absolute);
     }
   }
@@ -132,22 +134,307 @@ export async function scanArchitectureBoundaries(sourceRoot = WEB_SOURCE_ROOT) {
   return reports;
 }
 
+function resolveRelativeWebImport(sourceRoot, fromAbsoluteFile, specifier) {
+  if (!specifier.startsWith('.')) return null;
+  const base = resolve(dirname(fromAbsoluteFile), specifier);
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    join(base, 'index.ts'),
+    join(base, 'index.tsx'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return normalizePath(relative(sourceRoot, candidate));
+    }
+  }
+  return null;
+}
+
+function isTypeOnlyNamedClause(clause) {
+  if (!clause.startsWith('{') || !clause.endsWith('}')) return false;
+  const inner = clause.slice(1, -1).split(',').map((item) => item.trim()).filter(Boolean);
+  return inner.length > 0 && inner.every((item) => item.startsWith('type '));
+}
+
+function extractModuleImports(sourceRoot, absoluteFile, source) {
+  const selfRel = normalizePath(relative(sourceRoot, absoluteFile));
+  const staticRuntimeTargets = new Set();
+  const dynamicTargets = new Set();
+
+  const staticImportRe = /^\s*import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]\s*;?/gm;
+  for (const match of source.matchAll(staticImportRe)) {
+    const clause = match[1].trim();
+    if (clause.startsWith('type ') || clause.startsWith('type{') || isTypeOnlyNamedClause(clause)) continue;
+    const target = resolveRelativeWebImport(sourceRoot, absoluteFile, match[2]);
+    if (target && target !== selfRel) staticRuntimeTargets.add(target);
+  }
+
+  for (const match of source.matchAll(/^\s*import\s+['"]([^'"]+)['"]/gm)) {
+    const target = resolveRelativeWebImport(sourceRoot, absoluteFile, match[1]);
+    if (target && target !== selfRel) staticRuntimeTargets.add(target);
+  }
+
+  for (const match of source.matchAll(/^\s*export\s+(?!type\s)([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/gm)) {
+    const clause = match[1].trim();
+    if (isTypeOnlyNamedClause(clause)) continue;
+    const target = resolveRelativeWebImport(sourceRoot, absoluteFile, match[2]);
+    if (target && target !== selfRel) staticRuntimeTargets.add(target);
+  }
+
+  for (const match of source.matchAll(/import\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    const target = resolveRelativeWebImport(sourceRoot, absoluteFile, match[1]);
+    if (target && target !== selfRel) dynamicTargets.add(target);
+  }
+
+  return { staticRuntimeTargets: [...staticRuntimeTargets], dynamicTargets: [...dynamicTargets] };
+}
+
+function findStrongComponents(nodes, getNeighbors) {
+  let nextIndex = 0;
+  const indices = new Map();
+  const lowlink = new Map();
+  const onStack = new Set();
+  const stack = [];
+  const components = [];
+
+  function strongConnect(node) {
+    indices.set(node, nextIndex);
+    lowlink.set(node, nextIndex);
+    nextIndex += 1;
+    stack.push(node);
+    onStack.add(node);
+
+    for (const neighbor of getNeighbors(node)) {
+      if (!nodes.has(neighbor)) continue;
+      if (!indices.has(neighbor)) {
+        strongConnect(neighbor);
+        lowlink.set(node, Math.min(lowlink.get(node), lowlink.get(neighbor)));
+      } else if (onStack.has(neighbor)) {
+        lowlink.set(node, Math.min(lowlink.get(node), indices.get(neighbor)));
+      }
+    }
+
+    if (lowlink.get(node) === indices.get(node)) {
+      const component = [];
+      for (;;) {
+        const w = stack.pop();
+        onStack.delete(w);
+        component.push(w);
+        if (w === node) break;
+      }
+      if (component.length > 1) {
+        components.push(component.sort());
+      }
+    }
+  }
+
+  for (const node of [...nodes].sort()) {
+    if (!indices.has(node)) strongConnect(node);
+  }
+  return components;
+}
+
+const DSM_FORBIDDEN_RULES = [
+  {
+    layer: 'DP1 平台与运行时基座',
+    files: new Set([
+      'lib/http.ts',
+      'lib/serverEndpoint.ts',
+      'lib/runtimeLifecycle.ts',
+      'lib/runtimeMode.ts',
+      'lib/startup.ts',
+      'lib/desktopConfigBackup.ts',
+      'stores/ui.ts',
+      'stores/toast.ts',
+    ]),
+    forbidPrefixes: ['lan/', 'kernel/', 'agent/'],
+    forbidExact: new Set(['stores/auth.ts', 'stores/chat.ts', 'stores/workbench.ts', 'lib/client.ts']),
+  },
+  {
+    layer: 'DP2 多账号隔离与本地契约',
+    files: new Set(['lib/accountScope.ts', 'lib/localDataContract.ts', 'platform/butlerAccountReady.ts']),
+    forbidPrefixes: ['stores/', 'lan/', 'kernel/', 'agent/'],
+    forbidExact: new Set(['lib/client.ts']),
+  },
+  {
+    layer: 'DP3 本地多模态感知',
+    files: new Set(['lib/imageOcr.ts', 'platform/localVoice.ts', 'stores/localVoice.ts']),
+    forbidPrefixes: ['lan/', 'kernel/', 'agent/'],
+    forbidExact: new Set([
+      'stores/todos.ts',
+      'stores/calendar.ts',
+      'stores/focus.ts',
+      'stores/workbench.ts',
+      'stores/auth.ts',
+      'stores/chat.ts',
+      'lib/client.ts',
+    ]),
+  },
+  {
+    layer: 'DP4 本地个人生产力',
+    files: new Set(['stores/todos.ts', 'stores/calendar.ts', 'stores/focus.ts', 'stores/downloadHistory.ts']),
+    forbidPrefixes: ['lan/', 'kernel/', 'agent/'],
+    forbidExact: new Set(['stores/auth.ts', 'stores/chat.ts', 'stores/workbench.ts', 'lib/client.ts']),
+  },
+  {
+    layer: 'DP5 工作台存储',
+    files: new Set(['stores/workbench.ts']),
+    forbidPrefixes: ['lan/', 'kernel/', 'agent/'],
+    forbidExact: new Set(['stores/chat.ts', 'stores/auth.ts']),
+  },
+  {
+    layer: 'DP5 局域网 P2P 传输层',
+    matchPrefix: 'lan/',
+    forbidPrefixes: ['stores/', 'kernel/', 'agent/'],
+    forbidExact: new Set(['lib/client.ts']),
+  },
+  {
+    layer: 'DP6 认证会话门控',
+    files: new Set(['stores/auth.ts']),
+    forbidPrefixes: ['lan/', 'kernel/', 'agent/'],
+    forbidExact: new Set(['stores/codexWorkspace.ts', 'stores/sharedAgent.ts']),
+  },
+  {
+    layer: 'DP8 微内核视图壳',
+    files: new Set(['kernel/AppFrame.tsx']),
+    forbidPrefixes: ['stores/'],
+    forbidExact: new Set(['kernel/runtime.tsx']),
+  },
+  {
+    layer: 'DP9 AI 运行时协议底座',
+    files: new Set([
+      'agent/dynamicToolRegistry.ts',
+      'agent/AppServerController.ts',
+      'agent/businessMcp.ts',
+      'agent/acp/acpHostBridge.ts',
+      'stores/acpAgents.ts',
+    ]),
+    forbidPrefixes: [],
+    forbidExact: new Set([
+      'agent/codexHostTools.ts',
+      'stores/workLedger.ts',
+      'stores/butlerMemory.ts',
+      'stores/butlerCognition.ts',
+      'stores/codexWorkspace.ts',
+      'stores/routines.ts',
+      'stores/sharedAgent.ts',
+    ]),
+  },
+];
+
+function matchesForbiddenTarget(rule, target) {
+  if (rule.forbidExact?.has(target)) return true;
+  return (rule.forbidPrefixes ?? []).some((prefix) => target.startsWith(prefix));
+}
+
+export async function scanAxiomaticDesignMatrix(
+  sourceRoot = WEB_SOURCE_ROOT,
+  rustRoot = RUST_SOURCE_ROOT,
+) {
+  const absoluteFiles = await listSourceFiles(sourceRoot);
+  const staticAdj = new Map();
+  const combinedAdj = new Map();
+  const dsmViolations = [];
+
+  for (const absolute of absoluteFiles) {
+    const rel = normalizePath(relative(sourceRoot, absolute));
+    const source = await readFile(absolute, 'utf8');
+    const { staticRuntimeTargets, dynamicTargets } = extractModuleImports(sourceRoot, absolute, source);
+    staticAdj.set(rel, staticRuntimeTargets);
+    combinedAdj.set(rel, [...new Set([...staticRuntimeTargets, ...dynamicTargets])]);
+
+    for (const rule of DSM_FORBIDDEN_RULES) {
+      const matched = rule.files?.has(rel) || (rule.matchPrefix && rel.startsWith(rule.matchPrefix));
+      if (!matched) continue;
+      for (const target of [...staticRuntimeTargets, ...dynamicTargets]) {
+        if (matchesForbiddenTarget(rule, target)) {
+          dsmViolations.push({
+            file: `apps/web/src/${rel}`,
+            target: `apps/web/src/${target}`,
+            layer: rule.layer,
+            reason: `${rule.layer} 不得出现上三角反向依赖 (${rel} -> ${target})`,
+          });
+        }
+      }
+    }
+  }
+
+  const allWebNodes = new Set(staticAdj.keys());
+  const runtimeStaticCycles = findStrongComponents(allWebNodes, (node) => staticAdj.get(node) ?? []);
+
+  const storeNodes = new Set([...combinedAdj.keys()].filter((node) => node.startsWith('stores/')));
+  const storeCycles = findStrongComponents(storeNodes, (node) =>
+    (combinedAdj.get(node) ?? []).filter((target) => storeNodes.has(target)),
+  );
+
+  const githubConnectorPath = join(rustRoot, 'github_connector.rs');
+  if (existsSync(githubConnectorPath)) {
+    const githubSource = await readFile(githubConnectorPath, 'utf8');
+    if (/\bcrate::butler_worktree\b/.test(githubSource)) {
+      dsmViolations.push({
+        file: 'apps/desktop/src-tauri/src/github_connector.rs',
+        target: 'apps/desktop/src-tauri/src/butler_worktree.rs',
+        layer: 'Rust DP5 连接器',
+        reason: 'github_connector.rs 不得反向依赖 butler_worktree（应通过 native::git_remote 解耦）',
+      });
+    }
+  }
+
+  return {
+    runtimeStaticCycles,
+    storeCycles,
+    dsmViolations,
+  };
+}
+
 async function main() {
   const reports = await scanArchitectureBoundaries();
-  const violations = reports.flatMap((report) => report.violations.map((violation) => ({
+  const boundaryViolations = reports.flatMap((report) => report.violations.map((violation) => ({
     ...violation,
     file: report.relativePath,
   })));
+  const dsm = await scanAxiomaticDesignMatrix();
   const legacyCount = reports.filter((report) => LEGACY_BASELINE.has(report.relativePath)).length;
-  if (violations.length > 0) {
-    console.error('[architecture] boundary violations:');
-    for (const violation of violations) {
-      console.error(`- ${violation.file}:${violation.lineNumber} ${violation.reason}`);
+
+  const hasDsmFailure =
+    dsm.runtimeStaticCycles.length > 0 ||
+    dsm.storeCycles.length > 0 ||
+    dsm.dsmViolations.length > 0;
+
+  if (boundaryViolations.length > 0 || hasDsmFailure) {
+    if (boundaryViolations.length > 0) {
+      console.error('[architecture] boundary violations:');
+      for (const violation of boundaryViolations) {
+        console.error(`- ${violation.file}:${violation.lineNumber} ${violation.reason}`);
+      }
+    }
+    if (dsm.runtimeStaticCycles.length > 0) {
+      console.error('[architecture] runtime static import cycles:');
+      for (const cycle of dsm.runtimeStaticCycles) {
+        console.error(`- ${cycle.join(' <-> ')}`);
+      }
+    }
+    if (dsm.storeCycles.length > 0) {
+      console.error('[architecture] store dependency cycles (static + dynamic):');
+      for (const cycle of dsm.storeCycles) {
+        console.error(`- ${cycle.join(' <-> ')}`);
+      }
+    }
+    if (dsm.dsmViolations.length > 0) {
+      console.error('[architecture] MIT Axiomatic Design upper-triangular violations:');
+      for (const violation of dsm.dsmViolations) {
+        console.error(`- ${violation.file} -> ${violation.target}: ${violation.reason}`);
+      }
     }
     process.exitCode = 1;
     return;
   }
-  console.log(`[architecture] scanned ${reports.length} Tauri-touching files; ${legacyCount} legacy exceptions unchanged`);
+
+  console.log(
+    `[architecture] scanned ${reports.length} Tauri-touching files; ${legacyCount} legacy exceptions unchanged; DSM verified 0 static cycles, 0 store cycles, 0 upper-triangular violations`,
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

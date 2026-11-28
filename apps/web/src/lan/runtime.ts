@@ -1,11 +1,16 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { t } from '../i18n';
-import { ensureSiteUrl, getServerBase, isTauri, readPublicSettingResult } from '../lib/client';
+import { isTauri } from '../lib/http';
+import { getServerBase } from '../lib/serverEndpoint';
+import { registerUserRuntimeShutdownHook } from '../lib/runtimeLifecycle';
 import { resolveLanServerId } from '../lib/lanServerScope';
-import { useAuth } from '../stores/auth';
 import { UNKNOWN_LAN_FIREWALL, type LanFirewallStatus } from './firewall';
+import { getLanHost } from './host';
 import type { LanDeviceKeyEnvelope } from './protocol';
+
+const ensureSiteUrl = () => getLanHost().ensureSiteUrl();
+const readPublicSettingResult = (id: string) => getLanHost().readPublicSettingResult(id);
 
 export interface LanIdentityInfo {
   deviceId: string;
@@ -95,12 +100,8 @@ function confirmLanDevice(userId: string, deviceId: string): void {
   publishLanState();
 }
 
-async function appDataStore() {
-  return (await import('../kernel/store')).kernelStore.appData;
-}
-
 function scope(): string {
-  const userId = useAuth.getState().user?._id ?? 'guest';
+  const userId = getLanHost().currentUserId() ?? 'guest';
   return `system:lan:${encodeURIComponent(getServerBase() || 'same-origin')}:${userId}`;
 }
 
@@ -109,7 +110,7 @@ function deviceKey(device: TrustedDevice): string {
 }
 
 async function loadTrustedDevices(): Promise<TrustedDevice[]> {
-  const entries = await (await appDataStore()).list<TrustedDevice>(scope());
+  const entries = await getLanHost().listTrustedDevices(scope());
   const unique = new Map<string, TrustedDevice>();
   for (const { value } of entries) {
     if (value?.userId && value.deviceId && value.publicKey) unique.set(deviceKey(value), value);
@@ -123,7 +124,7 @@ async function pinTrustedDevice(device: LanDeviceKeyEnvelope): Promise<void> {
     deviceId: device.deviceId,
     publicKey: device.publicKey,
   };
-  await (await appDataStore()).set(scope(), deviceKey(trusted), trusted);
+  await getLanHost().saveTrustedDevice(scope(), deviceKey(trusted), trusted);
   trustedDevices = await loadTrustedDevices();
   if (isTauri) await invoke('lan_trust_replace', { trustedDevices });
   setPeerCache(peerCache.map((peer) => (
@@ -136,7 +137,7 @@ async function pinTrustedDevice(device: LanDeviceKeyEnvelope): Promise<void> {
 /** 仅在发送文件时调用；发一次原生通信请求，不创建或发送 Rocket.Chat 消息。 */
 export async function probeLanPeer(userId: string): Promise<boolean> {
   if (!isTauri) return false;
-  if (userId === useAuth.getState().user?._id) return false;
+  if (userId === getLanHost().currentUserId()) return false;
   const result = await invoke<TrustedDevice>('lan_probe_peer', {
     userId,
     deviceId: null,
@@ -172,8 +173,8 @@ export async function startLanRuntime(
   onFile?: (event: LanFileEvent) => void | Promise<void>,
 ): Promise<void> {
   if (!isTauri) return;
-  const user = useAuth.getState().user;
-  if (!user) return;
+  const userId = getLanHost().currentUserId();
+  if (!userId) return;
   await stopLanRuntime();
   const generation = ++lanGeneration;
   const superseded = () => generation !== lanGeneration;
@@ -202,7 +203,7 @@ export async function startLanRuntime(
   const service = await invoke<LanServiceInfo>('lan_service_start', {
     serverUrl: serverUrl || getServerBase() || location.origin,
     serverId,
-    userId: user._id,
+    userId,
     deviceName,
     trustedDevices,
   });
@@ -335,3 +336,5 @@ export async function repairLanFirewall(userId?: string): Promise<LanFirewallSta
     throw error;
   }
 }
+
+registerUserRuntimeShutdownHook('lan', () => stopLanRuntime());

@@ -1,3 +1,4 @@
+import '../../apps/web/src/agent/acpButlerWiring';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

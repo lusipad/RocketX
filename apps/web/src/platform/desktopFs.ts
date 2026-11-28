@@ -8,7 +8,8 @@ import {
   safeSpoolName,
   spoolChunkRanges,
 } from '../lib/uploadRouting';
-import { getServerBase, loadStoredAuth } from '../lib/client';
+import { getServerBase } from '../lib/serverEndpoint';
+import { loadStoredAuth } from '../lib/client';
 
 export async function readDesktopFile(path: string): Promise<ArrayBuffer> {
   if (!isTauri) throw new Error(t('nav.platform.desktopOnly'));

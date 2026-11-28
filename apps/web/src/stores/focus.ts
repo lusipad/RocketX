@@ -1,14 +1,27 @@
 import { create } from 'zustand';
 import { t } from '../i18n';
-import { rest } from '../lib/client';
 import { isPresenceStatus, type PresenceStatus } from '../lib/presencePreference';
 import {
   DEFAULT_NOTIFICATION_AGGREGATION_CONFIG,
   type NotificationAggregationConfig,
   type NotificationAggregationInput,
 } from '../lib/notificationAggregation';
-import { useAuth } from './auth';
 import { toast } from './toast';
+
+export interface FocusPresencePort {
+  readStatus: () => string | undefined;
+  writeStatus: (status: PresenceStatus) => Promise<void> | null;
+}
+
+let activeFocusPresencePort: FocusPresencePort | null = null;
+
+/** 由上层在线状态/认证模块注册，避免个人专注计时器反向依赖 Rocket.Chat auth/client。 */
+export function registerFocusPresencePort(port: FocusPresencePort): () => void {
+  activeFocusPresencePort = port;
+  return () => {
+    if (activeFocusPresencePort === port) activeFocusPresencePort = null;
+  };
+}
 
 /**
  * 专注模式（daily-loop 规格 v1）：一级入口发起的专注会话。
@@ -91,15 +104,16 @@ export const useFocus = create<FocusStoreState>((set, get) => ({
 
   start: async (minutes) => {
     if (get().session) return;
-    const user = useAuth.getState().user;
-    const prevStatus: PresenceStatus = isPresenceStatus(user?.status) ? user.status : 'online';
+    const rawStatus = activeFocusPresencePort?.readStatus();
+    const prevStatus: PresenceStatus = isPresenceStatus(rawStatus) ? rawStatus : 'online';
     const startedAt = Date.now();
     const endsAt = minutes === null ? null : startedAt + minutes * 60_000;
     set({ session: { startedAt, endsAt, prevStatus }, stats: emptyFocusStats(), digest: null });
     if (endsAt !== null) armTimer(endsAt, get().end);
     // 状态切换失败不阻断专注：通知聚合是本机行为，busy 只是给别人的信号
-    if (!useAuth.getState().localMode) {
-      await rest.setStatus('busy').catch((err) => {
+    const pending = activeFocusPresencePort?.writeStatus('busy');
+    if (pending) {
+      await pending.catch((err) => {
         toast.error(err, t('nav.focus.statusSwitchFailed'));
       });
     }
@@ -120,8 +134,9 @@ export const useFocus = create<FocusStoreState>((set, get) => ({
         stats,
       },
     });
-    if (!useAuth.getState().localMode) {
-      await rest.setStatus(session.prevStatus).catch((err) => {
+    const pending = activeFocusPresencePort?.writeStatus(session.prevStatus);
+    if (pending) {
+      await pending.catch((err) => {
         toast.error(err, t('nav.focus.statusRestoreFailed'));
       });
     }

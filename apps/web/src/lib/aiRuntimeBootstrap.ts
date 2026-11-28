@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import '../agent/businessMcp';
 import { isTauri } from './http';
 import {
   activateAiRuntimeProvider,

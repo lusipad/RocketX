@@ -1,6 +1,8 @@
 import type { RoomType } from '@rcx/rc-client';
 import { rest } from './client';
 import { currentLanPeers, redactedLanPeers } from '../lan/runtime';
+import { registerLanHost, type LanTrustedDeviceRecord } from '../lan/host';
+import { kernelStore } from '../kernel/store';
 import { useAuth } from '../stores/auth';
 import { useChat } from '../stores/chat';
 import { useUI } from '../stores/ui';
@@ -25,6 +27,13 @@ function roomType(type: string | undefined): RoomType | null {
 }
 
 export function createDefaultKernelHost(): KernelHost {
+  registerLanHost({
+    listTrustedDevices: (scope) => kernelStore.appData.list<LanTrustedDeviceRecord>(scope),
+    saveTrustedDevice: (scope, key, value) => kernelStore.appData.set(scope, key, value),
+    listOutbox: <T = unknown>() => kernelStore.outbox.list<T>(),
+    setOutbox: (id, value) => kernelStore.outbox.set(id, value),
+    deleteOutbox: (id) => kernelStore.outbox.delete(id),
+  });
   return {
     identity: {
       userId: () => useAuth.getState().user?._id ?? null,

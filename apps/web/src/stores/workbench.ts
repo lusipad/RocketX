@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { t, type MessageKey } from '../i18n';
-import { syncBusinessMcpAzureDevOps } from '../agent/businessMcp';
+import { lifecycleSyncBusinessMcpAzureDevOps } from '../lib/runtimeLifecycle';
 import {
   ADO_WEB_KEY,
   loadWorkbenchConfig,
@@ -192,7 +192,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     const connectionChanged = connectionKey(get().config) !== connectionKey(nextConfig);
     const configRevision = get().configRevision + 1;
     saveWorkbenchConfig(nextConfig);
-    void syncBusinessMcpAzureDevOps({
+    void lifecycleSyncBusinessMcpAzureDevOps({
       collectionUrl: nextConfig.adoBase,
       authMode: nextConfig.auth,
       pat: nextConfig.pat,

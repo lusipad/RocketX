@@ -1,3 +1,4 @@
+import '../../apps/web/src/agent/acpButlerWiring';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { matchesDiscoveredWorkSession, promoteWorkSessionToCard, setSuperAgentRuntimeDriversForTests, syncLiveSessionsIntoLedger, workSessionImportIdentity } from '../../apps/web/src/agent/superAgentBridge';

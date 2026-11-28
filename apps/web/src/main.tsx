@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import './agent/acpButlerWiring';
+import './agent/codexHostTools';
 import { initializeStartupAiRuntimeProvider } from './lib/aiRuntimeBootstrap';
 import { getServerBase, installContextMenuGuard, installLinkInterceptor, setServerBase } from './lib/client';
 import {

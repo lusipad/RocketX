@@ -1,3 +1,4 @@
+import '../../apps/web/src/agent/acpButlerWiring';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as fs from 'node:fs';

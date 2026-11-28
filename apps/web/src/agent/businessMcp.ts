@@ -1,6 +1,7 @@
 import { t } from '../i18n';
 import type { JsonValue } from './protocol/generated/serde_json/JsonValue';
 import { isTauri } from '../lib/http';
+import { registerBusinessMcpLifecyclePort } from '../lib/runtimeLifecycle';
 import { butlerMcpLaunchConfigs, type ButlerMcpLaunchConfig } from '../platform/desktopCommands';
 
 const LAUNCH_CONFIG_DEADLINE_MS = 1_000;
@@ -273,3 +274,10 @@ export function setBusinessMcpCommandInvoker(invoker: CommandInvoker): () => voi
     credentialRevision += 1;
   };
 }
+
+registerBusinessMcpLifecyclePort({
+  syncRocketChat: syncBusinessMcpRocketChat,
+  clearRocketChat: clearBusinessMcpRocketChat,
+  syncAzureDevOps: syncBusinessMcpAzureDevOps,
+  clearAzureDevOps: clearBusinessMcpAzureDevOps,
+});

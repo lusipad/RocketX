@@ -1,7 +1,9 @@
 import { lazy, Suspense, type ComponentType } from 'react';
 import type { RcMessage } from '@rcx/rc-client';
 import { Bell, Blocks, Download } from 'lucide-react';
-import { getServerBase, httpFetch, isTauri } from '../lib/client';
+import { getServerBase } from '../lib/serverEndpoint';
+import { httpFetch, isTauri } from '../lib/http';
+import { registerUserRuntimeShutdownHook } from '../lib/runtimeLifecycle';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { AppManager, isOfficialApp, setActiveAppManager, type InstalledApp } from './installed';
@@ -331,14 +333,14 @@ function activateApp(app: InstalledApp): () => void | Promise<void> {
             label: typeof raw.label === 'string' ? raw.label : app.manifest.name,
             iconUrl: typeof raw.icon === 'string' ? raw.icon : app.manifest.icon,
             icon: Blocks,
-            render: () => <AppModule appId={app.manifest.id} />,
+            render: () => <AppModule appId={app.manifest.id} bridge={bridgeHost} />,
           }),
         );
       } else if (point === 'panel.right') {
         cleanups.push(
           kernelRegistry.register(app.manifest.id, point, {
             id,
-            render: () => <AppPanel appId={app.manifest.id} />,
+            render: () => <AppPanel appId={app.manifest.id} bridge={bridgeHost} />,
           }),
         );
       } else if (point === 'message.action') {
@@ -684,3 +686,5 @@ export async function shutdownKernel(): Promise<void> {
   await initializing?.catch(() => undefined);
   await teardownKernel();
 }
+
+registerUserRuntimeShutdownHook('kernel', () => shutdownKernel());

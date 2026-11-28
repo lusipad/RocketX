@@ -2,17 +2,22 @@ import { create } from 'zustand';
 import { RcApiError, type RcUser } from '@rcx/rc-client';
 import { t } from '../i18n';
 import {
-  clearBusinessMcpAzureDevOps,
-  clearBusinessMcpRocketChat,
-  syncBusinessMcpAzureDevOps,
-  syncBusinessMcpRocketChat,
-} from '../agent/businessMcp';
+  lifecycleClearBusinessMcpAzureDevOps,
+  lifecycleClearBusinessMcpRocketChat,
+  lifecycleSyncBusinessMcpAzureDevOps,
+  lifecycleSyncBusinessMcpRocketChat,
+  runUserRuntimeShutdownHooks,
+} from '../lib/runtimeLifecycle';
 import { loadWorkbenchConfig } from '../lib/ado';
-import { getServerBase, loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
+import { loadStoredAuth, realtime, rest, saveAuth, setAuthLostHandler } from '../lib/client';
+import { getServerBase } from '../lib/serverEndpoint';
 import { completeFirstRun } from '../lib/firstRun';
 import { ensureHttpOrigin } from '../lib/http';
 import { ensureAccountScope, LOCAL_ACCOUNT_OWNER, LOCAL_MODE_USER_ID } from '../lib/accountScope';
+import { runtimeFeatures } from '../lib/runtimeMode';
 import { useAliases } from './aliases';
+import { registerFocusPresencePort } from './focus';
+import { useUI } from './ui';
 import { restoreTrayAttention } from '../lib/tray';
 import type { LoginFailureDisplay } from '../lib/loginDiagnostic';
 import { writeLoginDiagnostic } from '../lib/loginDiagnostic';
@@ -176,12 +181,12 @@ function readAvatarVersion(): number {
 async function syncBusinessMcpSession(auth: { authToken: string; userId: string }): Promise<void> {
   const workbench = loadWorkbenchConfig();
   await Promise.all([
-    syncBusinessMcpRocketChat({
+    lifecycleSyncBusinessMcpRocketChat({
       serverUrl: getServerBase(),
       userId: auth.userId,
       authToken: auth.authToken,
     }),
-    syncBusinessMcpAzureDevOps({
+    lifecycleSyncBusinessMcpAzureDevOps({
       collectionUrl: workbench?.adoBase,
       authMode: workbench?.auth,
       pat: workbench?.pat,
@@ -193,8 +198,8 @@ async function syncBusinessMcpSession(auth: { authToken: string; userId: string 
 async function syncLocalBusinessMcpSession(): Promise<void> {
   const workbench = loadWorkbenchConfig();
   await Promise.all([
-    clearBusinessMcpRocketChat(),
-    syncBusinessMcpAzureDevOps({
+    lifecycleClearBusinessMcpRocketChat(),
+    lifecycleSyncBusinessMcpAzureDevOps({
       collectionUrl: workbench?.adoBase,
       authMode: workbench?.auth,
       pat: workbench?.pat,
@@ -219,18 +224,13 @@ async function clearBusinessMcpSession(): Promise<void> {
   const pending = businessMcpSyncInFlight;
   if (pending) await pending.catch(() => undefined);
   await Promise.all([
-    clearBusinessMcpRocketChat(),
-    clearBusinessMcpAzureDevOps(),
+    lifecycleClearBusinessMcpRocketChat(),
+    lifecycleClearBusinessMcpAzureDevOps(),
   ]);
 }
 
 async function shutdownUserRuntime(): Promise<void> {
-  await Promise.all([
-    import('../kernel/runtime').then(({ shutdownKernel }) => shutdownKernel()),
-    import('./codexWorkspace').then(({ useCodexWorkspace }) => useCodexWorkspace.getState().shutdown()),
-    import('./sharedAgent').then(({ shutdownSharedAgentRuntime }) => shutdownSharedAgentRuntime()),
-    import('../lan/runtime').then(({ stopLanRuntime }) => stopLanRuntime()),
-  ].map((operation) => operation.catch(() => undefined)));
+  await runUserRuntimeShutdownHooks();
 }
 
 async function activateLocalWorkspace(
@@ -239,7 +239,7 @@ async function activateLocalWorkspace(
 ): Promise<void> {
   writeLocalModeFlag(true);
   if (ensureAccountScope(LOCAL_MODE_USER_ID) === 'switched') {
-    await clearBusinessMcpRocketChat().catch(() => undefined);
+    await lifecycleClearBusinessMcpRocketChat().catch(() => undefined);
     await shutdownUserRuntime();
     location.reload();
     return;
@@ -322,7 +322,7 @@ export const useAuth = create<AuthState>((set, get) => ({
       if (isDefiniteAuthRejection(err)) {
         saveAuth(null);
         writeLocalModeFlag(false);
-        await clearBusinessMcpRocketChat().catch(() => undefined);
+        await lifecycleClearBusinessMcpRocketChat().catch(() => undefined);
         const fallbackUser = buildFallbackUser(stored.userId);
         // 明确收到 401/403 时仅清理失效 token 并标记 needsReauth，不切去 local-user@local 也不退出 MainPage。
         set({
@@ -394,12 +394,12 @@ export const useAuth = create<AuthState>((set, get) => ({
     } catch (err) {
       const diag = await writeLoginDiagnostic(err, 'login');
       if (wasLocalMode) {
-        await clearBusinessMcpRocketChat().catch(() => undefined);
+        await lifecycleClearBusinessMcpRocketChat().catch(() => undefined);
         set({ status: 'authed', localMode: true, needsReauth: false, user: localUser(), error: diag });
         return;
       }
       if (wasNeedsReauth) {
-        await clearBusinessMcpRocketChat().catch(() => undefined);
+        await lifecycleClearBusinessMcpRocketChat().catch(() => undefined);
         set({ status: 'authed', localMode: false, needsReauth: true, user: prevUser, error: diag });
         return;
       }
@@ -416,15 +416,12 @@ export const useAuth = create<AuthState>((set, get) => ({
     saveAuth(null);
     realtime.close();
     await activateLocalWorkspace(set, null);
-    const { useUI } = await import('./ui');
-    const { runtimeFeatures } = await import('../lib/runtimeMode');
     if (useUI.getState().module === 'messages') {
       useUI.getState().setModule(runtimeFeatures().butler ? 'butler-view' : 'todos');
     }
   },
 
   exitLocalMode: async () => {
-    const { useUI } = await import('./ui');
     useUI.getState().setModule('messages');
   },
 
@@ -477,7 +474,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     realtime.close();
     saveAuth(null);
     writeLocalModeFlag(false);
-    void clearBusinessMcpRocketChat().catch(() => undefined);
+    void lifecycleClearBusinessMcpRocketChat().catch(() => undefined);
     void syncLocalBusinessMcpSession().catch((syncError) => {
       console.warn('[rcx] 离线模式业务 MCP 同步失败', syncError);
     });
@@ -496,3 +493,12 @@ export const useAuth = create<AuthState>((set, get) => ({
     });
   },
 }));
+
+registerFocusPresencePort({
+  readStatus: () => useAuth.getState().user?.status,
+  writeStatus: (status) => {
+    const state = useAuth.getState();
+    if (state.localMode || state.needsReauth) return null;
+    return rest.setStatus(status).then(() => undefined);
+  },
+});

@@ -12,10 +12,15 @@ import type { PluginListResponse } from './protocol/generated/v2/PluginListRespo
 import type { PluginReadResponse } from './protocol/generated/v2/PluginReadResponse';
 import type { PluginInstallResponse } from './protocol/generated/v2/PluginInstallResponse';
 import type { SkillMetadata } from './protocol/generated/v2/SkillMetadata';
+import type { DynamicToolSpec } from './protocol/generated/v2/DynamicToolSpec';
 import type { Thread } from './protocol/generated/v2/Thread';
 import type { Turn } from './protocol/generated/v2/Turn';
 import type { UserInput } from './protocol/generated/v2/UserInput';
-import { executeRocketxDynamicTool, ROCKETX_DYNAMIC_TOOLS } from './codexHostTools';
+import {
+  executeRegisteredDynamicTool,
+  getRegisteredDynamicTools,
+  type HostDynamicToolProvider,
+} from './dynamicToolRegistry';
 import { buildUiLanguageInstruction, t } from '../i18n';
 
 export type CodexPermissionPreset = 'ask' | 'auto' | 'full';
@@ -50,6 +55,7 @@ export interface CodexCatalog {
 
 export interface AppServerControllerOptions {
   transportFactory?: (sessionId: string, workspaceRoot: string) => CodexTransport;
+  toolProvider?: HostDynamicToolProvider;
   onNotification?: (method: string, params: unknown) => void;
   onServerRequest?: (request: ServerRequestContext) => Promise<unknown>;
   onInterrupted?: (error: Error) => void;
@@ -279,7 +285,7 @@ export class AppServerController {
       developerInstructions: buildUiLanguageInstruction(),
       ...permissions,
       ...(config ? { config } : {}),
-      dynamicTools: ROCKETX_DYNAMIC_TOOLS,
+      dynamicTools: this.dynamicTools(),
     });
     await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
     await client.request('thread/settings/update', {
@@ -309,7 +315,7 @@ export class AppServerController {
       ...permissions,
       excludeTurns: true,
       ...(config ? { config } : {}),
-      dynamicTools: ROCKETX_DYNAMIC_TOOLS,
+      dynamicTools: this.dynamicTools(),
     });
     await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
     await client.request('thread/settings/update', {
@@ -336,7 +342,7 @@ export class AppServerController {
       ...permissions,
       excludeTurns: true,
       ...(config ? { config } : {}),
-      dynamicTools: ROCKETX_DYNAMIC_TOOLS,
+      dynamicTools: this.dynamicTools(),
     });
     await client.request('thread/memoryMode/set', { threadId: response.thread.id, mode: 'enabled' });
     await client.request('thread/settings/update', {
@@ -459,7 +465,15 @@ export class AppServerController {
         throw new Error(t('agent.appServer.scheduleApprovalDeclined'));
       }
     }
-    return executeRocketxDynamicTool(request.params);
+    return this.options.toolProvider
+      ? this.options.toolProvider.executeTool(request.params)
+      : executeRegisteredDynamicTool(request.params);
+  }
+
+  private dynamicTools(): DynamicToolSpec[] {
+    return this.options.toolProvider
+      ? this.options.toolProvider.getTools()
+      : getRegisteredDynamicTools();
   }
 
   async stop(): Promise<void> {

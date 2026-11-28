@@ -2,15 +2,15 @@ import { useEffect } from 'react';
 import { Blocks } from 'lucide-react';
 import { appManager } from './installed';
 import IframeSandbox from './sandbox/iframe';
-import { bridgeHost } from './runtime';
+import type { BridgeHost } from './bridge';
 import { useT } from '../i18n';
 
-export function AppModule({ appId }: { appId: string }) {
+export function AppModule({ appId, bridge }: { appId: string; bridge: BridgeHost }) {
   const t = useT();
   const app = appManager().get(appId);
   useEffect(() => {
-    if (app?.enabled && app.manifest.runtime === 'iframe') bridgeHost.emit(appId, 'app.activated');
-  }, [app?.enabled, app?.manifest.runtime, appId]);
+    if (app?.enabled && app.manifest.runtime === 'iframe') bridge.emit(appId, 'app.activated');
+  }, [app?.enabled, app?.manifest.runtime, appId, bridge]);
   if (!app || !app.enabled) {
     return (
       <div className="flex min-w-0 flex-1 items-center justify-center text-sm text-ink-3">
@@ -36,14 +36,14 @@ export function AppModule({ appId }: { appId: string }) {
           appId={appId}
           manifest={app.manifest}
           html={app.entryContent}
-          bridge={bridgeHost}
+          bridge={bridge}
         />
       </div>
     </main>
   );
 }
 
-export function AppPanel({ appId }: { appId: string }) {
+export function AppPanel({ appId, bridge }: { appId: string; bridge: BridgeHost }) {
   const app = appManager().get(appId);
   if (!app || app.manifest.runtime !== 'iframe') return null;
   return (
@@ -56,7 +56,7 @@ export function AppPanel({ appId }: { appId: string }) {
           appId={appId}
           manifest={app.manifest}
           html={app.entryContent}
-          bridge={bridgeHost}
+          bridge={bridge}
         />
       </div>
     </aside>

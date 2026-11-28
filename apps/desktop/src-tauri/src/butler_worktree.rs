@@ -1717,7 +1717,8 @@ pub async fn butler_git_create_pr(
     }
 
     if current_branch != "HEAD" {
-        if let Some((owner, repo)) = crate::github_connector::parse_github_remote_url(&remote_url) {
+        if let Some((owner, repo)) = crate::native::git_remote::parse_github_remote_url(&remote_url)
+        {
             if let Ok(Some(pr_url)) = crate::github_connector::create_pull_request_via_api(
                 &app,
                 &owner,

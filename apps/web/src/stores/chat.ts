@@ -19,6 +19,7 @@ import {
   ensureSiteUrl,
   getPublicSetting,
   loadStoredAuth,
+  readPublicSettingResult,
   realtime,
   rest,
   siteUrlSync,
@@ -101,6 +102,7 @@ import { useUI } from './ui';
 import { useFocus } from './focus';
 import { useNotificationAggregation } from './notificationAggregation';
 import { isLanControlMessage } from '../lan/protocol';
+import { registerLanHost } from '../lan/host';
 import {
   checkLanFirewall,
   repairLanFirewall,
@@ -1138,6 +1140,14 @@ async function notifyIfNeeded(msg: RcMessage, rid: string, state: ChatState) {
     isViewingRoom: isViewingConversation,
   });
 }
+
+registerLanHost({
+  currentUserId: () => useAuth.getState().user?._id ?? null,
+  ensureSiteUrl,
+  readPublicSettingResult,
+  sendRawMessage: (message) => rest.sendMessageRaw(message),
+  getRawMessage: (messageId) => rest.getMessage(messageId),
+});
 
 export const useChat = create<ChatState>((set, get) => ({
   ready: false,

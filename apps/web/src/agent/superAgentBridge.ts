@@ -1,5 +1,7 @@
 import { tsMs, type RcMessage, type RoomType } from '@rcx/rc-client';
 import { t } from '../i18n';
+import './acpButlerWiring';
+import './codexHostTools';
 import { agentDeviceId } from './device';
 import { renderDispatchSpec } from './dispatchSpec';
 import { agentMessageBridgeChanges } from './messageBridge';

@@ -13,7 +13,7 @@
  *   - A 再登录时归档原样搬回,数据不丢;
  *   - 免登录本地模式使用 `local-user@local`,首次连接真实 Rocket.Chat 账号且该账号尚无归档时直接认领本地数据。
  */
-import { getServerBase } from './client';
+import { getServerBase } from './serverEndpoint';
 
 export const LOCAL_MODE_USER_ID = 'local-user';
 export const LOCAL_ACCOUNT_OWNER = `${LOCAL_MODE_USER_ID}@local`;

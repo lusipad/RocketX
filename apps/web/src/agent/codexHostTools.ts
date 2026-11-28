@@ -25,6 +25,7 @@ import {
 } from './personalAssistant';
 import type { DynamicToolCallResponse } from './protocol/generated/v2/DynamicToolCallResponse';
 import type { DynamicToolSpec } from './protocol/generated/v2/DynamicToolSpec';
+import { registerHostDynamicToolProvider } from './dynamicToolRegistry';
 import {
   requireScheduledTaskAdapter,
   type ScheduledTaskInput,
@@ -1865,3 +1866,8 @@ export async function executeRocketxDynamicTool(params: unknown): Promise<Dynami
     }, false);
   }
 }
+
+registerHostDynamicToolProvider({
+  getTools: () => ROCKETX_DYNAMIC_TOOLS,
+  executeTool: executeRocketxDynamicTool,
+});
