@@ -69,6 +69,7 @@ socket2 = "0.6"
 zeroize = "1"
 # 已由 tauri-plugin-updater 间接使用；共享目录更新复用同一 Minisign 验签格式。
 minisign-verify = "0.2.5"
+portable-pty = "0.8"
 
 # Windows 集成认证（NTLM/Negotiate）：域内的 Azure DevOps Server 默认就是这个，
 # 不该逼用户去建 PAT。webview 和 reqwest 都做不了「用当前登录用户的凭据」，

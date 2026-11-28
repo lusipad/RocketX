@@ -11,6 +11,7 @@ mod butler_worktree;
 mod credential_scope;
 mod diagnostics;
 mod dsh;
+mod external_bridge;
 mod firewall;
 mod github_connector;
 mod lan;
@@ -25,6 +26,7 @@ mod native_service;
 mod ocr;
 mod pi;
 mod proc;
+mod pty_terminal;
 mod winauth;
 
 // OnceLock 被上传取消注册表（全平台）使用，必须无条件导入；
@@ -1770,6 +1772,14 @@ fn main() {
             acp::butler_terminal_kill,
             acp::butler_terminal_release,
             acp::butler_workspace_list_files,
+            pty_terminal::butler_pty_start,
+            pty_terminal::butler_pty_write,
+            pty_terminal::butler_pty_resize,
+            pty_terminal::butler_pty_snapshot,
+            pty_terminal::butler_pty_kill,
+            external_bridge::butler_external_tools_detect,
+            external_bridge::butler_open_in_external_tool,
+            external_bridge::butler_workspace_external_pulse,
             mcp::mcp_config_enable,
             mcp::mcp_config_status,
             mcp::mcp_config_disable,
@@ -1804,6 +1814,7 @@ fn main() {
         .manage(dsh::DshBridgeState::default())
         .manage(pi::PiAppServerState::default())
         .manage(acp::AcpSupervisorState::default())
+        .manage(pty_terminal::PtyManagerState::default())
         .manage(mcp::McpConfigLock(Mutex::new(())))
         .manage(mcp_registry::McpRegistryLock(Mutex::new(())))
         .manage(business_mcp::BusinessMcpConfigLock(Mutex::new(())))
@@ -1926,6 +1937,7 @@ fn main() {
             if matches!(event, tauri::RunEvent::Exit) {
                 pi::shutdown_all_pi_processes(app);
                 acp::shutdown_all_acp_processes(app);
+                pty_terminal::shutdown_all_pty_sessions(app);
                 butler_db::shutdown_native_work_runtime(app);
                 app.state::<native::host::NativeHost>().shutdown(app);
             }

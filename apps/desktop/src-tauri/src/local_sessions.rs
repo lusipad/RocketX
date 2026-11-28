@@ -12,7 +12,7 @@ use tauri::Manager;
 const DEFAULT_DISCOVER_LIMIT: usize = 120;
 const MAX_DISCOVER_LIMIT: usize = 300;
 const DEFAULT_MESSAGE_LIMIT: usize = 24;
-const MAX_MESSAGE_LIMIT: usize = 60;
+const MAX_MESSAGE_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -611,7 +611,7 @@ fn collect_codex_sessions(home: &Path) -> Vec<DiscoveredLocalSession> {
     collect_codex_sessions_from_root(&home.join(".codex"), None)
 }
 
-fn collect_codex_sessions_from_root(
+pub(crate) fn collect_codex_sessions_from_root(
     codex_dir: &Path,
     profile_id: Option<&str>,
 ) -> Vec<DiscoveredLocalSession> {
@@ -1531,7 +1531,7 @@ pub(crate) fn parse_pi_messages(path: &Path, limit: usize) -> Vec<LocalSessionMe
     out
 }
 
-fn find_transcript_for_session(
+pub(crate) fn find_transcript_for_session(
     provider: &str,
     session_id: &str,
     home: Option<&Path>,
@@ -1622,7 +1622,7 @@ fn is_path_within_allowed_roots(
     })
 }
 
-fn read_local_session_messages_sync(
+pub(crate) fn read_local_session_messages_sync(
     provider: &str,
     session_id: &str,
     source_path: Option<&str>,

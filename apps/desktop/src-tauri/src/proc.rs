@@ -4009,6 +4009,27 @@ pub fn maybe_print_version(args: &[String]) -> bool {
     true
 }
 
+pub(crate) fn active_codex_child_pids(app: &tauri::AppHandle) -> Vec<u32> {
+    let Some(state) = app.try_state::<CodexAppServerState>() else {
+        return Vec::new();
+    };
+    let Ok(procs) = state.processes.lock() else {
+        return Vec::new();
+    };
+    procs
+        .values()
+        .filter_map(|proc| {
+            let mut child = proc.child.lock().ok()?;
+            child
+                .try_wait()
+                .ok()
+                .flatten()
+                .is_none()
+                .then_some(child.id())
+        })
+        .collect()
+}
+
 pub fn shutdown(app: &tauri::AppHandle) {
     let state = app.state::<CodexAppServerState>();
     let Ok(_start_gate) = crate::local_sessions::NATIVE_CODEX_START_LOCK.lock() else {

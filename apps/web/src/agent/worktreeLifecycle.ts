@@ -14,6 +14,11 @@ import { useWorkLedger } from '../stores/workLedger';
 
 export const MAX_MANAGED_WORKTREES_PER_REPO = 3;
 export const IDLE_WORKTREE_TTL_MS = 48 * 60 * 60 * 1000;
+const retiredWorktreePaths = new Set<string>();
+
+export function isRetiredWorktreePath(worktreePath: string): boolean {
+  return retiredWorktreePaths.has(workContextPathKey(worktreePath));
+}
 
 export interface WorktreeExecutionPlan {
   mode: 'in_place_checkpoint' | 'isolated_worktree';
@@ -98,9 +103,17 @@ export async function pruneCleanFinishedWorktrees(repoRoot: string): Promise<str
     if (!finished) continue;
 
     const snap = await activeDrivers.inspectGit(wt.path).catch(() => null);
-    if (!snap || snap.dirtyFiles.length > 0) continue;
+    if (
+      !snap ||
+      snap.dirtyFiles.length > 0 ||
+      snap.hasUntracked ||
+      (snap.unpushedCommits ?? 0) > 0
+    ) {
+      continue;
+    }
 
     await activeDrivers.removeWorktree(repoRoot, wt.path).catch(() => undefined);
+    retiredWorktreePaths.add(wtKey);
     removed.push(wt.path);
   }
 
@@ -212,9 +225,17 @@ export async function cleanupCardManagedWorktree(cardId: string): Promise<boolea
   if (!repoRoot) return false;
 
   const snap = await activeDrivers.inspectGit(isolatedSession.workspaceRoot).catch(() => null);
-  if (!snap || snap.dirtyFiles.length > 0) return false;
+  if (
+    !snap ||
+    snap.dirtyFiles.length > 0 ||
+    snap.hasUntracked ||
+    (snap.unpushedCommits ?? 0) > 0
+  ) {
+    return false;
+  }
 
   await activeDrivers.removeWorktree(repoRoot, isolatedSession.workspaceRoot);
+  retiredWorktreePaths.add(workContextPathKey(isolatedSession.workspaceRoot));
   return true;
 }
 
@@ -252,11 +273,16 @@ export async function sweepIdleManagedWorktrees(
 
       const snap = await activeDrivers.inspectGit(wt.path).catch(() => null);
       if (!snap) continue;
-      if (snap.dirtyFiles.length > 0) {
+      if (
+        snap.dirtyFiles.length > 0 ||
+        snap.hasUntracked ||
+        (snap.unpushedCommits ?? 0) > 0
+      ) {
         skippedDirty.push(wt.path);
         continue;
       }
       await activeDrivers.removeWorktree(repoRoot, wt.path).catch(() => undefined);
+      retiredWorktreePaths.add(wtKey);
       removed.push(wt.path);
     }
   }

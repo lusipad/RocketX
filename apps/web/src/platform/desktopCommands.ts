@@ -497,6 +497,8 @@ export interface NativeWorkspaceGitSnapshot {
   dirtyFiles: string[];
   diffStat: string | null;
   recentCommits: string[];
+  unpushedCommits?: number;
+  hasUntracked?: boolean;
 }
 
 export interface NativeManagedWorktreeInfo {
@@ -525,8 +527,13 @@ export async function prepareNativeWorktree(input: {
 export async function removeNativeWorktree(
   repoRoot: string,
   worktreePath: string,
+  options?: { force?: boolean },
 ): Promise<void> {
-  await invoke('butler_worktree_remove', { repoRoot, worktreePath });
+  await invoke('butler_worktree_remove', {
+    repoRoot,
+    worktreePath,
+    force: options?.force ?? false,
+  });
 }
 
 export interface GitDiffFileSummary {
@@ -759,6 +766,108 @@ export async function killButlerTerminal(terminalId: string): Promise<void> {
 
 export async function releaseButlerTerminal(terminalId: string): Promise<void> {
   await invoke('butler_terminal_release', { terminalId });
+}
+
+export interface PtySnapshot {
+  bufferedOutput: string;
+  exited: boolean;
+  exitCode: number | null;
+  cwd: string;
+}
+
+export async function startButlerPty(input: {
+  workspaceRoot: string;
+  cwd?: string | null;
+  shell?: string | null;
+  command?: string | null;
+  args?: string[] | null;
+  cols?: number | null;
+  rows?: number | null;
+}): Promise<string> {
+  return invoke<string>('butler_pty_start', {
+    input: {
+      workspaceRoot: input.workspaceRoot,
+      cwd: input.cwd ?? null,
+      shell: input.shell ?? null,
+      command: input.command ?? null,
+      args: input.args ?? null,
+      cols: input.cols ?? null,
+      rows: input.rows ?? null,
+    },
+  });
+}
+
+export async function writeButlerPty(terminalId: string, data: string): Promise<void> {
+  await invoke('butler_pty_write', { terminalId, data });
+}
+
+export async function resizeButlerPty(
+  terminalId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
+  await invoke('butler_pty_resize', { terminalId, cols, rows });
+}
+
+export async function snapshotButlerPty(terminalId: string): Promise<PtySnapshot> {
+  return invoke<PtySnapshot>('butler_pty_snapshot', { terminalId });
+}
+
+export async function killButlerPty(terminalId: string): Promise<void> {
+  await invoke('butler_pty_kill', { terminalId });
+}
+
+export async function detectExternalTools(): Promise<
+  Array<{ id: string; label: string; available: boolean; kind: string }>
+> {
+  const res = await invoke<
+    Array<{ id: string; label: string; available: boolean; kind: string }> | null
+  >('butler_external_tools_detect');
+  return Array.isArray(res) ? res : [];
+}
+
+export async function openInExternalTool(input: {
+  toolId: string;
+  workspaceRoot: string;
+  filePath?: string | null;
+  provider?: string | null;
+  sessionId?: string | null;
+}): Promise<void> {
+  await invoke('butler_open_in_external_tool', {
+    input: {
+      toolId: input.toolId,
+      workspaceRoot: input.workspaceRoot,
+      filePath: input.filePath ?? null,
+      provider: input.provider ?? null,
+      sessionId: input.sessionId ?? null,
+    },
+  });
+}
+
+export async function pollWorkspaceExternalPulse(input: {
+  workspaceRoot: string;
+  provider?: string | null;
+  sessionId?: string | null;
+  sourcePath?: string | null;
+  messageLimit?: number;
+}): Promise<{
+  workspaceRoot: string;
+  externalWriterActive: boolean;
+  writerHint: string | null;
+  transcriptMtimeMs: number | null;
+  transcriptSizeBytes: number | null;
+  latestMessages: LocalSessionMessage[];
+  gitSnapshot: NativeWorkspaceGitSnapshot | null;
+}> {
+  return invoke('butler_workspace_external_pulse', {
+    input: {
+      workspaceRoot: input.workspaceRoot,
+      provider: input.provider ?? null,
+      sessionId: input.sessionId ?? null,
+      sourcePath: input.sourcePath ?? null,
+      messageLimit: input.messageLimit ?? 16,
+    },
+  });
 }
 
 export async function listWorkspaceFiles(

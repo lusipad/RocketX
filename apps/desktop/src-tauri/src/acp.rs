@@ -1663,6 +1663,7 @@ pub async fn acp_process_start(
         let program_host = host_path(&resolved_program);
 
         if let Some(ref auth) = native_resume {
+            crate::external_bridge::assert_no_external_cli_writer(&start_app, &auth.session_id)?;
             let root =
                 codex_profile_root(&profile).ok_or("原生交接仅支持已配置的 Codex CLI 桥接")?;
             let scope = crate::local_sessions::normalized_source_scope("codex", &root);
@@ -2235,7 +2236,35 @@ pub fn shutdown_all_acp_processes(app: &tauri::AppHandle) {
     }
 }
 
-fn pick_interactive_shell(requested: Option<&str>) -> Result<(PathBuf, Vec<String>), String> {
+pub(crate) fn active_acp_child_pids(app: &tauri::AppHandle) -> Vec<u32> {
+    let Some(state) = app.try_state::<AcpSupervisorState>() else {
+        return Vec::new();
+    };
+    let mut pids = Vec::new();
+    if let Ok(procs) = state.processes.lock() {
+        for proc in procs.values() {
+            if let Ok(mut child) = proc.child.lock() {
+                if child.try_wait().ok().flatten().is_none() {
+                    pids.push(child.id());
+                }
+            }
+        }
+    }
+    if let Ok(terms) = state.terminals.lock() {
+        for term in terms.values() {
+            if let Ok(mut child) = term.child.lock() {
+                if child.try_wait().ok().flatten().is_none() {
+                    pids.push(child.id());
+                }
+            }
+        }
+    }
+    pids
+}
+
+pub(crate) fn pick_interactive_shell(
+    requested: Option<&str>,
+) -> Result<(PathBuf, Vec<String>), String> {
     if let Some(raw) = requested.map(str::trim).filter(|s| !s.is_empty()) {
         let lower = raw.to_ascii_lowercase();
         let allowed = matches!(

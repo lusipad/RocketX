@@ -11,6 +11,7 @@ import {
   GitBranch,
   GitCompare,
   GitFork,
+  ListChecks,
   Loader2,
   Mic,
   MoreHorizontal,
@@ -87,7 +88,8 @@ import ButlerErrandInputCard from './ButlerErrandInputCard';
 import ButlerWorkPortalDock, { type PortalTab } from './ButlerWorkPortalDock';
 import { CodexArtifactLink } from './CodexArtifactPanel';
 import WorkDiffDrawer from './WorkDiffDrawer';
-import ButlerTerminalDrawer from './ButlerTerminalDrawer';
+import ButlerTerminalDrawer, { type PtyCommandSpec } from './ButlerTerminalDrawer';
+import { ExternalContinuationBanner, ExternalOpenMenu } from './ExternalContinuationBar';
 import { ButlerComposerFilePopover, ButlerComposerSlashPopover } from './ButlerComposerPopovers';
 import PiQuickOnboardingCard from './PiQuickOnboardingCard';
 import AgentComposerFeedback from './AgentComposerFeedback';
@@ -411,6 +413,7 @@ function ConversationMessage({
 }) {
   const t = useT();
   const workspaceRoot = useCodexWorkspace((state) => state.workspaceRoot);
+  const selectedModel = useCodexWorkspace((state) => state.selectedModel);
   const isAssistant = entry.role === 'assistant';
   const engineName = 'Pi';
   const [skillSaveOpen, setSkillSaveOpen] = useState(false);
@@ -460,19 +463,33 @@ function ConversationMessage({
     }
   };
 
+  const hasUserMeta = !isAssistant && (parsedUser.isPlanMode || parsedUser.recalledCount > 0);
+  const modelTag = selectedModel
+    ? selectedModel.replace(/^(deepseek|anthropic|openai|google|ollama)\//i, '')
+    : '';
+
   return (
     <article data-speaker={entry.role} className={`codex-native-message${streaming ? ' is-streaming' : ''}`}>
-      <div className="codex-native-speaker flex flex-wrap items-center gap-1.5 mb-1.5 text-xs font-semibold text-ink-2">
+      <div
+        className={
+          isAssistant || hasUserMeta
+            ? 'codex-native-speaker flex flex-wrap items-center gap-2 mb-1.5 text-xs font-medium text-ink-2'
+            : 'sr-only'
+        }
+      >
         {isAssistant ? (
           <>
-            <span className="flex h-5 w-5 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <Bot size={13} />
+            <span className="flex h-5 w-5 items-center justify-center rounded-md border border-line-strong bg-surface-4 text-ink shadow-raise">
+              <Bot size={12} aria-hidden="true" />
             </span>
-            <span>{engineName}</span>
+            <span className="font-semibold text-ink">{engineName}</span>
+            {modelTag ? (
+              <span className="font-mono text-xs font-normal text-ink-3">{modelTag}</span>
+            ) : null}
           </>
         ) : (
           <>
-            <span>{t('butler.speaker.you')}</span>
+            <span className="sr-only">{t('butler.speaker.you')}</span>
             {parsedUser.isPlanMode ? (
               <span className="rounded-full bg-primary/15 px-2 py-0.5 text-2xs font-medium text-primary">
                 {t('agent.composer.planModeActiveBadge')}
@@ -502,7 +519,7 @@ function ConversationMessage({
         <CodexGeneratedImages images={entry.generatedImages} />
       </div>
       {isAssistant && !streaming && entry.text.trim() ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="codex-native-message-actions mt-2.5 flex flex-wrap items-center gap-1">
           {!skillSaveOpen ? (
             <>
               <button
@@ -516,9 +533,9 @@ function ConversationMessage({
                     }).catch(() => {});
                   }
                 }}
-                className="inline-flex items-center gap-1 rounded-md border border-line-soft bg-surface-3 px-2 py-0.5 text-xs text-ink-3 transition hover:border-line hover:text-ink"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
               >
-                {copiedReply ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+                {copiedReply ? <Check size={12} className="text-success" /> : <Copy size={12} />}
                 <span>{t(copiedReply ? 'common.copied' : 'common.copy')}</span>
               </button>
               <ShareToRoomButton
@@ -546,9 +563,9 @@ function ConversationMessage({
                   setSkillNameDraft('');
                   setSkillSaveOpen(true);
                 }}
-                className="inline-flex items-center gap-1 rounded-md border border-line-soft bg-surface-3 px-2 py-0.5 text-xs text-ink-3 transition hover:border-primary/40 hover:text-primary"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink"
               >
-                <BookmarkPlus size={11} />
+                <BookmarkPlus size={12} />
                 <span>{t('butler.skills.saveFromMessage')}</span>
               </button>
             </>
@@ -751,6 +768,8 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
   const [portalOpen, setPortalOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [ptyCommandSpec, setPtyCommandSpec] = useState<PtyCommandSpec | null>(null);
+  const [externalWriterLocked, setExternalWriterLocked] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const memoryPaused = useButlerMemory((state) => state.memoryPaused);
   const cognitionInsights = useButlerCognition((state) => state.insights);
@@ -822,6 +841,7 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
   try { hasSavedPiConfig = localStorage.getItem(PI_CONFIGURED_STORAGE_KEY) === '1'; } catch { /* Storage may be unavailable. */ }
   const canCompose = desktopRuntime
     && Boolean(workspaceRoot)
+    && !externalWriterLocked
     && !['idle', 'connecting', 'interrupted', 'external', 'unavailable'].includes(status);
   const refreshLabel = status === 'external' ? t('butler.conversation.continueInRocketX') : t('butler.conversation.syncSession');
   const composerPlaceholder = status === 'external'
@@ -1259,7 +1279,7 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
       ) : null}
 
       <section className="butler-conversation-pane" aria-label={t('butler.conversation.paneAria')}>
-        <header className="butler-conversation-header work-first-conversation-header rcx-glass-header bg-surface-3">
+        <header className="butler-conversation-header work-first-conversation-header rcx-glass-header">
           <div className="flex items-center gap-2 min-w-0">
             {butlerSidebarCollapsed ? (
               <button
@@ -1273,6 +1293,14 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
               </button>
             ) : null}
             <h2 className="text-sm font-semibold text-ink truncate">{title}</h2>
+            {workspaceRoot ? (
+              <span
+                title={workspaceRoot}
+                className="hidden xl:inline-flex max-w-[140px] shrink-0 items-center truncate rounded-md bg-fill-1 px-2 py-0.5 font-mono text-xs text-ink-3"
+              >
+                {workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1)}
+              </span>
+            ) : null}
             {linkedCard ? (
               <button
                 type="button"
@@ -1290,51 +1318,72 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
           <div className="butler-conversation-header-actions">
             {workspaceRoot && desktopRuntime ? (
               <>
-                <button
-                  type="button"
-                  aria-pressed={terminalOpen}
-                  title={t('agent.terminal.buttonTitle')}
-                  onClick={() => setTerminalOpen((current) => !current)}
-                  className="codex-native-open-app"
-                >
-                  <Terminal size={14} aria-hidden="true" />
-                  <span>{t('agent.terminal.buttonLabel')}</span>
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={diffOpen}
-                  title={t('agent.diff.buttonTitle')}
-                  onClick={() => {
-                    setDiffOpen((current) => {
-                      const next = !current;
-                      if (next) setPortalOpen(false);
-                      return next;
-                    });
+                <div className="inline-flex shrink-0 items-center gap-0.5 rounded-lg border border-line-soft bg-fill-1 p-0.5">
+                  <button
+                    type="button"
+                    aria-pressed={terminalOpen}
+                    title={t('agent.terminal.buttonTitle')}
+                    onClick={() => setTerminalOpen((current) => !current)}
+                    className={`inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[6px] px-2.5 text-xs transition ${
+                      terminalOpen
+                        ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line'
+                        : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+                    }`}
+                  >
+                    <Terminal size={13} aria-hidden="true" />
+                    <span>{t('agent.terminal.buttonLabel')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={diffOpen}
+                    title={t('agent.diff.buttonTitle')}
+                    onClick={() => {
+                      setDiffOpen((current) => {
+                        const next = !current;
+                        if (next) setPortalOpen(false);
+                        return next;
+                      });
+                    }}
+                    className={`inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[6px] px-2.5 text-xs transition ${
+                      diffOpen
+                        ? 'bg-surface-4 font-medium text-ink shadow-raise ring-1 ring-line'
+                        : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
+                    }`}
+                  >
+                    <GitCompare size={13} aria-hidden="true" />
+                    <span>{t('agent.diff.buttonLabel')}</span>
+                    {diffSummary && diffSummary.files > 0 ? (
+                      <span className="ml-0.5 font-mono text-xs">
+                        <span className="text-success">+{diffSummary.additions}</span>
+                        /
+                        <span className="text-danger">-{diffSummary.deletions}</span>
+                      </span>
+                    ) : null}
+                  </button>
+                </div>
+                <ExternalOpenMenu
+                  workspaceRoot={workspaceRoot}
+                  provider={isPi ? 'pi' : 'codex'}
+                  sessionId={activeThreadId ?? null}
+                  onOpenInPty={() => {
+                    if (activeThreadId) {
+                      setPtyCommandSpec({
+                        id: `resume-${Date.now()}`,
+                        label: isPi ? 'Pi CLI' : 'Codex CLI',
+                        command: isPi ? 'pi' : 'codex',
+                        args: isPi ? ['--session', activeThreadId] : ['resume', activeThreadId],
+                      });
+                    }
+                    setTerminalOpen(true);
                   }}
-                  className="codex-native-open-app"
-                >
-                  <GitCompare size={14} aria-hidden="true" />
-                  <span>{t('agent.diff.buttonLabel')}</span>
-                  {diffSummary && diffSummary.files > 0 ? (
-                    <span className="ml-1 font-mono text-xs">
-                      <span className="text-success">+{diffSummary.additions}</span>
-                      /
-                      <span className="text-danger">-{diffSummary.deletions}</span>
-                    </span>
-                  ) : null}
-                </button>
+                  onOpenInCodexApp={!isPi ? () => void openInCodex() : undefined}
+                  codexAppLabel={t(status === 'external' ? 'butler.conversation.handedToCodex' : 'butler.conversation.openInCodex')}
+                />
+                <span aria-hidden="true" className="mx-1 h-3.5 w-px shrink-0 bg-line" />
               </>
             ) : null}
             <button type="button" className="codex-native-open-app" onClick={() => setButlerView('kanban')}>{t('butler.conversation.workBoard')} <ArrowUpRight size={14} aria-hidden="true" /></button>
-            <PullAiToChatButton
-              compact
-              source="butler"
-              agentKind="pi_butler"
-              agentId="pi_butler"
-              agentName={t('chat.aiParticipant.piButlerName')}
-              threadId={activeThreadId ?? undefined}
-              workspaceRoot={workspaceRoot?.trim() || undefined}
-            />
+            <span aria-hidden="true" className="mx-1 h-3.5 w-px shrink-0 bg-line" />
             <button
               ref={historyButtonRef}
               type="button"
@@ -1432,8 +1481,8 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
               <button type="button" onClick={() => void reconnectRuntime().catch((reason) => toast.error(reason, t('butler.conversation.reconnectFailed')))}>{t('butler.conversation.reconnect')}</button>
             </div>
           ) : status === 'unavailable' && messages.length === 0 ? (
-            <div className="flex h-full items-start justify-center overflow-y-auto p-6">
-              <div className="w-full max-w-xl space-y-4">
+            <div className="mx-auto flex w-full max-w-xl flex-col py-4 pb-8">
+              <div className="w-full space-y-4">
                 <section className="space-y-3 rounded-xl border border-line bg-surface-4 p-4">
                   <h1 className="font-semibold text-ink">{t('butler.conversation.unavailableTitle', { engineName })}</h1>
                   <p role="alert" className="whitespace-pre-wrap break-words text-sm text-ink-2">{error || t('butler.conversation.unavailableDesc')}</p>
@@ -1561,10 +1610,27 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
           <ButlerTerminalDrawer
             workspaceRoot={workspaceRoot}
             open={terminalOpen}
+            initialCommand={ptyCommandSpec}
+            onQuoteSelection={(selected) => {
+              const block = '```\n' + selected + '\n```';
+              setInput(input.trimEnd() ? `${input.trimEnd()}\n\n${block}\n` : `${block}\n`);
+              requestAnimationFrame(() => textareaRef.current?.focus());
+            }}
             onClose={() => setTerminalOpen(false)}
           />
         ) : null}
         <footer className="butler-conversation-footer codex-native-footer">
+          {workspaceRoot && desktopRuntime ? (
+            <ExternalContinuationBanner
+              workspaceRoot={workspaceRoot}
+              provider={isPi ? 'pi' : 'codex'}
+              sessionId={activeThreadId ?? null}
+              knownMessageIds={messages.map((m) => m.id)}
+              forceExternalMode={!isPi && status === 'external'}
+              onTakeOver={!isPi && activeThreadId ? () => refreshCodexThread() : undefined}
+              onComposerLockChange={(locked) => setExternalWriterLocked(locked)}
+            />
+          ) : null}
           <div
             className="codex-native-composer work-first-composer"
             onDragOver={(event) => {
@@ -1885,16 +1951,25 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                   title={t('agent.composer.planModeTitle')}
                   disabled={!canCompose}
                   onClick={() => setPlanMode((prev) => !prev)}
-                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition ${
+                  className={`inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border px-2 text-xs transition active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-45 ${
                     planMode
-                      ? 'border-primary bg-primary/15 text-primary font-medium'
-                      : 'border-line bg-surface-2 text-ink-3 hover:text-ink'
+                      ? 'border-primary/35 bg-primary/12 font-medium text-primary shadow-raise'
+                      : 'border-transparent bg-transparent text-ink-3 hover:bg-fill-hover hover:text-ink'
                   }`}
                 >
+                  <ListChecks size={14} aria-hidden="true" />
                   <span>{t('agent.composer.planModeLabel')}</span>
                 </button>
                 <details className="work-first-composer-settings">
-                  <summary><Settings size={14} aria-hidden="true" />{t('butler.conversation.chatSettings')}</summary>
+                  <summary
+                    aria-disabled={!canCompose}
+                    onClick={(event) => {
+                      if (!canCompose) event.preventDefault();
+                    }}
+                  >
+                    <Settings size={14} aria-hidden="true" />
+                    {t('butler.conversation.chatSettings')}
+                  </summary>
                   <div className="work-first-composer-settings-content">
                 <ComposerMenu
                   ariaLabel={t('butler.conversation.modelAria')}
@@ -1929,8 +2004,25 @@ export default function ButlerConversation({ embedded = false, workBrief }: { em
                 />
                   </div>
                 </details>
-                <details className="work-first-composer-voice" onToggle={(event) => setVoicePanelOpen(event.currentTarget.open)}>
-                  <summary><Mic size={14} aria-hidden="true" /><span>{t('butler.conversation.voice')}</span></summary>
+                <details
+                  className="work-first-composer-voice"
+                  onToggle={(event) => {
+                    if (!canCompose) {
+                      event.currentTarget.open = false;
+                      return;
+                    }
+                    setVoicePanelOpen(event.currentTarget.open);
+                  }}
+                >
+                  <summary
+                    aria-disabled={!canCompose}
+                    onClick={(event) => {
+                      if (!canCompose) event.preventDefault();
+                    }}
+                  >
+                    <Mic size={14} aria-hidden="true" />
+                    <span>{t('butler.conversation.voice')}</span>
+                  </summary>
                   <div>
                     {voicePanelOpen && <LocalVoiceControls
                       targetKey={composerKey}

@@ -56,7 +56,8 @@ import { useUI } from '../stores/ui';
 import { useWorkLedger } from '../stores/workLedger';
 import { applyComposerReplacement, detectComposerTrigger, type ActiveComposerToken } from '../lib/composerCommands';
 import { ButlerComposerFilePopover } from './ButlerComposerPopovers';
-import ButlerTerminalDrawer from './ButlerTerminalDrawer';
+import ButlerTerminalDrawer, { type PtyCommandSpec } from './ButlerTerminalDrawer';
+import { ExternalContinuationBanner, ExternalOpenMenu } from './ExternalContinuationBar';
 import ShareToRoomButton from './ShareToRoomButton';
 import PullAiToChatButton from './PullAiToChatButton';
 import WorkDiffDrawer from './WorkDiffDrawer';
@@ -278,6 +279,8 @@ export default function AcpWorkspaceSurface() {
   const [thoughtExpanded, setThoughtExpanded] = useState(true);
   const [expandedToolIds, setExpandedToolIds] = useState<Record<string, boolean>>({});
   const [acpTerminalOpen, setAcpTerminalOpen] = useState(false);
+  const [acpPtyCommandSpec, setAcpPtyCommandSpec] = useState<PtyCommandSpec | null>(null);
+  const [acpExternalLocked, setAcpExternalLocked] = useState(false);
   const acpTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [acpFileToken, setAcpFileToken] = useState<ActiveComposerToken | null>(null);
   const [acpFiles, setAcpFiles] = useState<string[]>([]);
@@ -663,7 +666,7 @@ export default function AcpWorkspaceSurface() {
   };
 
   const handleSendPrompt = async () => {
-    if (!activeSession || !connectionReady) return;
+    if (!activeSession || !connectionReady || acpExternalLocked) return;
     const request = useAgentComposerDrafts.getState().begin(composerTarget, {
       injectMemory, steer: activeSession.status === 'running',
     });
@@ -706,15 +709,15 @@ export default function AcpWorkspaceSurface() {
 
   return (
     <div className="rcx-acp-workspace flex h-full min-h-0 flex-col bg-surface-3 text-ink">
-      <header className="rcx-acp-header rcx-glass-header flex shrink-0 items-start justify-between gap-3 border-b border-line bg-surface-3 px-5 py-3">
-        <div className="rcx-acp-heading flex min-w-0 items-start gap-2.5">
+      <header className="rcx-acp-header rcx-glass-header flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-2.5">
+        <div className="rcx-acp-heading flex min-w-0 items-center gap-2.5">
           {butlerSidebarCollapsed ? (
             <button
               type="button"
               onClick={toggleButlerSidebarCollapsed}
               title={t('agent.kanban.expandSidebarTitle')}
               aria-label={t('agent.kanban.expandSidebarAria')}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition-colors hover:bg-fill-hover hover:text-ink"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-3 transition hover:bg-fill-hover hover:text-ink active:scale-[0.96]"
             >
               <PanelLeft size={16} />
             </button>
@@ -724,27 +727,27 @@ export default function AcpWorkspaceSurface() {
               {activeSession ? activeSession.title || activeSession.agentName : t('agent.acpSurface.header.fallbackTitle')}
             </h1>
             {activeSession ? (
-              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+              <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
                 <span className={`inline-flex items-center gap-1.5 ${statusBadgeMeta(activeSession.status, t).className} rounded-full border px-2 py-0.5 text-2xs font-medium`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${statusBadgeMeta(activeSession.status, t).dotClass}`} />
                   {statusBadgeMeta(activeSession.status, t).label}
                 </span>
-                <span>{activeSession.agentName}</span>
-                <span className="break-all font-mono text-xs">{activeSession.workspaceRoot}</span>
+                <span className="font-medium text-ink-2">{activeSession.agentName}</span>
+                <span className="truncate font-mono text-xs text-ink-3">{activeSession.workspaceRoot}</span>
               </div>
             ) : (
-              <p className="mt-1 text-xs text-ink-3">{t('agent.acpSurface.header.subtitle')}</p>
+              <p className="mt-0.5 text-xs text-ink-3">{t('agent.acpSurface.header.subtitle')}</p>
             )}
           </div>
         </div>
 
-        <div className="rcx-acp-header-actions flex items-center gap-2">
+        <div className="rcx-acp-header-actions flex items-center gap-1.5">
           {sessions.length > 0 ? (
             <select
               aria-label={t('agent.acpSurface.header.switchSessionAria')}
               value={activeSessionKey || ''}
               onChange={(event) => setActiveSession(event.target.value || null)}
-              className="h-8 min-w-0 max-w-44 rounded-lg border border-line bg-surface-4 px-2 text-xs text-ink outline-none focus:border-primary"
+              className="h-8 min-w-0 max-w-44 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink shadow-raise outline-none transition hover:border-line-hover focus:border-primary"
             >
               <option value="" disabled>{t('agent.acpSurface.header.selectSessionOption', { count: sessions.length })}</option>
               {sessions.map((session) => (
@@ -758,7 +761,7 @@ export default function AcpWorkspaceSurface() {
             <button
               type="button"
               onClick={() => setActiveSession(null)}
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.98]"
             >
               <Plus size={13} />
               <span>{t('agent.acpSurface.header.newSessionBtn')}</span>
@@ -769,33 +772,67 @@ export default function AcpWorkspaceSurface() {
             aria-expanded={auxiliaryPanel === 'executors'}
             aria-controls="acp-executor-management"
             onClick={() => setAuxiliaryPanel('executors')}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.98]"
           >
             <Cpu size={13} />
             <span>{t('agent.acpSurface.header.manageExecutorsBtn')}</span>
           </button>
           {activeSession && activeSession.workspaceRoot?.trim() && isTauriRuntime() ? (
             <>
-              <button
-                type="button"
-                aria-expanded={acpTerminalOpen}
-                onClick={() => setAcpTerminalOpen((p) => !p)}
-                title={t('agent.terminal.buttonTitle')}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
-              >
-                <Terminal size={13} aria-hidden="true" />
-                <span>{t('agent.terminal.buttonLabel')}</span>
-              </button>
-              <button
-                type="button"
-                aria-expanded={auxiliaryPanel === 'diff'}
-                onClick={() => setAuxiliaryPanel((p) => (p === 'diff' ? null : 'diff'))}
-                title={t('agent.diff.buttonTitle')}
-                className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
-              >
-                <GitCompare size={13} aria-hidden="true" />
-                <span>{t('agent.diff.buttonLabel')}</span>
-              </button>
+              <div className="inline-flex items-center rounded-lg border border-line bg-surface-2/85 p-0.5">
+                <button
+                  type="button"
+                  aria-expanded={acpTerminalOpen}
+                  onClick={() => setAcpTerminalOpen((p) => !p)}
+                  title={t('agent.terminal.buttonTitle')}
+                  className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs transition active:scale-[0.97] ${
+                    acpTerminalOpen
+                      ? 'bg-surface-4 font-medium text-ink shadow-raise'
+                      : 'text-ink-3 hover:text-ink'
+                  }`}
+                >
+                  <Terminal size={13} aria-hidden="true" />
+                  <span>{t('agent.terminal.buttonLabel')}</span>
+                </button>
+                <button
+                  type="button"
+                  aria-expanded={auxiliaryPanel === 'diff'}
+                  onClick={() => setAuxiliaryPanel((p) => (p === 'diff' ? null : 'diff'))}
+                  title={t('agent.diff.buttonTitle')}
+                  className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs transition active:scale-[0.97] ${
+                    auxiliaryPanel === 'diff'
+                      ? 'bg-surface-4 font-medium text-ink shadow-raise'
+                      : 'text-ink-3 hover:text-ink'
+                  }`}
+                >
+                  <GitCompare size={13} aria-hidden="true" />
+                  <span>{t('agent.diff.buttonLabel')}</span>
+                </button>
+              </div>
+              <ExternalOpenMenu
+                workspaceRoot={activeSession.workspaceRoot}
+                provider={activeSession.preset}
+                sessionId={activeSession.acpSessionId ?? activeSession.nativeSessionId ?? null}
+                onOpenInPty={() => {
+                  const sid = activeSession.nativeSessionId ?? activeSession.acpSessionId;
+                  const preset = activeSession.preset.toLowerCase();
+                  if (sid && (preset.includes('claude') || preset.includes('codex') || preset === 'pi')) {
+                    const cliBin = preset.includes('claude') ? 'claude' : preset === 'pi' ? 'pi' : 'codex';
+                    const cliArgs = preset.includes('claude')
+                      ? ['--resume', sid]
+                      : preset === 'pi'
+                        ? ['--session', sid]
+                        : ['resume', sid];
+                    setAcpPtyCommandSpec({
+                      id: `acp-pty-${Date.now()}`,
+                      label: activeSession.agentName,
+                      command: cliBin,
+                      args: cliArgs,
+                    });
+                  }
+                  setAcpTerminalOpen(true);
+                }}
+              />
             </>
           ) : null}
           {activeSession ? (
@@ -843,7 +880,7 @@ export default function AcpWorkspaceSurface() {
               aria-expanded={auxiliaryPanel === 'details'}
               aria-controls="acp-task-details"
               onClick={() => setAuxiliaryPanel('details')}
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.98]"
             >
               <PanelRight size={13} />
               <span>{t('agent.acpSurface.header.taskDetailsBtn')}</span>
@@ -853,7 +890,7 @@ export default function AcpWorkspaceSurface() {
             <button
               type="button"
               onClick={() => void cancelTurn(activeSession.sessionKey)}
-              className="inline-flex h-8 items-center gap-1 rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 text-xs font-medium text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-amber-500/35 bg-amber-500/10 px-2.5 text-xs font-medium text-amber-700 transition hover:bg-amber-500/20 active:scale-[0.98] dark:text-amber-300"
             >
               <Square size={11} />
               <span>{t('agent.acpSurface.header.interruptBtn')}</span>
@@ -863,7 +900,7 @@ export default function AcpWorkspaceSurface() {
             <button
               type="button"
               onClick={() => void stopSession(activeSession.sessionKey)}
-              className="inline-flex h-8 items-center rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 hover:bg-fill-hover"
+              className="inline-flex h-8 items-center rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.98]"
             >
               {t('agent.acpSurface.header.stopBtn')}
             </button>
@@ -1280,16 +1317,16 @@ export default function AcpWorkspaceSurface() {
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-3">
           {!activeSession ? (
-            <div className="flex-1 overflow-y-auto px-5 py-8 md:px-8">
-              <div className="mx-auto max-w-2xl space-y-6">
+            <div className="flex-1 overflow-y-auto px-5 py-7 md:px-8">
+              <div className="mx-auto max-w-[760px] space-y-5">
                 {/* 居中高工艺启动台 */}
-                <section className="rounded-2xl border border-line bg-surface-4 p-6 shadow-card">
+                <section className="rcx-machined-card rounded-2xl border border-line bg-surface-4 p-6 shadow-card">
                   <div className="flex items-start gap-3.5 border-b border-line-soft pb-4">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
-                      <Bot size={20} />
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-line-strong bg-surface-2 text-ink shadow-raise">
+                      <Bot size={18} />
                     </div>
                     <div>
-                      <h2 className="text-base font-semibold text-ink">
+                      <h2 className="text-base font-semibold tracking-tight text-ink">
                         {t('agent.acpSurface.launchpad.title')}
                       </h2>
                       <p className="mt-0.5 text-xs leading-relaxed text-ink-3">
@@ -1327,10 +1364,10 @@ export default function AcpWorkspaceSurface() {
                                   setLaunchAgentId(agent.id);
                                   setSelectedAcpAgentId(agent.id);
                                 }}
-                                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition ${
+                                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs transition active:scale-[0.98] ${
                                   selected
-                                    ? 'border-primary bg-primary/10 font-semibold text-primary shadow-raise'
-                                    : 'border-line bg-surface-2 text-ink-2 hover:border-line-hover hover:text-ink'
+                                    ? 'border-line-strong bg-surface-4 font-semibold text-ink shadow-raise ring-1 ring-line-strong'
+                                    : 'border-line bg-surface-2/80 text-ink-2 hover:border-line-hover hover:bg-surface-hover hover:text-ink'
                                 }`}
                               >
                                 <span>{agent.name}</span>
@@ -1342,7 +1379,7 @@ export default function AcpWorkspaceSurface() {
                           })}
                         </div>
                       ) : (
-                        <div className="rounded-xl border border-dashed border-line bg-surface-2 px-3 py-2.5 text-ink-3">
+                        <div className="rounded-xl border border-dashed border-line bg-surface-2/60 px-3.5 py-3 text-ink-3">
                           {t('agent.acpSurface.launchpad.noExecutorsEmpty')}
                         </div>
                       )}
@@ -1358,13 +1395,13 @@ export default function AcpWorkspaceSurface() {
                           value={workspaceRoot}
                           onChange={(e) => setWorkspaceRoot(e.target.value)}
                           placeholder={t('agent.acpSurface.launchpad.workspacePlaceholder')}
-                          className="h-9 min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-3 font-mono text-xs text-ink outline-none focus:border-primary"
+                          className="h-9 min-w-0 flex-1 rounded-xl border border-line bg-surface-2 px-3 font-mono text-xs text-ink outline-none transition hover:border-line-hover focus:border-primary"
                         />
                         {isTauriRuntime() ? (
                           <button
                             type="button"
                             onClick={() => void handlePickWorkspace()}
-                            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 transition hover:bg-fill-hover hover:text-ink"
+                            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-line bg-surface-4 px-3 text-xs font-medium text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.98]"
                           >
                             <FolderOpen size={14} />
                             <span>{t('agent.acpSurface.launchpad.browseDirBtn')}</span>
@@ -1378,7 +1415,7 @@ export default function AcpWorkspaceSurface() {
                       <label className="mb-1.5 block font-semibold text-ink-2">
                         {t('agent.acpSurface.launchpad.autonomyLabel')}
                       </label>
-                      <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-line-soft bg-surface-2 p-1">
+                      <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-line-soft bg-surface-2/90 p-1">
                         {(
                           [
                             { key: 'confirm' as const, labelKey: 'agent.acpSurface.launchpad.autonomyConfirmLabel' as const, hintKey: 'agent.acpSurface.launchpad.autonomyConfirmHint' as const },
@@ -1390,10 +1427,10 @@ export default function AcpWorkspaceSurface() {
                             key={opt.key}
                             type="button"
                             onClick={() => setAutonomyMode(opt.key)}
-                            className={`rounded-lg px-2.5 py-2 text-left transition ${
+                            className={`rounded-lg px-2.5 py-2 text-left transition active:scale-[0.985] ${
                               autonomyMode === opt.key
                                 ? 'bg-surface-4 font-semibold text-ink shadow-raise ring-1 ring-line'
-                                : 'text-ink-3 hover:text-ink'
+                                : 'text-ink-3 hover:bg-fill-hover/60 hover:text-ink'
                             }`}
                           >
                             <div className="text-xs font-medium">{t(opt.labelKey)}</div>
@@ -1412,7 +1449,7 @@ export default function AcpWorkspaceSurface() {
                         <select
                           value={linkedTodoId}
                           onChange={(e) => setLinkedTodoId(e.target.value)}
-                          className="h-9 w-full rounded-xl border border-line bg-surface-2 px-3 text-xs text-ink outline-none focus:border-primary"
+                          className="h-9 w-full rounded-xl border border-line bg-surface-2 px-3 text-xs text-ink outline-none transition hover:border-line-hover focus:border-primary"
                         >
                           <option value="">{t('agent.acpSurface.launchpad.noLinkedCardOption')}</option>
                           {cards.slice(0, 40).map((card) => (
@@ -1429,7 +1466,7 @@ export default function AcpWorkspaceSurface() {
                           <button
                             type="button"
                             onClick={() => setShowResumeInput((v) => !v)}
-                            className="inline-flex items-center gap-1 text-primary hover:underline"
+                            className="inline-flex items-center gap-1 text-ink-2 transition hover:text-ink hover:underline"
                           >
                             <History size={12} />
                             <span>{showResumeInput ? t('agent.acpSurface.launchpad.switchToNewSession') : t('agent.acpSurface.launchpad.resumeExistingSession')}</span>
@@ -1440,10 +1477,10 @@ export default function AcpWorkspaceSurface() {
                             value={resumeSessionId}
                             onChange={(e) => setResumeSessionId(e.target.value)}
                             placeholder={t('agent.acpSurface.launchpad.resumeIdPlaceholder')}
-                            className="h-9 w-full rounded-xl border border-line bg-surface-2 px-3 font-mono text-xs text-ink outline-none focus:border-primary"
+                            className="h-9 w-full rounded-xl border border-line bg-surface-2 px-3 font-mono text-xs text-ink outline-none transition hover:border-line-hover focus:border-primary"
                           />
                         ) : (
-                          <div className="flex h-9 items-center rounded-xl border border-line-soft bg-surface-2 px-3 text-ink-3">
+                          <div className="flex h-9 items-center rounded-xl border border-line-soft bg-surface-2/80 px-3 text-ink-2">
                             {t('agent.acpSurface.launchpad.cleanSessionHint')}
                           </div>
                         )}
@@ -1456,7 +1493,7 @@ export default function AcpWorkspaceSurface() {
                         type="button"
                         disabled={launching || !launchAgentId}
                         onClick={() => void handleLaunchSession()}
-                        className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-xs font-semibold text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
+                        className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-ink px-4 text-xs font-semibold text-surface-1 shadow-raise transition hover:opacity-90 active:scale-[0.99] disabled:bg-fill-2 disabled:text-ink-3 disabled:shadow-none"
                       >
                         {launching ? (
                           <Loader2 size={15} className="animate-spin" />
@@ -1470,14 +1507,14 @@ export default function AcpWorkspaceSurface() {
                 </section>
 
                 {/* 本机历史会话：Antigravity / Codex / Claude 跨工作区发现与一键恢复 / 转入看板 */}
-                <section className="rounded-2xl border border-line bg-surface-4 p-5 shadow-raise">
+                <section className="rcx-machined-card rounded-2xl border border-line bg-surface-4 p-5 shadow-raise">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2.5">
                       <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink">
-                        <History size={14} className="text-primary" />
+                        <History size={14} className="text-ink-2" />
                         {t('agent.acpSurface.localHistory.heading', { count: externalLocalSessions.length })}
                       </span>
-                      <div className="flex flex-wrap items-center gap-1">
+                      <div className="flex flex-wrap items-center gap-0.5 rounded-lg border border-line-soft bg-surface-2 p-0.5">
                         {(
                           [
                             { key: 'all', label: t('agent.acpSurface.launchpad.filterAll') },
@@ -1490,10 +1527,10 @@ export default function AcpWorkspaceSurface() {
                             key={tab.key}
                             type="button"
                             onClick={() => setHistoryProviderFilter(tab.key)}
-                            className={`rounded-full px-2 py-0.5 text-2xs font-medium transition ${
+                            className={`rounded-full px-2.5 py-0.5 text-2xs font-medium transition active:scale-[0.97] ${
                               historyProviderFilter === tab.key
-                                ? 'bg-primary text-white'
-                                : 'bg-fill-2 text-ink-3 hover:text-ink'
+                                ? 'bg-surface-4 text-ink shadow-raise ring-1 ring-line'
+                                : 'text-ink-3 hover:text-ink'
                             }`}
                           >
                             {tab.label}
@@ -1505,14 +1542,14 @@ export default function AcpWorkspaceSurface() {
                     <button
                       type="button"
                       onClick={() => setButlerView('kanban')}
-                      className="text-xs font-medium text-primary hover:underline"
+                      className="text-xs font-medium text-ink-2 transition hover:text-ink hover:underline"
                     >
                       {t('agent.acpSurface.launchpad.goKanbanBtn')}
                     </button>
                   </div>
 
                   {filteredExternalSessions.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-line bg-surface-3/60 px-3 py-4 text-center text-xs text-ink-3">
+                    <div className="rounded-xl border border-dashed border-line bg-surface-2/50 px-3 py-5 text-center text-xs text-ink-3">
                       {discoveringLocalSessions
                         ? t('agent.acpSurface.launchpad.scanningHistory')
                         : t('agent.acpSurface.launchpad.noMatchingHistory')}
@@ -1524,11 +1561,11 @@ export default function AcpWorkspaceSurface() {
                         return (
                           <div
                             key={`${item.provider}:${item.nativeSessionId}`}
-                            className="flex flex-col justify-between gap-2 rounded-xl border border-line bg-surface-3 p-3 sm:flex-row sm:items-center"
+                            className="flex flex-col justify-between gap-2 rounded-xl border border-line bg-surface-3/85 p-3 transition hover:border-line-hover hover:bg-surface-4 hover:shadow-raise sm:flex-row sm:items-center"
                           >
                             <div className="min-w-0 flex-1 space-y-1">
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary">
+                                <span className="rounded-full border border-line bg-surface-2 px-2 py-0.5 text-2xs font-medium text-ink-2">
                                   {providerDisplayLabel(item.provider)}
                                 </span>
                                 {item.runtimeStatus === 'running' && (
@@ -1540,7 +1577,7 @@ export default function AcpWorkspaceSurface() {
                                   {item.title}
                                 </span>
                               </div>
-                              <div className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
+                              <div className="flex flex-wrap items-center gap-2 text-xs tabular-nums text-ink-3">
                                 <span className="font-mono">
                                   {basenameOfPath(item.workspaceRoot, t)}
                                 </span>
@@ -1559,7 +1596,7 @@ export default function AcpWorkspaceSurface() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void handleResumeDiscoveredSession(item)}
-                                className="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
+                                className="inline-flex h-7 items-center gap-1 rounded-lg bg-ink px-2.5 text-xs font-medium text-surface-1 shadow-raise transition hover:opacity-90 active:scale-[0.97] disabled:opacity-50"
                               >
                                 {busy ? (
                                   <Loader2 size={12} className="animate-spin" />
@@ -1572,7 +1609,7 @@ export default function AcpWorkspaceSurface() {
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void handlePromoteDiscoveredSession(item)}
-                                className="inline-flex items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 py-1.5 text-xs font-medium text-ink-2 shadow-raise transition hover:bg-fill-hover hover:text-ink disabled:opacity-50"
+                                className="inline-flex h-7 items-center gap-1 rounded-lg border border-line bg-surface-4 px-2.5 text-xs font-medium text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.97] disabled:opacity-50"
                               >
                                 <Plus size={12} />
                                 <span>{t('agent.acpSurface.launchpad.promoteToBoardBtn')}</span>
@@ -1598,7 +1635,7 @@ export default function AcpWorkspaceSurface() {
                         type="button"
                         title={tpl.description}
                         onClick={() => applyPresetTemplate(tpl.preset)}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-4 px-3 py-1 text-xs text-ink-2 shadow-raise transition hover:border-primary/40 hover:text-ink"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface-4 px-3 py-1 text-xs text-ink-2 shadow-raise transition hover:border-line-hover hover:bg-surface-hover hover:text-ink active:scale-[0.98]"
                       >
                         <span className="font-medium text-ink">+ {tpl.name}</span>
                         {tpl.transportLabel ? (
@@ -1622,7 +1659,7 @@ export default function AcpWorkspaceSurface() {
                       {activeSession.pendingPermissions.map((req) => (
                         <div
                           key={req.requestId}
-                          className="mx-auto max-w-3xl rounded-2xl border border-amber-500/35 bg-surface-4 p-3.5 shadow-card"
+                          className="mx-auto max-w-[760px] rounded-2xl border border-amber-500/35 bg-surface-4 p-3.5 shadow-card"
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
@@ -1666,9 +1703,9 @@ export default function AcpWorkspaceSurface() {
                                       opt.optionId,
                                     )
                                   }
-                                  className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                                  className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition active:scale-[0.98] ${
                                     isAllow
-                                      ? 'bg-primary text-white shadow-raise hover:bg-primary-hover'
+                                      ? 'bg-ink text-surface-1 shadow-raise hover:opacity-90'
                                       : 'border border-line bg-surface-2 text-ink-2 hover:bg-fill-hover'
                                   }`}
                                 >
@@ -1686,7 +1723,7 @@ export default function AcpWorkspaceSurface() {
                                   null,
                                 )
                               }
-                              className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-700 hover:bg-rose-500/20 dark:text-rose-300"
+                              className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-700 transition hover:bg-rose-500/20 active:scale-[0.98] dark:text-rose-300"
                             >
                               {t('agent.acpSurface.permission.declineAndCancel')}
                             </button>
@@ -1697,12 +1734,12 @@ export default function AcpWorkspaceSurface() {
                   ) : null}
 
                   {/* 消息滚动区 */}
-                  <div ref={transcriptRef} onScroll={onTranscriptScroll} role="log" aria-label={t('agent.acpSurface.transcript.aria')} className="min-h-0 flex-1 overflow-y-auto px-5 py-6">
-                    <div className="mx-auto max-w-3xl space-y-4">
+                  <div ref={transcriptRef} onScroll={onTranscriptScroll} role="log" aria-label={t('agent.acpSurface.transcript.aria')} className="min-h-0 flex-1 overflow-y-auto px-6 py-7">
+                    <div className="mx-auto max-w-[760px] space-y-6">
                       {activeSession.messages.length === 0 &&
                       !activeSession.streamingText &&
                       !activeSession.streamingThought ? (
-                        <div className="rounded-2xl border border-dashed border-line bg-surface-4/60 p-6 text-center text-xs text-ink-3">
+                        <div className="rounded-2xl border border-dashed border-line bg-surface-4/50 p-6 text-center text-xs text-ink-3">
                           <div className="mb-1 text-sm font-semibold text-ink">
                             {t('agent.acpSurface.transcript.connectedReady', { name: activeSession.agentName })}
                           </div>
@@ -1713,53 +1750,54 @@ export default function AcpWorkspaceSurface() {
                       ) : null}
 
                       {activeSession.messages.map((msg) => (
-                        <div
-                          key={msg.id}
-                          className={`rounded-2xl border p-4 ${
-                            msg.role === 'user'
-                              ? 'ml-10 border-primary/25 bg-primary/8'
-                              : 'mr-4 border-line bg-surface-4 shadow-raise'
-                          }`}
-                        >
-                          <div className="mb-1.5 flex items-center justify-between gap-2 text-xs text-ink-3">
-                            <span className="font-semibold text-ink-2">
-                              {msg.role === 'user' ? t('agent.acpSurface.transcript.meSpeaker') : activeSession.agentName}
-                            </span>
-                            <span>{formatSessionTime(msg.timestamp, locale)}</span>
-                          </div>
-
-                          {msg.thoughts ? (
-                            <details className="mb-2.5 rounded-xl border border-line-soft bg-surface-2 px-3 py-2 text-xs text-ink-3">
-                              <summary className="cursor-pointer font-medium text-ink-2">
-                                {t('agent.acpSurface.transcript.reasoningSummary')}
-                              </summary>
-                              <pre className="mt-1.5 whitespace-pre-wrap font-sans text-xs leading-relaxed text-ink-3">
-                                {msg.thoughts}
-                              </pre>
-                            </details>
-                          ) : null}
-
-                          {msg.role === 'assistant' ? (
-                            <div className="prose prose-sm max-w-none text-xs leading-relaxed text-ink dark:prose-invert">
-                              {renderMarkdownDoc(msg.text || '')}
-                            </div>
-                          ) : (
-                            <div className="whitespace-pre-wrap text-xs leading-relaxed text-ink">
+                        msg.role === 'user' ? (
+                          <div key={msg.id} className="flex flex-col items-end">
+                            <div className="w-fit max-w-[78%] rounded-[14px_14px_4px_14px] border border-line bg-bubble-mine px-3.5 py-2.5 text-sm leading-relaxed text-ink shadow-raise whitespace-pre-wrap">
                               {msg.text}
                             </div>
-                          )}
-                        </div>
+                            <span className="mt-1 px-1 text-xs tabular-nums text-ink-3 opacity-75">
+                              {formatSessionTime(msg.timestamp, locale)}
+                            </span>
+                          </div>
+                        ) : (
+                          <div key={msg.id} className="space-y-2">
+                            <div className="flex items-center justify-between gap-2 text-xs text-ink-3">
+                              <span className="inline-flex items-center gap-2 font-medium text-ink">
+                                <span className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-line bg-surface-4 text-ink-2">
+                                  <Bot size={12} aria-hidden="true" />
+                                </span>
+                                <span>{activeSession.agentName}</span>
+                              </span>
+                              <span className="tabular-nums">{formatSessionTime(msg.timestamp, locale)}</span>
+                            </div>
+
+                            {msg.thoughts ? (
+                              <details className="rounded-xl border border-line bg-surface-2/70 px-3 py-2 text-xs text-ink-3">
+                                <summary className="cursor-pointer font-medium text-ink-2">
+                                  {t('agent.acpSurface.transcript.reasoningSummary')}
+                                </summary>
+                                <pre className="mt-1.5 whitespace-pre-wrap font-sans text-xs leading-relaxed text-ink-3">
+                                  {msg.thoughts}
+                                </pre>
+                              </details>
+                            ) : null}
+
+                            <div className="prose prose-sm max-w-none text-sm leading-[1.7] text-ink dark:prose-invert">
+                              {renderMarkdownDoc(msg.text || '')}
+                            </div>
+                          </div>
+                        )
                       ))}
 
                       {activeSession.streamingThought ? (
-                        <div className="mr-4 rounded-2xl border border-line bg-surface-4 p-3.5 shadow-raise">
+                        <div className="rounded-xl border border-line bg-surface-2/80 p-3.5">
                           <button
                             type="button"
                             onClick={() => setThoughtExpanded((v) => !v)}
                             className="flex w-full items-center justify-between text-xs font-medium text-ink-2"
                           >
                             <span className="inline-flex items-center gap-1.5">
-                              <Sparkles size={13} className="text-primary" />
+                              <Sparkles size={13} className="text-ink-2" />
                               {t('agent.acpSurface.transcript.liveReasoning')}
                             </span>
                             {thoughtExpanded ? (
@@ -1777,12 +1815,12 @@ export default function AcpWorkspaceSurface() {
                       ) : null}
 
                       {activeSession.streamingText ? (
-                        <div className="mr-4 rounded-2xl border border-primary/30 bg-surface-4 p-4 shadow-card">
-                          <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-primary">
-                            <Loader2 size={12} className="animate-spin" />
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 text-xs font-medium text-ink-2">
+                            <Loader2 size={12} className="animate-spin text-ink-2" />
                             <span>{t('agent.acpSurface.transcript.generating', { name: activeSession.agentName })}</span>
                           </div>
-                          <div className="prose prose-sm max-w-none text-xs leading-relaxed text-ink dark:prose-invert">
+                          <div className="prose prose-sm max-w-none text-sm leading-[1.7] text-ink dark:prose-invert">
                             {activeStreamingDoc}
                           </div>
                         </div>
@@ -1795,10 +1833,27 @@ export default function AcpWorkspaceSurface() {
                     <ButlerTerminalDrawer
                       workspaceRoot={activeSession.workspaceRoot}
                       open={acpTerminalOpen}
+                      initialCommand={acpPtyCommandSpec}
+                      onQuoteSelection={(selected) => {
+                        const block = '```\n' + selected + '\n```';
+                        setComposerText((prev) => (prev.trimEnd() ? `${prev.trimEnd()}\n\n${block}\n` : `${block}\n`));
+                        requestAnimationFrame(() => acpTextareaRef.current?.focus());
+                      }}
                       onClose={() => setAcpTerminalOpen(false)}
                     />
                   ) : null}
-                  <div className="rcx-acp-composer shrink-0 px-5 pb-4 pt-2">
+                  <div className="rcx-acp-composer shrink-0 px-6 pb-[18px] pt-2.5">
+                    {activeSession.workspaceRoot?.trim() && isTauriRuntime() ? (
+                      <div className="mx-auto max-w-[760px]">
+                        <ExternalContinuationBanner
+                          workspaceRoot={activeSession.workspaceRoot}
+                          provider={activeSession.preset.includes('claude') ? 'claude' : activeSession.preset.includes('codex') ? 'codex' : activeSession.preset}
+                          sessionId={activeSession.nativeSessionId ?? activeSession.acpSessionId ?? null}
+                          knownMessageIds={activeSession.messages.map((m) => m.id)}
+                          onComposerLockChange={(locked) => setAcpExternalLocked(locked)}
+                        />
+                      </div>
+                    ) : null}
                     <div
                       onDragOver={(e) => {
                         if (e.dataTransfer.types.includes('Files')) e.preventDefault();
@@ -1810,67 +1865,69 @@ export default function AcpWorkspaceSurface() {
                         const refs = dropped.map((f) => `@${f.name}`).join(' ');
                         setComposerText((prev) => (prev.trimEnd() ? `${prev.trimEnd()} ${refs} ` : `${refs} `));
                       }}
-                      className="mx-auto max-w-3xl rounded-2xl border border-line bg-surface-4 p-3 shadow-card"
+                      className="rcx-acp-composer-shell mx-auto max-w-[760px]"
                     >
-                      <AgentComposerFeedback draft={draft} onRetry={retryRequest} />
-                      {activeSession.error && <p role="alert" className="mb-2 whitespace-pre-wrap break-words text-xs text-danger">{activeSession.error}</p>}
-                      {!connectionReady && <p role="status" className="mb-2 text-xs text-ink-3">{t('agent.acpSurface.composer.disconnectedDraftHint')}</p>}
-                      {activeSession.queuedPrompts && activeSession.queuedPrompts.length > 0 ? (
-                        <div className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-xs">
-                          <div className="mb-1 font-medium text-ink-2">
-                            {t('agent.acpSurface.composer.queuedCount', { count: activeSession.queuedPrompts.length })}
+                      <div className="px-[18px] pt-2.5 empty:hidden">
+                        <AgentComposerFeedback draft={draft} onRetry={retryRequest} />
+                        {activeSession.error && <p role="alert" className="mb-2 whitespace-pre-wrap break-words text-xs text-danger">{activeSession.error}</p>}
+                        {!connectionReady && <p role="status" className="mb-2 text-xs text-ink-3">{t('agent.acpSurface.composer.disconnectedDraftHint')}</p>}
+                        {activeSession.queuedPrompts && activeSession.queuedPrompts.length > 0 ? (
+                          <div className="mb-2 rounded-lg border border-line bg-surface-2 px-2.5 py-1.5 text-xs">
+                            <div className="mb-1 font-medium text-ink-2">
+                              {t('agent.acpSurface.composer.queuedCount', { count: activeSession.queuedPrompts.length })}
+                            </div>
+                            <div className="space-y-1">
+                              {activeSession.queuedPrompts.map((q) => (
+                                <div key={q.id} className="flex items-center justify-between gap-2 text-ink-3">
+                                  <span className="truncate">{q.text}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeQueuedPrompt(activeSession.sessionKey, q.id)}
+                                    className="shrink-0 text-primary hover:underline"
+                                  >
+                                    {t('agent.acpSurface.composer.removeQueued')}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <div className="space-y-1">
-                            {activeSession.queuedPrompts.map((q) => (
-                              <div key={q.id} className="flex items-center justify-between gap-2 text-ink-3">
-                                <span className="truncate">{q.text}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => removeQueuedPrompt(activeSession.sessionKey, q.id)}
-                                  className="shrink-0 text-primary hover:underline"
-                                >
-                                  {t('agent.acpSurface.composer.removeQueued')}
-                                </button>
-                              </div>
+                        ) : null}
+                        <LocalVoiceControls
+                          targetKey={composerKey}
+                          disabled={!draft.loaded || activeSession.status === 'stopped'}
+                          replyText={[...activeSession.messages].reverse().find((message) => message.role === 'assistant')?.text ?? ''}
+                          onTranscript={(text) => {
+                            const current = useAgentComposerDrafts.getState().drafts[composerKey]?.text ?? '';
+                            useAgentComposerDrafts.getState().edit(composerKey, { text: [current, text].filter(Boolean).join('\n') });
+                          }}
+                        />
+                        <ButlerComposerFilePopover
+                          open={acpFileToken?.kind === 'file'}
+                          loading={acpFilesLoading}
+                          files={acpFiles}
+                          activeIndex={acpFileIdx}
+                          onSelect={applyAcpFileSelection}
+                        />
+                        {activeSession.availableCommands.length > 0 ? (
+                          <div className="mb-1.5 flex flex-wrap gap-1.5">
+                            {activeSession.availableCommands.slice(0, 8).map((cmd) => (
+                              <button
+                                key={cmd.name}
+                                type="button"
+                                title={cmd.description}
+                                onClick={() =>
+                                  setComposerText((prev) =>
+                                    prev ? `${prev} /${cmd.name} ` : `/${cmd.name} `,
+                                  )
+                                }
+                                className="rounded-full border border-line bg-surface-2/80 px-2 py-0.5 font-mono text-2xs text-ink-2 transition hover:border-line-hover hover:text-ink"
+                              >
+                                /{cmd.name}
+                              </button>
                             ))}
                           </div>
-                        </div>
-                      ) : null}
-                      <LocalVoiceControls
-                        targetKey={composerKey}
-                        disabled={!draft.loaded || activeSession.status === 'stopped'}
-                        replyText={[...activeSession.messages].reverse().find((message) => message.role === 'assistant')?.text ?? ''}
-                        onTranscript={(text) => {
-                          const current = useAgentComposerDrafts.getState().drafts[composerKey]?.text ?? '';
-                          useAgentComposerDrafts.getState().edit(composerKey, { text: [current, text].filter(Boolean).join('\n') });
-                        }}
-                      />
-                      <ButlerComposerFilePopover
-                        open={acpFileToken?.kind === 'file'}
-                        loading={acpFilesLoading}
-                        files={acpFiles}
-                        activeIndex={acpFileIdx}
-                        onSelect={applyAcpFileSelection}
-                      />
-                      {activeSession.availableCommands.length > 0 ? (
-                        <div className="mb-2 flex flex-wrap gap-1.5">
-                          {activeSession.availableCommands.slice(0, 8).map((cmd) => (
-                            <button
-                              key={cmd.name}
-                              type="button"
-                              title={cmd.description}
-                              onClick={() =>
-                                setComposerText((prev) =>
-                                  prev ? `${prev} /${cmd.name} ` : `/${cmd.name} `,
-                                )
-                              }
-                              className="rounded-full border border-line bg-surface-2 px-2 py-0.5 font-mono text-2xs text-ink-2 hover:border-primary/40 hover:text-ink"
-                            >
-                              /{cmd.name}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
+                        ) : null}
+                      </div>
 
                       <textarea
                         ref={acpTextareaRef}
@@ -1923,19 +1980,24 @@ export default function AcpWorkspaceSurface() {
                             ? t('agent.acpSurface.composer.placeholderSteer')
                             : t('agent.acpSurface.composer.placeholderIdle')
                         }
-                        className="w-full resize-none rounded-xl border border-line-soft bg-surface-2 px-3 py-2 text-xs text-ink outline-none focus:border-primary"
+                        className="block w-full resize-none bg-transparent px-[18px] pt-3 pb-2 text-sm leading-relaxed text-ink placeholder:text-ink-3 outline-none"
                       />
 
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="flex items-center gap-1.5 text-xs text-ink-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-2.5 pt-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <label className={`inline-flex h-[30px] cursor-pointer items-center gap-1.5 rounded-[7px] border px-2 text-xs transition select-none ${
+                            injectMemory
+                              ? 'border-line bg-fill-1 text-ink-2'
+                              : 'border-transparent text-ink-3 hover:bg-fill-hover hover:text-ink'
+                          }`}>
                             <input
                               type="checkbox"
                               checked={injectMemory}
                               onChange={(e) => setInjectMemory(e.target.checked)}
-                              className="rounded border-line"
+                              className="sr-only"
                             />
-                            {t('agent.acpSurface.composer.recallMemory')}
+                            <span className={`h-1.5 w-1.5 rounded-full transition ${injectMemory ? 'bg-primary' : 'bg-ink-4'}`} aria-hidden="true" />
+                            <span>{t('agent.acpSurface.composer.recallMemory')}</span>
                           </label>
                           {activeSession.models && activeSession.models.availableModels.length > 0 ? (
                             <select
@@ -1948,7 +2010,7 @@ export default function AcpWorkspaceSurface() {
                                   .then(() => toast.success(t('agent.acpSurface.composer.modelUpdated', { model: modelId })))
                                   .catch((err) => toast.error(err));
                               }}
-                              className="h-7 rounded-lg border border-line bg-surface-2 px-2 text-xs text-ink outline-none focus:border-primary"
+                              className="h-[30px] rounded-[7px] border border-transparent bg-transparent px-2 text-xs text-ink-2 outline-none transition hover:bg-fill-hover hover:text-ink focus:border-line"
                             >
                               {activeSession.models.availableModels.map((m) => (
                                 <option key={m.modelId} value={m.modelId}>{m.name || m.modelId}</option>
@@ -1960,12 +2022,17 @@ export default function AcpWorkspaceSurface() {
                           {activeSession.status === 'running' ? (
                             <button
                               type="button"
-                              disabled={!draft.loaded || !composerText.trim() || !connectionReady}
+                              disabled={
+                                !draft.loaded ||
+                                !composerText.trim() ||
+                                !connectionReady ||
+                                acpExternalLocked
+                              }
                               onClick={() => {
                                 enqueuePrompt(activeSession.sessionKey, composerText);
                                 setComposerText('');
                               }}
-                              className="inline-flex h-8 items-center rounded-xl border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 hover:bg-fill-hover hover:text-ink disabled:opacity-50"
+                              className="inline-flex h-[30px] items-center rounded-[8px] border border-line bg-surface-2 px-3 text-xs font-medium text-ink-2 transition hover:border-line-hover hover:bg-fill-hover hover:text-ink active:scale-[0.97] disabled:opacity-45"
                             >
                               {t('agent.acpSurface.composer.enqueueBtn')}
                             </button>
@@ -1976,10 +2043,11 @@ export default function AcpWorkspaceSurface() {
                               sending ||
                               !draft.loaded ||
                               !composerText.trim() ||
-                              !connectionReady
+                              !connectionReady ||
+                              acpExternalLocked
                             }
                             onClick={() => void handleSendPrompt()}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover disabled:opacity-50"
+                            className="inline-flex h-[30px] items-center gap-1.5 rounded-[9px] bg-ink px-3.5 text-xs font-medium text-surface-1 shadow-raise transition hover:opacity-90 active:scale-[0.97] disabled:bg-fill-2 disabled:text-ink-3 disabled:shadow-none disabled:opacity-75"
                           >
                             {sending ? (
                               <Loader2 size={13} className="animate-spin" />

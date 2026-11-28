@@ -124,6 +124,10 @@ pub struct WorkspaceGitSnapshot {
     pub dirty_files: Vec<String>,
     pub diff_stat: Option<String>,
     pub recent_commits: Vec<String>,
+    #[serde(default)]
+    pub unpushed_commits: u32,
+    #[serde(default)]
+    pub has_untracked: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -346,6 +350,99 @@ fn repo_key_hash(top_level: &Path) -> String {
         .collect::<String>()
 }
 
+fn resolve_qualified_base_ref(top_level: &Path, raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "HEAD" {
+        return Ok("HEAD".to_string());
+    }
+    if trimmed.starts_with("refs/heads/") || trimmed.starts_with("refs/remotes/") {
+        let stripped = trimmed
+            .strip_prefix("refs/heads/")
+            .or_else(|| trimmed.strip_prefix("refs/remotes/"))
+            .unwrap_or(trimmed);
+        validate_branch_name(stripped)?;
+        if run_git(top_level, &["show-ref", "--verify", "--quiet", trimmed]).is_ok() {
+            return Ok(trimmed.to_string());
+        }
+        return Err(format!("基线引用不存在：{trimmed}"));
+    }
+
+    let valid = validate_branch_name(trimmed)?;
+    for candidate in [
+        format!("refs/heads/{valid}"),
+        format!("refs/remotes/{valid}"),
+        format!("refs/remotes/origin/{valid}"),
+    ] {
+        if run_git(top_level, &["show-ref", "--verify", "--quiet", &candidate]).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    let commit_spec = format!("{valid}^{{commit}}");
+    if run_git(
+        top_level,
+        &["rev-parse", "--verify", "--quiet", &commit_spec],
+    )
+    .is_ok()
+    {
+        return Ok(valid);
+    }
+    Err(format!("基线分支或提交不存在：{valid}"))
+}
+
+fn count_unpushed_commits_sync(ws: &Path, branch: Option<&str>) -> u32 {
+    if let Ok(raw) = run_git(ws, &["rev-list", "--count", "@{upstream}..HEAD"]) {
+        if let Ok(count) = raw.trim().parse::<u32>() {
+            return count;
+        }
+    }
+
+    let mut base_candidates: Vec<String> = Vec::new();
+    if let Some(branch_name) = branch.filter(|b| !b.trim().is_empty()) {
+        let cfg_key = format!("branch.{branch_name}.rocketxBase");
+        if let Ok(base_cfg) = run_git(ws, &["config", "--get", &cfg_key]) {
+            let trimmed = base_cfg.trim();
+            if !trimmed.is_empty() && trimmed != "HEAD" {
+                base_candidates.push(trimmed.to_string());
+            }
+        }
+        if let Ok(origin_head) = run_git(ws, &["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]) {
+            let trimmed = origin_head.trim();
+            if !trimmed.is_empty() {
+                base_candidates.push(trimmed.to_string());
+            }
+        }
+        for fallback in [
+            "refs/remotes/origin/main",
+            "refs/remotes/origin/master",
+            "refs/heads/main",
+            "refs/heads/master",
+        ] {
+            if fallback != format!("refs/heads/{branch_name}") {
+                base_candidates.push(fallback.to_string());
+            }
+        }
+
+        for candidate in base_candidates {
+            let commit_spec = format!("{candidate}^{{commit}}");
+            if run_git(ws, &["rev-parse", "--verify", "--quiet", &commit_spec]).is_ok() {
+                let range = format!("{candidate}..HEAD");
+                if let Ok(raw) = run_git(ws, &["rev-list", "--count", &range]) {
+                    if let Ok(count) = raw.trim().parse::<u32>() {
+                        return count;
+                    }
+                }
+            }
+        }
+        return 0;
+    }
+
+    // Detached HEAD: count commits not reachable from any branch
+    run_git(ws, &["rev-list", "--count", "HEAD", "--not", "--branches"])
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .unwrap_or(0)
+}
+
 pub(crate) fn inspect_workspace_git_sync(
     workspace_root: &Path,
 ) -> Result<WorkspaceGitSnapshot, String> {
@@ -381,6 +478,12 @@ pub(crate) fn inspect_workspace_git_sync(
         .take(50)
         .map(str::to_string)
         .collect::<Vec<_>>();
+    let has_untracked = dirty_files.iter().any(|line| line.starts_with("??"));
+    let unpushed_commits = if head_sha.is_some() {
+        count_unpushed_commits_sync(&canonical_ws, branch.as_deref())
+    } else {
+        0
+    };
 
     let diff_stat = run_git(&canonical_ws, &["diff", "--stat"])
         .ok()
@@ -405,6 +508,8 @@ pub(crate) fn inspect_workspace_git_sync(
         dirty_files,
         diff_stat,
         recent_commits,
+        unpushed_commits,
+        has_untracked,
     })
 }
 
@@ -464,24 +569,47 @@ pub(crate) fn prepare_worktree_in_root(
     .is_ok();
 
     let target_str = host_path(&target_dir);
+    let mut recorded_base: Option<String> = None;
     if branch_exists {
         run_git(&top_level, &["worktree", "add", &target_str, &branch])?;
     } else {
-        let base_ref = input
+        let raw_base = input
             .base_ref
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("HEAD");
-        validate_branch_name(base_ref)?;
+        let qualified_base = resolve_qualified_base_ref(&top_level, raw_base)?;
         run_git(
             &top_level,
-            &["worktree", "add", "-b", &branch, &target_str, base_ref],
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch,
+                &target_str,
+                &qualified_base,
+            ],
         )?;
+        recorded_base = Some(qualified_base);
     }
 
     let canonical_target = target_dir.canonicalize().unwrap_or(target_dir);
     let head_sha = run_git(&canonical_target, &["rev-parse", "HEAD"])?;
+    if let Some(base_ref) = recorded_base {
+        let _ = run_git(
+            &top_level,
+            &["config", &format!("branch.{branch}.rocketxBase"), &base_ref],
+        );
+        let _ = run_git(
+            &top_level,
+            &[
+                "config",
+                &format!("branch.{branch}.rocketxBaseSha"),
+                &head_sha,
+            ],
+        );
+    }
 
     Ok(ManagedWorktreeInfo {
         worktree_path: host_path(&canonical_target),
@@ -496,6 +624,7 @@ pub(crate) fn remove_worktree_in_root(
     managed_base_dir: &Path,
     repo_root: &str,
     worktree_path: &str,
+    force: bool,
 ) -> Result<(), String> {
     let canonical_base = managed_base_dir
         .canonicalize()
@@ -513,7 +642,24 @@ pub(crate) fn remove_worktree_in_root(
         return Err("源仓库目录不存在".to_string());
     }
     let target_str = host_path(&target);
-    run_git(&repo_path, &["worktree", "remove", "--force", &target_str])?;
+    if !force {
+        let snap = inspect_workspace_git_sync(&target)?;
+        if !snap.dirty_files.is_empty() || snap.has_untracked {
+            return Err(
+                "安全门禁拦截：该 Worktree 仍有未提交或未跟踪改动，请先提交后再清理（或使用强制清理）"
+                    .to_string(),
+            );
+        }
+        if snap.unpushed_commits > 0 {
+            return Err(format!(
+                "安全门禁拦截：该 Worktree 仍有 {} 个未推送本地提交，请先推送后再清理",
+                snap.unpushed_commits
+            ));
+        }
+        run_git(&repo_path, &["worktree", "remove", &target_str])?;
+    } else {
+        run_git(&repo_path, &["worktree", "remove", "--force", &target_str])?;
+    }
     let _ = run_git(&repo_path, &["worktree", "prune"]);
     Ok(())
 }
@@ -549,14 +695,23 @@ pub async fn butler_worktree_remove(
     app: tauri::AppHandle,
     repo_root: String,
     worktree_path: String,
+    force: Option<bool>,
 ) -> Result<(), String> {
+    let force_remove = force.unwrap_or(false);
+    if !force_remove
+        && crate::pty_terminal::has_live_pty_in_workspace(&app, Path::new(worktree_path.trim()))
+    {
+        return Err(
+            "安全门禁拦截：该 Worktree 仍有运行中的内置终端会话，请先关闭终端后再清理".to_string(),
+        );
+    }
     let base_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("无法获取应用数据目录：{error}"))?
         .join(MANAGED_WORKTREES_DIR);
     tauri::async_runtime::spawn_blocking(move || {
-        remove_worktree_in_root(&base_dir, &repo_root, &worktree_path)
+        remove_worktree_in_root(&base_dir, &repo_root, &worktree_path, force_remove)
     })
     .await
     .map_err(|error| format!("清理托管 Git Worktree 失败：{error}"))?
@@ -1604,13 +1759,6 @@ pub async fn butler_git_push(
     .map_err(|error| format!("推送失败：{error}"))?
 }
 
-pub(crate) fn read_workspace_origin_url(workspace_root: &str) -> Result<Option<String>, String> {
-    let (_ws, top) = resolve_git_repo_context(workspace_root)?;
-    let url = run_git(&top, &["remote", "get-url", "origin"]).unwrap_or_default();
-    let trimmed = url.trim().to_string();
-    Ok((!trimmed.is_empty()).then_some(trimmed))
-}
-
 fn build_compare_pr_url(remote_url: &str, base: &str, branch: &str) -> Option<String> {
     let trimmed = remote_url.trim().trim_end_matches(".git");
     if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
@@ -1958,13 +2106,71 @@ mod tests {
 
         // 拒绝移除非托管目录（如主仓库本身）
         let reject_err =
-            remove_worktree_in_root(&managed, &host_path(&repo), &host_path(&repo)).unwrap_err();
+            remove_worktree_in_root(&managed, &host_path(&repo), &host_path(&repo), false)
+                .unwrap_err();
         assert!(reject_err.contains("安全边界拦截"));
 
-        // 正常移除托管 Worktree
-        remove_worktree_in_root(&managed, &host_path(&repo), &created.worktree_path)
-            .expect("remove managed worktree");
+        // 默认非强制模式必须拦截未提交/未跟踪改动，避免误删代码
+        let dirty_block_err =
+            remove_worktree_in_root(&managed, &host_path(&repo), &created.worktree_path, false)
+                .unwrap_err();
+        assert!(dirty_block_err.contains("安全门禁拦截"));
+
+        // 显式 force=true 可强制清理托管 Worktree
+        remove_worktree_in_root(&managed, &host_path(&repo), &created.worktree_path, true)
+            .expect("force remove managed worktree");
         assert!(!wt_path.exists());
+
+        // 同名 tag 与分支共存时，refs/heads 优先消歧义并写入 rocketxBase
+        run_git(&repo, &["tag", "release-v1"]).expect("tag collision");
+        let base_head = run_git(&repo, &["rev-parse", "HEAD"]).expect("head");
+        run_git(&repo, &["checkout", "-b", "release-v1"]).expect("branch");
+        std::fs::write(repo.join("branch.txt"), "branch tip\n").expect("write branch file");
+        run_git(&repo, &["add", "branch.txt"]).expect("add branch file");
+        run_git(&repo, &["commit", "-m", "branch ahead of tag"]).expect("branch commit");
+        let branch_tip = run_git(&repo, &["rev-parse", "HEAD"]).expect("branch tip");
+        assert_ne!(base_head, branch_tip);
+
+        let qualified_wt = prepare_worktree_in_root(
+            &managed,
+            PrepareWorktreeInput {
+                repo_root: host_path(&repo),
+                branch_name: "feat/disambiguated".to_string(),
+                base_ref: Some("release-v1".to_string()),
+                slug: Some("disambig".to_string()),
+            },
+        )
+        .expect("prepare from qualified branch");
+        assert_eq!(qualified_wt.head_sha, branch_tip);
+        let recorded_base = run_git(
+            &repo,
+            &["config", "--get", "branch.feat/disambiguated.rocketxBase"],
+        )
+        .unwrap();
+        assert_eq!(recorded_base, "refs/heads/release-v1");
+
+        // 新提交但未推送时，unpushed_commits > 0 且非强制清理应拦截
+        let q_path = PathBuf::from(&qualified_wt.worktree_path);
+        std::fs::write(q_path.join("local.txt"), "unpushed\n").expect("write unpushed");
+        run_git(&q_path, &["add", "local.txt"]).expect("add");
+        run_git(&q_path, &["commit", "-m", "local unpushed"]).expect("commit");
+        let q_snap = inspect_workspace_git_sync(&q_path).expect("inspect unpushed");
+        assert_eq!(q_snap.unpushed_commits, 1);
+        let unpushed_err = remove_worktree_in_root(
+            &managed,
+            &host_path(&repo),
+            &qualified_wt.worktree_path,
+            false,
+        )
+        .unwrap_err();
+        assert!(unpushed_err.contains("未推送"));
+        remove_worktree_in_root(
+            &managed,
+            &host_path(&repo),
+            &qualified_wt.worktree_path,
+            true,
+        )
+        .expect("cleanup disambiguated");
 
         let _ = std::fs::remove_dir_all(&root);
     }

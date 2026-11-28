@@ -43,6 +43,7 @@ import { awaitTodoAccountReady } from './stores/todos';
 import { createStartupCoordinator, type StartupCoordinator } from './lib/startup';
 import { toast } from './stores/toast';
 import { readPersistedModule, readPersistedNavCollapsed, UI_MODULE_STORAGE_KEY, useUI } from './stores/ui';
+import '@xterm/xterm/css/xterm.css';
 import './styles.css';
 
 function scheduleStartupWarmups(): void {

@@ -128,12 +128,14 @@ export default function ShareToRoomButton({
         title={t('butler.chatShare.dragOrClickTooltip')}
         aria-expanded={open}
         aria-label={label || t('butler.chatShare.buttonLabel')}
-        className={`inline-flex items-center gap-1 rounded-lg border border-line bg-surface-3 text-ink-2 transition hover:border-primary/40 hover:text-primary cursor-grab active:cursor-grabbing ${
-          compact ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-xs font-medium'
+        className={`inline-flex items-center gap-1.5 transition cursor-grab active:cursor-grabbing ${
+          compact
+            ? 'h-7 rounded-md border border-transparent bg-transparent px-2 text-xs text-ink-3 hover:bg-fill-hover hover:text-ink'
+            : 'rounded-lg border border-line bg-surface-3 px-2.5 py-1 text-xs font-medium text-ink-2 hover:border-primary/40 hover:text-primary'
         } ${className}`}
       >
-        <GripVertical size={11} className="text-ink-3" aria-hidden="true" />
-        <Share2 size={11} aria-hidden="true" />
+        {!compact ? <GripVertical size={11} className="text-ink-3" aria-hidden="true" /> : null}
+        <Share2 size={compact ? 12 : 11} aria-hidden="true" />
         <span>{label || t('butler.chatShare.buttonLabel')}</span>
         {targetBindings.length > 0 ? (
           <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-0.5 text-2xs font-medium text-primary">

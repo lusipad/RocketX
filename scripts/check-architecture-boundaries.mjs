@@ -246,6 +246,7 @@ const DSM_FORBIDDEN_RULES = [
       'lib/runtimeMode.ts',
       'lib/startup.ts',
       'lib/desktopConfigBackup.ts',
+      'lib/externalContinuation.ts',
       'stores/ui.ts',
       'stores/toast.ts',
     ]),
@@ -329,6 +330,83 @@ function matchesForbiddenTarget(rule, target) {
   return (rule.forbidPrefixes ?? []).some((prefix) => target.startsWith(prefix));
 }
 
+function findMatchingDelimEnd(source, openIndex, openChar, closeChar) {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === openChar) depth += 1;
+    else if (ch === closeChar) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return source.length - 1;
+}
+
+function stripSpawnBlockingCalls(body) {
+  let result = '';
+  let cursor = 0;
+  const marker = 'spawn_blocking';
+  while (cursor < body.length) {
+    const hit = body.indexOf(marker, cursor);
+    if (hit < 0) {
+      result += body.slice(cursor);
+      break;
+    }
+    const prevCh = hit > 0 ? body[hit - 1] : ' ';
+    if (/[a-zA-Z0-9_]/.test(prevCh)) {
+      result += body.slice(cursor, hit + marker.length);
+      cursor = hit + marker.length;
+      continue;
+    }
+    const afterMarker = body.slice(hit + marker.length).match(/^\s*\(/);
+    if (!afterMarker) {
+      result += body.slice(cursor, hit + marker.length);
+      cursor = hit + marker.length;
+      continue;
+    }
+    const openParen = hit + marker.length + afterMarker[0].length - 1;
+    const closeParen = findMatchingDelimEnd(body, openParen, '(', ')');
+    result += body.slice(cursor, hit);
+    result += 'spawn_blocking(<offloaded>)';
+    cursor = closeParen + 1;
+  }
+  return result;
+}
+
+export async function scanRustAsyncCommandBlocking(rustRoot = RUST_SOURCE_ROOT) {
+  const violations = [];
+  if (!existsSync(rustRoot)) return violations;
+  const rustFiles = (await listSourceFiles(rustRoot, /\.rs$/)).sort();
+  const cmdRegex = /#\[tauri::command\][\s\S]{0,200}?\bpub\s+async\s+fn\s+([a-zA-Z0-9_]+)\s*\(/g;
+
+  for (const absPath of rustFiles) {
+    const raw = await readFile(absPath, 'utf8');
+    const prodCode = raw.split(/#\[cfg\(test\)\]/)[0];
+    let match;
+    while ((match = cmdRegex.exec(prodCode)) !== null) {
+      const fnName = match[1];
+      const sigParenStart = prodCode.indexOf('(', match.index + match[0].length - 1);
+      if (sigParenStart < 0) continue;
+      const sigParenEnd = findMatchingDelimEnd(prodCode, sigParenStart, '(', ')');
+      const braceStart = prodCode.indexOf('{', sigParenEnd);
+      if (braceStart < 0) continue;
+      const braceEnd = findMatchingDelimEnd(prodCode, braceStart, '{', '}');
+      const body = prodCode.slice(braceStart, braceEnd + 1);
+      const withoutSpawnBlocking = stripSpawnBlockingCalls(body);
+      if (/\bstd::thread::sleep\s*\(/.test(withoutSpawnBlocking)) {
+        violations.push({
+          file: normalizePath(relative(REPO_ROOT, absPath)),
+          target: `async command ${fnName}`,
+          layer: 'Rust DP2/DP4 异步执行底座',
+          reason: `#[tauri::command] async fn ${fnName} 不得在 Tokio async 上下文中直接调用 std::thread::sleep(`,
+        });
+      }
+    }
+  }
+  return violations;
+}
+
 export async function scanAxiomaticDesignMatrix(
   sourceRoot = WEB_SOURCE_ROOT,
   rustRoot = RUST_SOURCE_ROOT,
@@ -381,6 +459,9 @@ export async function scanAxiomaticDesignMatrix(
       });
     }
   }
+
+  const rustBlockingViolations = await scanRustAsyncCommandBlocking(rustRoot);
+  dsmViolations.push(...rustBlockingViolations);
 
   return {
     runtimeStaticCycles,

@@ -770,7 +770,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           disabled={!desktopRuntime}
           onClick={() => void createConversation()}
           aria-label={t('butler.history.newConversation')}
-          className="flex h-8.5 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-white shadow-raise transition hover:bg-primary-hover active:scale-[0.99] disabled:opacity-50"
+          className="butler-history-new-cta flex h-8.5 w-full items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-medium text-white transition active:scale-[0.985] disabled:opacity-50"
         >
           <MessageSquarePlus size={14} className="text-white" aria-hidden="true" />
           <span className="text-white">{t('butler.history.newConversation')}</span>
@@ -794,9 +794,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         <button
           type="button"
           aria-current={activeView === 'conversation' ? 'page' : undefined}
-          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition ${
             activeView === 'conversation'
-              ? 'bg-fill-active font-medium text-ink'
+              ? 'font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => {
@@ -805,7 +805,7 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           }}
         >
           <span className="flex items-center gap-2.5">
-            <Bot size={15} className={activeView === 'conversation' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <Bot size={15} className={activeView === 'conversation' ? 'text-ink' : 'text-ink-3'} aria-hidden="true" />
             <span>{t('butler.history.navButler')}</span>
           </span>
         </button>
@@ -813,9 +813,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         <button
           type="button"
           aria-current={activeView === 'kanban' ? 'page' : undefined}
-          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition ${
             activeView === 'kanban'
-              ? 'bg-fill-active font-medium text-ink'
+              ? 'font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => {
@@ -824,11 +824,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           }}
         >
           <span className="flex items-center gap-2.5">
-            <SquareKanban size={15} className={activeView === 'kanban' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <SquareKanban size={15} className={activeView === 'kanban' ? 'text-ink' : 'text-ink-3'} aria-hidden="true" />
             <span>{t('butler.history.myWork')}</span>
           </span>
           {activeCardCount > 0 ? (
-            <span className="rounded-full bg-primary-light px-1.5 py-0.5 text-2xs font-semibold text-primary">
+            <span className="rounded-full bg-fill-2 px-1.5 py-0.5 text-2xs font-medium tabular-nums text-ink-2">
               {activeCardCount}
             </span>
           ) : null}
@@ -840,9 +840,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         <button
           type="button"
           aria-current={activeView === 'assistant' ? 'page' : undefined}
-          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+          className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-xs transition ${
             activeView === 'assistant'
-              ? 'bg-fill-active font-medium text-ink'
+              ? 'font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => {
@@ -852,11 +852,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           title={t('butler.history.navAssistantTitle')}
         >
           <span className="flex items-center gap-2.5">
-            <Sparkles size={15} className={activeView === 'assistant' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <Sparkles size={14} className={activeView === 'assistant' ? 'text-ink' : 'text-ink-3'} aria-hidden="true" />
             <span>{t('butler.history.navAssistant')}</span>
           </span>
           {pendingInsightCount > 0 ? (
-            <span className="rounded-full bg-primary-light px-1.5 py-0.5 text-2xs font-semibold text-primary">
+            <span className="rounded-full bg-fill-2 px-1.5 py-0.5 text-2xs font-medium tabular-nums text-ink-2">
               {pendingInsightCount}
             </span>
           ) : null}
@@ -865,9 +865,9 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         <button
           type="button"
           aria-current={activeView === 'acp-hub' ? 'page' : undefined}
-          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+          className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-xs transition ${
             activeView === 'acp-hub'
-              ? 'bg-fill-active font-medium text-ink'
+              ? 'font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => {
@@ -877,11 +877,11 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           title={t('butler.history.navAcpHubTitle')}
         >
           <span className="flex items-center gap-2.5">
-            <Cpu size={15} className={activeView === 'acp-hub' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <Cpu size={14} className={activeView === 'acp-hub' ? 'text-ink' : 'text-ink-3'} aria-hidden="true" />
             <span>{t('butler.history.navAcpHub')}</span>
           </span>
           {acpAttentionCount > 0 ? (
-            <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-2xs font-semibold text-warning">
+            <span className="rounded-full bg-warning/20 px-1.5 py-0.5 text-2xs font-semibold tabular-nums text-warning">
               {acpAttentionCount}
             </span>
           ) : null}
@@ -892,16 +892,16 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         <button
           type="button"
           aria-current={activeView === 'routines' ? 'page' : undefined}
-          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+          className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-xs transition ${
             activeView === 'routines'
-              ? 'bg-fill-active font-medium text-ink'
+              ? 'font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => { setButlerView('routines'); onNavigate?.(); }}
           title={t('butler.history.navRoutinesTitle')}
         >
           <span className="flex items-center gap-2.5">
-            <CalendarClock size={15} className={activeView === 'routines' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <CalendarClock size={14} className={activeView === 'routines' ? 'text-ink' : 'text-ink-3'} aria-hidden="true" />
             <span>{t('butler.history.navRoutines')}</span>
           </span>
         </button>
@@ -909,23 +909,23 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
         <button
           type="button"
           aria-current={activeView === 'plugins' ? 'page' : undefined}
-          className={`flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs transition-colors ${
+          className={`flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-xs transition ${
             activeView === 'plugins'
-              ? 'bg-fill-active font-medium text-ink'
+              ? 'font-medium text-ink'
               : 'text-ink-2 hover:bg-fill-hover hover:text-ink'
           }`}
           onClick={() => { setButlerView('plugins'); onNavigate?.(); }}
           title={t('butler.history.navPluginsTitle')}
         >
           <span className="flex items-center gap-2.5">
-            <Blocks size={15} className={activeView === 'plugins' ? 'text-primary' : 'text-ink-3'} aria-hidden="true" />
+            <Blocks size={14} className={activeView === 'plugins' ? 'text-ink' : 'text-ink-3'} aria-hidden="true" />
             <span>{t('butler.history.navPlugins')}</span>
           </span>
         </button>
 
         <button
           type="button"
-          className="flex h-8.5 w-full items-center justify-between rounded-lg px-2.5 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
+          className="flex h-8 w-full items-center justify-between rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           onClick={() => {
             setWorkbenchTab('prs');
             setModule('workbench');
@@ -934,17 +934,17 @@ export default function ButlerConversationHistory({ onNavigate }: { onNavigate?:
           title={t('butler.history.navPullRequests')}
         >
           <span className="flex items-center gap-2.5">
-            <GitPullRequest size={15} className="text-ink-3" aria-hidden="true" />
+            <GitPullRequest size={14} className="text-ink-3" aria-hidden="true" />
             <span>{t('butler.history.navPullRequests')}</span>
           </span>
         </button>
         <button
           type="button"
-          className="flex h-8.5 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition-colors hover:bg-fill-hover hover:text-ink"
+          className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs text-ink-2 transition hover:bg-fill-hover hover:text-ink"
           disabled={!desktopRuntime}
           onClick={() => void chooseWorkspace().catch((reason) => toast.error(reason, t('butler.history.addProjectFailed')))}
         >
-          <FolderOpen size={15} className="text-ink-3" aria-hidden="true" />{t('butler.history.addProjectDir')}
+          <FolderOpen size={14} className="text-ink-3" aria-hidden="true" />{t('butler.history.addProjectDir')}
         </button>
           </div>
         </details>

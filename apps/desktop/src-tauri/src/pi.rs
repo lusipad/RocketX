@@ -2684,6 +2684,27 @@ pub fn pi_agent_attachment_write(
     })
 }
 
+pub(crate) fn active_pi_child_pids(app: &tauri::AppHandle) -> Vec<u32> {
+    let Some(state) = app.try_state::<PiAppServerState>() else {
+        return Vec::new();
+    };
+    let Ok(procs) = state.processes.lock() else {
+        return Vec::new();
+    };
+    procs
+        .values()
+        .filter_map(|proc| {
+            let mut child = proc.child.lock().ok()?;
+            child
+                .try_wait()
+                .ok()
+                .flatten()
+                .is_none()
+                .then_some(child.id())
+        })
+        .collect()
+}
+
 pub fn shutdown_all_pi_processes(app: &tauri::AppHandle) {
     let Some(state) = app.try_state::<PiAppServerState>() else {
         return;

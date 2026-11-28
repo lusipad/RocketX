@@ -15,6 +15,7 @@ import {
   MessagesSquare,
   PanelLeft,
   Plus,
+  Rocket,
   Search,
   Settings,
   Smile,
@@ -313,12 +314,18 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className={`flex min-w-0 items-center rounded-xl transition hover:bg-fill-hover ${isCollapsed ? 'h-9 w-9 justify-center' : 'flex-1 gap-2.5 p-1'}`}
         >
           <div className="relative shrink-0">
-            <Avatar
-              name={user?.name || user?.username || '?'}
-              username={user?.username}
-              size={32}
-              status={localMode || user?.status === 'online' ? undefined : user?.status}
-            />
+            {localMode ? (
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-line-strong bg-surface-4 text-ink">
+                <Rocket size={15} strokeWidth={2} aria-hidden="true" />
+              </div>
+            ) : (
+              <Avatar
+                name={user?.name || user?.username || '?'}
+                username={user?.username}
+                size={32}
+                status={user?.status === 'online' ? undefined : user?.status}
+              />
+            )}
             {localMode ? (
               <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5 items-center justify-center rounded-full bg-surface-1">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title={t('nav.rail.localWorkspaceReady')} />
@@ -448,7 +455,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
                   className={isCollapsed
                     ? `relative mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
                         isActive
-                          ? 'bg-primary-light text-primary'
+                          ? 'bg-fill-active text-ink'
                           : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
                       }`
                     : `relative flex h-8.5 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs transition-colors ${
@@ -533,7 +540,7 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           className={isCollapsed
             ? `mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
                 active === 'settings'
-                  ? 'bg-primary-light text-primary'
+                  ? 'bg-fill-active text-ink'
                   : 'text-ink-3 hover:bg-fill-hover hover:text-ink'
               }`
             : `flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs transition-colors ${
@@ -550,10 +557,10 @@ export default function NavRail({ onOpenShortcuts }: { onOpenShortcuts: () => vo
           title={offlineAuthPrompt ? t('nav.rail.connectRocketChat') : t('nav.rail.logout')}
           className={isCollapsed
             ? `mx-auto flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${
-                offlineAuthPrompt ? 'text-primary hover:bg-primary-light' : 'text-ink-3 hover:bg-fill-hover hover:text-danger'
+                offlineAuthPrompt ? 'text-ink-2 hover:bg-fill-hover hover:text-primary' : 'text-ink-3 hover:bg-fill-hover hover:text-danger'
               }`
             : `flex h-8 w-full items-center gap-2.5 rounded-lg px-2.5 text-xs transition-colors ${
-                offlineAuthPrompt ? 'font-medium text-primary hover:bg-primary-light' : 'text-ink-2 hover:bg-fill-hover hover:text-danger'
+                offlineAuthPrompt ? 'font-medium text-ink-2 hover:bg-fill-hover hover:text-primary' : 'text-ink-2 hover:bg-fill-hover hover:text-danger'
               }`}
         >
           {offlineAuthPrompt ? <LogIn size={isCollapsed ? 17 : 15} /> : <LogOut size={isCollapsed ? 17 : 15} />}

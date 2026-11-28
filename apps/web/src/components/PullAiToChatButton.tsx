@@ -125,12 +125,18 @@ export default function PullAiToChatButton({
         title={t('butler.pullToChat.dragOrClickTooltip')}
         className={
           compact
-            ? 'inline-flex items-center gap-1 rounded-md border border-line-soft bg-surface-3 px-2 py-0.5 text-xs text-ink-3 transition hover:border-primary/40 hover:text-primary cursor-grab active:cursor-grabbing'
+            ? 'inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs text-ink-3 transition hover:bg-fill-hover hover:text-ink cursor-grab active:cursor-grabbing'
             : 'inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-surface-4 px-2.5 text-xs text-ink-2 transition hover:border-primary/40 hover:bg-fill-hover hover:text-primary cursor-grab active:cursor-grabbing'
         }
       >
-        <GripVertical size={11} className="opacity-60" aria-hidden="true" />
-        <Bot size={compact ? 11 : 13} aria-hidden="true" />
+        {compact ? (
+          <MessagesSquare size={12} aria-hidden="true" />
+        ) : (
+          <>
+            <GripVertical size={11} className="opacity-60" aria-hidden="true" />
+            <Bot size={13} aria-hidden="true" />
+          </>
+        )}
         <span>{t('butler.pullToChat.buttonLabel')}</span>
       </button>
 

@@ -738,14 +738,14 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
 
   return <div ref={boardRoot} className="work-first-board relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-surface-3">
     <header className="rcx-glass-header flex h-[52px] min-h-[52px] shrink-0 items-center justify-between gap-3 border-b border-line px-5">
-      <div className="flex min-w-0 items-center gap-2">
-        {butlerSidebarCollapsed ? <button type="button" onClick={toggleButlerSidebarCollapsed} title={t('agent.kanban.expandSidebarTitle')} aria-label={t('agent.kanban.expandSidebarAria')} className="rounded-lg p-1.5 text-ink-3 hover:bg-fill-hover"><PanelLeft size={16} /></button> : null}
+      <div className="flex min-w-0 items-center gap-2.5">
+        {butlerSidebarCollapsed ? <button type="button" onClick={toggleButlerSidebarCollapsed} title={t('agent.kanban.expandSidebarTitle')} aria-label={t('agent.kanban.expandSidebarAria')} className="rounded-lg p-1.5 text-ink-3 transition hover:bg-fill-hover hover:text-ink active:scale-[0.96]"><PanelLeft size={16} /></button> : null}
         <h1 className="text-base font-semibold text-ink">{t('agent.kanban.headerTitle')}</h1>
-        <span className="text-xs text-ink-3">{cards.length}</span>
+        <span className="rounded-full border border-line bg-surface-4 px-2 py-0.5 text-2xs font-medium tabular-nums text-ink-3 shadow-raise">{cards.length}</span>
       </div>
       {!poolOpen && !selectedCard && <div className="work-board-entry-actions">
-        <button type="button" className="work-first-secondary-button" onClick={() => setPoolOpen(true)}><History size={15} />{t('agent.kanban.addExistingSession')}</button>
-        <button type="button" className="work-first-primary-button" onClick={() => showNewWork(true)}><Plus size={15} />{t('agent.kanban.newWorkBtn')}</button>
+        <button type="button" className="work-first-secondary-button" onClick={() => setPoolOpen(true)}><History size={14} />{t('agent.kanban.addExistingSession')}</button>
+        <button type="button" className="work-first-primary-button" onClick={() => showNewWork(true)}><Plus size={14} />{t('agent.kanban.newWorkBtn')}</button>
       </div>}
     </header>
     <div ref={setToastViewport} className="max-h-[12%] shrink-0 overflow-y-auto" />
@@ -760,13 +760,13 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
         {poolOpen ? <div className="min-h-0 flex-1 overflow-auto p-5"><WorkSessionImport scanning={scanningSessions} scanError={sessionSyncError} onRefresh={refreshSessions}
           onSelectWork={(id) => { selectWork(id); setPoolOpen(false); }} onClose={() => setPoolOpen(false)} /></div> : <>
           {!newWorkOpen && rows.length > 0 && <section aria-label={t('agent.kanban.briefingAria')} className="work-control-brief" data-tone={featured?.group}>
-            <Bot size={19} aria-hidden="true" className="text-primary" />
+            <span className="work-control-brief-emblem" aria-hidden="true"><Bot size={16} /></span>
             <div>
               {featured && <><div className="work-brief-source">{featured.group === 'attention' ? t('agent.kanban.group.attention') : featured.verifiedRecord ? t('agent.kanban.briefVerified') : t('agent.kanban.briefUnverified')} · {featured.card.title}</div>
                 <p>{featureText}</p></>}
               <div className="work-brief-counts">{activeCount > 0 ? t('agent.kanban.briefActiveCount', { count: activeCount }) : t('agent.kanban.briefNoActive')}{queuedCount > 0 && t('agent.kanban.briefQueuedSuffix', { count: queuedCount })}{counts.attention > 1 && t('agent.kanban.briefMoreAttentionSuffix', { count: counts.attention - 1 })}{resultsCount > 0 && t('agent.kanban.briefResultsSuffix', { count: resultsCount })}{counts.waiting_external > 0 && t('agent.kanban.briefExternalSuffix', { count: counts.waiting_external })}</div>
             </div>
-            {featured && <button type="button" onClick={openFeatured}>{featureAction}<ArrowRight size={14} aria-hidden="true" /></button>}
+            {featured && <button type="button" onClick={openFeatured}>{featureAction}<ArrowRight size={13} aria-hidden="true" /></button>}
           </section>}
           {newWorkOpen && <form aria-label={t('agent.kanban.newFormAria')} className="work-control-new" onKeyDown={event => {
             if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)) event.preventDefault();
@@ -774,7 +774,7 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
             event.preventDefault();
             void createWork(hasInvestigator);
           }}>
-            <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-medium text-ink">{t('agent.kanban.newWorkBtn')}</h2><button type="button" aria-label={t('agent.kanban.closeNewFormAria')} onClick={() => showNewWork(false)} className="text-ink-3"><X size={17} /></button></div>
+            <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-medium text-ink">{t('agent.kanban.newWorkBtn')}</h2><button type="button" aria-label={t('agent.kanban.closeNewFormAria')} onClick={() => showNewWork(false)} className="rounded-lg p-1 text-ink-3 transition hover:bg-fill-hover hover:text-ink"><X size={16} /></button></div>
             <label className="work-control-field">{t('agent.kanban.goalFieldLabel')}<textarea required value={newGoal} onChange={(event) => { newWorkTarget.current += 1; setNewGoal(event.target.value); }} placeholder={t('agent.kanban.goalFieldPlaceholder')} /></label>
             <div className="flex items-end gap-2"><label className="work-control-field min-w-0 flex-1">{t('agent.kanban.workspaceFieldLabel')}<input required value={newWorkspace} onChange={(event) => { newWorkTarget.current += 1; setNewWorkspace(event.target.value); }} placeholder={t('agent.kanban.workspaceFieldPlaceholder')} /></label><button type="button" disabled={choosingDirectory} onClick={() => void chooseWorkDirectory()} className="work-first-secondary-button shrink-0 disabled:opacity-50">{choosingDirectory ? t('agent.kanban.choosingDir') : t('agent.kanban.chooseFolder')}</button></div>
             {workspaceChoices.length > 0 && <select aria-label={t('agent.kanban.existingDirAria')} value="" onChange={(event) => { if (event.target.value) { newWorkTarget.current += 1; setNewWorkspace(event.target.value); } }} className="w-full rounded-lg border border-line bg-surface-3 px-3 py-2 text-xs text-ink-2"><option value="">{t('agent.kanban.existingDirPlaceholder')}</option>{workspaceChoices.map((workspace) => <option key={workspace} value={workspace}>{shortWorkspaceName(workspace, t)} · {workspace}</option>)}</select>}
@@ -788,13 +788,13 @@ export default function WorkKanbanBoard({ initialWork }: { initialWork?: WorkEnt
             </div>
           </form>}
           <div className="work-first-toolbar">
-            <nav aria-label={t('agent.kanban.filterAria')} className="flex flex-wrap items-center gap-1">
+            <nav aria-label={t('agent.kanban.filterAria')} className="work-first-filter-track flex flex-wrap items-center gap-0.5">
               {[
                 { key: 'all' as const, labelKey: 'agent.kanban.filter.all' as const, count: counts.all },
                 { key: 'attention' as const, labelKey: 'agent.kanban.filter.attention' as const, count: counts.attention },
                 { key: 'waiting_external' as const, labelKey: 'agent.kanban.filter.waitingExternal' as const, count: counts.waiting_external },
                 { key: 'paused' as const, labelKey: 'agent.kanban.filter.paused' as const, count: counts.paused },
-              ].map((item) => <button key={item.key} type="button" aria-pressed={waitFilter === item.key} onClick={() => setWaitFilter(item.key)} className="work-first-filter">{t(item.labelKey)}{item.count > 0 ? ` ${item.count}` : ''}</button>)}
+              ].map((item) => <button key={item.key} type="button" aria-pressed={waitFilter === item.key} onClick={() => setWaitFilter(item.key)} className="work-first-filter">{t(item.labelKey)}{item.count > 0 ? <span className="work-first-filter-count">{item.count}</span> : null}</button>)}
             </nav>
             <div className="flex items-center gap-1">
               <button type="button" onClick={() => setSearchOpen((value) => !value)} aria-expanded={searchOpen} aria-controls="work-first-search" className="work-first-view-button"><Search size={14} />{t('agent.kanban.searchBtn')}</button>
